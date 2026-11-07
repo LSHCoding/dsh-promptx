@@ -7,10 +7,11 @@ import { PromptxError, toErrorInfo } from './errors.ts'
 import { RPC_ERROR } from './protocol.ts'
 import type { ErrorInfo } from './types.ts'
 
-/** 一组方法：方法名 → { params, result }。 */
-export type RequestMap = Record<string, { params: unknown; result: unknown }>
-/** 一组通知：方法名 → 参数。 */
-export type NotificationMap = Record<string, unknown>
+/**
+ * 一组方法：方法名 → { params, result }。写成映射类型而不是 Record<string, …>，
+ * 这样用 interface 声明的方法表（没有隐式索引签名）也满足约束。
+ */
+export type RequestMapOf<T> = { [K in keyof T]: { params: unknown; result: unknown } }
 
 /** 请求失败。rpcCode 是 JSON-RPC 错误码，info 是业务错误（错误码 + 系统错误信息）。 */
 export class RpcError extends Error {
@@ -46,7 +47,12 @@ interface Pending {
  * Out：本端可以发出的请求和通知；In：本端处理的请求和通知。
  * 处理函数返回值作为结果；抛出 PromptxError 时以业务错误回复，其他异常一律回复 promptx/internal。
  */
-export class RpcPeer<OutReq extends RequestMap, OutNote extends NotificationMap, InReq extends RequestMap, InNote extends NotificationMap> {
+export class RpcPeer<
+  OutReq extends RequestMapOf<OutReq>,
+  OutNote extends object,
+  InReq extends RequestMapOf<InReq>,
+  InNote extends object,
+> {
   readonly #send: (message: unknown) => void
   readonly #defaultTimeoutMs: number
   readonly #onProblem: (problem: string) => void
