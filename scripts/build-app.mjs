@@ -12,6 +12,12 @@ for (const file of ['main.cjs', 'preload.cjs', join('renderer', 'renderer.js')])
   if (!existsSync(join(app, file))) throw new Error(`缺少构建产物 lib/app/${file}，先运行 tsdown`)
 }
 
+// 预加载脚本只能依赖 electron：44 的沙箱预加载还能 require events/timers/url，45 起只剩 electron，
+// 在构建阶段挡住，升级 Electron 时不会在运行时才发现（审查意见 TC-15）。
+const preloadRequires = [...readFileSync(join(app, 'preload.cjs'), 'utf8').matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)].map(m => m[1])
+const unexpected = preloadRequires.filter(name => name !== 'electron')
+if (unexpected.length > 0) throw new Error(`lib/app/preload.cjs 只能 require electron，发现：${[...new Set(unexpected)].join(', ')}`)
+
 writeFileSync(join(app, 'package.json'), `${JSON.stringify({
   name: 'promptx-companion',
   productName: 'PromptX',
