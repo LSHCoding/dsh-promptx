@@ -11,15 +11,20 @@ import { redirectConsoleToStderr } from './console.ts'
 import { createElectronPlatform } from './electron-platform.ts'
 import { companionPaths, readCompanionEnv, type CompanionEnv } from './env.ts'
 import { errorCode, FileLogger } from './logger.ts'
+import { installStdioGuard, isBrokenPipe } from './stdio-guard.ts'
 
-redirectConsoleToStderr()
+// 最先挂上 stdout、stderr 的 error 监听：Host 不在之后再写管道不能变成未捕获异常（见 stdio-guard.ts）。
+const stdio = installStdioGuard()
+redirectConsoleToStderr((text) => {
+  stdio.writeStderr(text)
+})
 
 const envResult = readCompanionEnv(process.env, process.ppid)
 if (envResult.ok) {
   main(envResult.env)
 } else {
   // 不是由 Host 启动的（例如有人直接运行 Electron）：不在未知位置写任何文件，直接退出。
-  process.stderr.write(`[promptx] ${envResult.problem}\n`)
+  stdio.writeStderr(`[promptx] ${envResult.problem}\n`)
   app.exit(2)
 }
 
@@ -32,7 +37,7 @@ function main(env: CompanionEnv): void {
   const logger = new FileLogger({
     dir: paths.logDir,
     echo: (line) => {
-      process.stderr.write(`[promptx] ${line}`)
+      stdio.writeStderr(`[promptx] ${line}`)
     },
   })
 
@@ -45,16 +50,34 @@ function main(env: CompanionEnv): void {
   // 主进程的未捕获异常默认会弹出 Electron 的错误对话框，对一个后台小程序来说比崩溃还糟。
   // 记下错误码和调用栈后退出，交给 Host 重启。调用栈只留「at …」那些行：message 可能有好几行，
   // 里面可能引用了内容（例如 JSON.parse 报错会带上输入的一段），不能跟着 stack 一起写出去。
+  // 管道断开说明 Host 已经不在：直接退出（草稿也没处写了）。只处理一次，并设一个兜底的强制退出。
+  let exiting = false
+  const exitForGood = (code: number) => {
+    if (exiting) return
+    exiting = true
+    setTimeout(() => {
+      process.exit(code)
+    }, 3_000).unref()
+    try {
+      if (companion === null) app.exit(code)
+      else companion.crash(code)
+    } catch {
+      app.exit(code)
+    }
+  }
+  stdio.onBroken((stream, code) => {
+    logger.warn('stdio.broken', { stream, code })
+    exitForGood(0)
+  })
   process.on('uncaughtException', (error) => {
+    if (isBrokenPipe(error)) {
+      exitForGood(0)
+      return
+    }
     logger.error('main.uncaught-exception', { error: errorCode(error) })
     const frames = (error.stack ?? '').split('\n').filter(line => /^\s+at /.test(line)).join('\n')
-    process.stderr.write(`[promptx] uncaught ${errorCode(error)}\n${frames}\n`)
-    try {
-      if (companion === null) app.exit(1)
-      else companion.crash()
-    } catch {
-      app.exit(1)
-    }
+    stdio.writeStderr(`[promptx] uncaught ${errorCode(error)}\n${frames}\n`)
+    exitForGood(1)
   })
   // 未处理的拒绝只记日志：所有异步任务都经过 runTask，走到这个处理函数的是漏网的，不值得为它退出。
   process.on('unhandledRejection', (reason) => {

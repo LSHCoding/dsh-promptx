@@ -304,9 +304,10 @@ export class CompanionApp {
   }
 
   /** 主进程出现未捕获的异常：状态已经不可信，不等写回，立即清理并退出，交给 Host 重启。 */
-  crash(): void {
-    this.#logger.error('main.crash')
-    this.#exitNow(1)
+  crash(code = 1): void {
+    if (this.#finalized) return
+    this.#logger.error('main.crash', { code })
+    this.#exitNow(code)
   }
 
   // ───────────────────────────── Host ─────────────────────────────
@@ -609,6 +610,11 @@ export class CompanionApp {
       this.#controller?.hide('close')
     })
     window.onRendererGone((reason) => {
+      // 退出过程中 Electron 会自己结束渲染进程，这时不能当成崩溃去重新加载（会让退出前的草稿写回等到超时）。
+      if (this.#quitting) {
+        this.#rendererReady = false
+        return
+      }
       const decision = this.#health.gone(reason)
       this.#logger.warn('renderer.gone', { reason, decision })
       if (decision !== 'reload') return

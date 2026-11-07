@@ -76,7 +76,9 @@ describe('redirectConsoleToStderr', () => {
       output += chunk.toString('utf8')
     })
     try {
-      redirectConsoleToStderr(sink)
+      redirectConsoleToStderr((text) => {
+        sink.write(text)
+      })
       console.log('log line')
       console.info('info line')
       console.warn('warn line')

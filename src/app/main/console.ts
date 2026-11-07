@@ -3,8 +3,18 @@
 // 所以入口的第一件事就是把 console 的全部输出改到 stderr。
 
 import { Console } from 'node:console'
+import { Writable } from 'node:stream'
 
-export function redirectConsoleToStderr(target: NodeJS.WritableStream = process.stderr): void {
+/** write 为写 stderr 的函数（管道断开后由它静默丢弃，见 stdio-guard.ts）。 */
+export function redirectConsoleToStderr(write: (text: string) => void = (text) => {
+  process.stderr.write(text)
+}): void {
+  const target = new Writable({
+    write(chunk: Buffer | string, _encoding, callback) {
+      write(typeof chunk === 'string' ? chunk : chunk.toString('utf8'))
+      callback()
+    },
+  })
   const sink = new Console({ stdout: target, stderr: target })
   console.log = sink.log.bind(sink)
   console.info = sink.info.bind(sink)
