@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"],
+    "types": []
+  },
+  "include": ["src/app/renderer/**/*.ts", "src/app/renderer/**/*.tsx", "src/shared/**/*.ts"]
+}

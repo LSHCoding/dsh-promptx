@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "PromptX",
+    "description": "浮在所有应用上方的 Prompt 编辑小窗。按全局快捷键呼出，从 Markdown Prompt 库取模板、用 dsh 的模型改写，复制后小窗隐藏，回到原来的应用直接粘贴。"
+  }
+}

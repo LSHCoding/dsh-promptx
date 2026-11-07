@@ -1,0 +1,27 @@
+# 维护者本地资料，不进 git
+/Dev-Docs/
+/AGENTS.md
+/CLAUDE.md
+CLAUDE.local.md
+
+# 依赖与构建产物
+node_modules/
+lib/
+*.tsbuildinfo
+coverage/
+*.tgz
+
+# 日志与临时文件
+*.log
+tmp/
+
+# 环境变量与密钥
+.env
+.env.*
+!.env.example
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+.smoke-runtime/

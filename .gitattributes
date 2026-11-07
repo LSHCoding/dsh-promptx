@@ -1,0 +1,3 @@
+# 照抄 dsh 官方仓库：仓库内统一用 LF；Windows 的 .cmd 脚本在工作区保留 CRLF。
+* text=auto eol=lf
+*.cmd text eol=crlf

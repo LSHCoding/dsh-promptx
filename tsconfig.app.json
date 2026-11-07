@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": ["node"]
+  },
+  "include": ["src/app/main/**/*.ts", "src/app/preload/**/*.ts", "src/shared/**/*.ts"]
+}

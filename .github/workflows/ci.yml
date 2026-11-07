@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      # 冒烟测试把 Electron 运行时下载到这里，并在多次运行之间缓存。
+      PROMPTX_SMOKE_RUNTIME_DIR: ${{ github.workspace }}/.smoke-runtime
+      # GitHub 的机器在国外，直接用官方下载源。
+      PROMPTX_SMOKE_RUNTIME_SOURCE: official
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+      - name: Cache Electron runtime
+        uses: actions/cache@v4
+        with:
+          path: .smoke-runtime
+          key: electron-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/companion/electron-release.ts') }}
+      - name: Smoke test (macOS, Windows)
+        if: runner.os != 'Linux'
+        run: pnpm exec vitest run --config vitest.smoke.config.ts
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm exec vitest run --config vitest.smoke.config.ts

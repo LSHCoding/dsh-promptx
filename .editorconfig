@@ -1,0 +1,6 @@
+# 照抄 dsh 官方仓库。
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true

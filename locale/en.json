@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "PromptX",
+    "description": "A prompt editor that floats above every app. Press a global shortcut, write or reuse a prompt from your Markdown library, refine it with your dsh model, copy it, and the window hides."
+  }
+}
