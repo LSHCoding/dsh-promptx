@@ -13,7 +13,7 @@ const APPARMOR = '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'
 type Sandbox = { uid: number; mode: number } | 'missing'
 
 /** 用假的 stat、readFile 描述一台机器：chrome-sandbox 的所有者和权限位，两个内核开关（undefined 表示这个内核没有这个开关）。 */
-function machine(sandbox: Sandbox, switches: { userns?: string; apparmor?: string }) {
+function machine(sandbox: Sandbox, switches: { userns?: string; apparmor?: string }, probe?: boolean) {
   const stats: string[] = []
   const reads: string[] = []
   return {
@@ -32,6 +32,8 @@ function machine(sandbox: Sandbox, switches: { userns?: string; apparmor?: strin
         if (value === undefined) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
         return value
       },
+      // 默认「没法试」：不在测试机上真的去建用户命名空间（CI 的 Linux 机器上结果会随环境变化）。
+      probeUserns: () => Promise.resolve(probe),
     },
   }
 }
@@ -71,5 +73,33 @@ describe('needsNoSandbox', () => {
 
   it('does not count a setuid chrome-sandbox owned by another user as configured', async () => {
     expect(await needsNoSandbox(machine({ uid: 1000, mode: 0o4755 }, { userns: '0' }).input)).toBe(true)
+  })
+})
+
+describe('user namespace probe when the kernel switches allow it', () => {
+  it('adds --no-sandbox when a namespace cannot actually be created (container seccomp)', async () => {
+    const m = machine(ROOT_NO_SETUID, { userns: '1', apparmor: '0' }, false)
+    expect(await needsNoSandbox(m.input)).toBe(true)
+  })
+
+  it('keeps the sandbox when a namespace can be created', async () => {
+    const m = machine(ROOT_NO_SETUID, { userns: '1', apparmor: '0' }, true)
+    expect(await needsNoSandbox(m.input)).toBe(false)
+  })
+
+  it('falls back to the kernel switches when the probe cannot run', async () => {
+    const m = machine('missing', {}, undefined)
+    expect(await needsNoSandbox(m.input)).toBe(false)
+  })
+
+  it('does not probe when a setuid-root helper is present', async () => {
+    let probed = false
+    const m = machine(SETUID_ROOT, { userns: '1' }, true)
+    const input = { ...m.input, probeUserns: () => {
+      probed = true
+      return Promise.resolve(true)
+    } }
+    expect(await needsNoSandbox(input)).toBe(false)
+    expect(probed).toBe(false)
   })
 })

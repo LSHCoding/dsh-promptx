@@ -1,6 +1,7 @@
 // 小程序的启动命令：参数、环境变量、Linux 上是否关掉 Chromium 沙箱（design-spec 5.2、5.6、D16；需求 F-06、N-05）。
 // 这里只计算，不启动进程；启动和监管在 supervisor.ts。
 
+import { execFile } from 'node:child_process'
 import { readFile as fsReadFile, stat as fsStat } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +46,8 @@ export interface LaunchInput {
   readFile?: (path: string) => Promise<string>
   /** 测试时替换：查看 chrome-sandbox 的所有者和权限位。 */
   stat?: (path: string) => Promise<{ uid: number; mode: number }>
+  /** 测试时替换：试建用户命名空间（true 能建、false 被拒绝、undefined 没法试）。 */
+  probeUserns?: () => Promise<boolean | undefined>
 }
 
 /**
@@ -103,7 +106,7 @@ function lookup(env: NodeJS.ProcessEnv, key: string, caseInsensitive: boolean): 
  * 或 `apparmor_restrict_unprivileged_userns` 为 1，Ubuntu 24.04 默认如此）Electron 起不来，只能关掉沙箱。
  * 小窗只加载包内的本地文件、不加载网页，关掉沙箱的风险可以接受（已知限制）。
  */
-export async function needsNoSandbox(input: Pick<LaunchInput, 'executable' | 'readFile' | 'stat'>): Promise<boolean> {
+export async function needsNoSandbox(input: Pick<LaunchInput, 'executable' | 'readFile' | 'stat' | 'probeUserns'>): Promise<boolean> {
   const statFile = input.stat ?? fsStat
   const read = input.readFile ?? ((path: string) => fsReadFile(path, 'utf8'))
   try {
@@ -114,7 +117,28 @@ export async function needsNoSandbox(input: Pick<LaunchInput, 'executable' | 're
   }
   const userns = await readSwitch(read, '/proc/sys/kernel/unprivileged_userns_clone')
   const apparmor = await readSwitch(read, '/proc/sys/kernel/apparmor_restrict_unprivileged_userns')
-  return userns === '0' || apparmor === '1'
+  if (userns === '0' || apparmor === '1') return true
+  // 内核开关允许，不代表真的能建用户命名空间：容器的 seccomp 等策略也会拦。拦住时 Chromium 退回 setuid 沙箱，
+  // 而 chrome-sandbox 没配好就直接中止（"The SUID sandbox helper binary was found, but is not configured correctly"）。
+  // 所以实际试一次：建不了就加 --no-sandbox；试不了（没有 unshare）时按内核开关的结论走。
+  const probe = input.probeUserns ?? (process.platform === 'linux' ? probeUserNamespace : undefined)
+  if (probe === undefined) return false
+  const usable = await probe()
+  return usable === false
+}
+
+/** 试着建一个非特权用户命名空间：能建返回 true，被拒绝返回 false，没有 unshare 命令时返回 undefined。 */
+function probeUserNamespace(): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    const child = execFile('unshare', ['--user', '--map-root-user', 'true'], { timeout: 3_000, windowsHide: true }, (error) => {
+      if (error === null) {
+        resolve(true)
+        return
+      }
+      resolve((error as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : false)
+    })
+    child.once('error', () => {})
+  })
 }
 
 /** 读一个内核开关；文件不存在（这个内核没有这个开关）时返回 undefined。 */
