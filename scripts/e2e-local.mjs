@@ -1,0 +1,190 @@
+// 本机端到端测试（testing-plan 第 5 节）：在临时 DSH_HOME 里建 promptx-dev profile、装上本仓库、启动 dsh，
+// 通过 dsh 的 /api/dsh-promptx/* 路由驱动真实的小程序，跑核心路径并按 N-01 的阈值判定。
+// 不碰日常的 ~/.dsh：所有数据都在临时目录里，结束后删除（--keep 保留）。
+//
+// 用法：pnpm build && node scripts/e2e-local.mjs [--keep]
+// 运行时缓存：<仓库>/.smoke-runtime/（和冒烟测试共用），有就复制进临时目录，没有就让插件自己下载。
+
+import { spawn, execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
+
+const DSH = '@deepseek-ai/dsh@0.2.2-rc.1'
+const PROFILE = 'promptx-dev'
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const keep = process.argv.includes('--keep')
+const results = []
+let failed = false
+
+function check(name, ok, detail = '') {
+  results.push({ name, ok, detail })
+  if (!ok) failed = true
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`)
+}
+
+function npx(args, env) {
+  const bin = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+  return execFileSync(bin, ['-y', DSH, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 600_000 })
+}
+
+if (!existsSync(join(root, 'lib', 'index.js')) || !existsSync(join(root, 'lib', 'app', 'main.cjs'))) {
+  console.error('缺少构建产物，先运行 pnpm build')
+  process.exit(2)
+}
+
+const home = mkdtempSync(join(tmpdir(), 'promptx-e2e-'))
+const env = { ...process.env, DSH_HOME: home }
+delete env.DSH_PROMPTX_E2E
+let dsh = null
+
+try {
+  console.log(`DSH_HOME=${home}`)
+  npx(['--profile', PROFILE, '--from-default-profile', 'web', '--dump-config'], env)
+  npx(['plugin', '--profile', PROFILE, 'add', root], env)
+
+  // 复制缓存的运行时，避免每次都下载 120 MB。
+  const cache = join(root, '.smoke-runtime')
+  if (existsSync(cache)) {
+    for (const name of readdirSync(cache)) {
+      if (existsSync(join(cache, name, '.ready'))) {
+        const target = join(home, 'promptx', 'runtime', name)
+        mkdirSync(dirname(target), { recursive: true })
+        // macOS 上用 ditto 复制，保留 Electron Framework 里的符号链接。
+        if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', [join(cache, name), target])
+        else cpSync(join(cache, name), target, { recursive: true, verbatimSymlinks: true })
+        console.log(`copied cached runtime ${name}`)
+      }
+    }
+  }
+
+  const startedAt = Date.now()
+  const bin = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+  dsh = spawn(bin, ['-y', DSH, '--profile', PROFILE, '--no-open', '--port', '0'], {
+    env: { ...env, DSH_PROMPTX_E2E: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  dsh.once('error', (error) => {
+    console.error(`dsh 启动失败：${error.message}`)
+  })
+  const tokenUrl = await new Promise((resolve, reject) => {
+    let buffer = ''
+    const timer = setTimeout(() => {
+      reject(new Error('120 秒内没有看到 dsh web 的地址'))
+    }, 120_000)
+    const onData = (chunk) => {
+      buffer += chunk.toString()
+      const match = /dsh web: (https?:\/\/\S+)/.exec(buffer)
+      if (match) {
+        clearTimeout(timer)
+        resolve(match[1])
+      }
+    }
+    dsh.stdout.on('data', onData)
+    dsh.stderr.on('data', onData)
+  })
+  const origin = new URL(tokenUrl).origin
+
+  // 用带口令的地址换 cookie，之后的请求都带上它。
+  const login = await fetch(tokenUrl, { redirect: 'manual' })
+  const cookie = login.headers.getSetCookie().map(c => c.split(';')[0]).join('; ')
+  const headers = { cookie, origin, 'content-type': 'application/json' }
+  const api = async (path, body) => {
+    const res = await fetch(`${origin}/api/dsh-promptx/${path}`, body === undefined ? { headers } : { method: 'POST', headers, body: JSON.stringify(body) })
+    const text = await res.text()
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status} ${text.slice(0, 200)}`)
+    return JSON.parse(text)
+  }
+
+  // 1. 运行时就绪、小程序运行、快捷键登记
+  let status = await api('status?since=-1')
+  const deadline = Date.now() + 15 * 60_000
+  while (!(status.runtime.state === 'ready' && status.companion.state === 'running') && Date.now() < deadline) {
+    if (status.runtime.state === 'failed' || status.companion.state === 'failed') break
+    status = await api(`status?since=${status.seq}`)
+  }
+  const readyMs = Date.now() - startedAt
+  check('runtime ready', status.runtime.state === 'ready', status.runtime.error?.code ?? '')
+  check('companion running', status.companion.state === 'running', status.companion.error?.code ?? '')
+  check('dsh start to companion ready <= 3000 ms (cached runtime)', readyMs <= 3000, `${readyMs} ms`)
+  check('global shortcut registered', status.shortcut?.registered === true, status.shortcut?.error?.code ?? '')
+
+  // 2. 核心路径，跑 5 次取中位数
+  const text = '# 写作助手\n\n## 要求\n\n- 第一项\n    - 缩进的子项\n\n```\ncode\n```\n'
+  const shows = []
+  const hides = []
+  for (let i = 0; i < 5; i++) {
+    const r = await api('e2e', { command: { action: 'core-path', text } })
+    check(`core path #${i + 1}`, r.ok === true && r.data.clipboardMatches === true && r.data.hidden === true, JSON.stringify(r.data))
+    if (typeof r.data.showMs === 'number') shows.push(r.data.showMs)
+    if (typeof r.data.copyToHiddenMs === 'number') hides.push(r.data.copyToHiddenMs)
+    await sleep(300)
+  }
+  const median = arr => [...arr].sort((a, b) => a - b)[Math.floor(arr.length / 2)] ?? Infinity
+  check('show to typable median <= 100 ms', median(shows) <= 100, shows.join(', '))
+  check('show to typable max <= 200 ms', Math.max(...shows) <= 200, shows.join(', '))
+  check('copy to hidden <= 200 ms', Math.max(...hides) <= 200, hides.join(', '))
+  const profileHash = createHash('sha256').update(PROFILE, 'utf8').digest('hex').slice(0, 16)
+  const draftFile = join(home, 'storages', `promptx_draft_${profileHash}.json`)
+  await sleep(800)
+  check('draft persisted', existsSync(draftFile) && readFileSync(draftFile, 'utf8').includes(JSON.stringify(text).slice(1, 20)), draftFile)
+
+  // 3. 保存到库
+  const saved = await api('e2e', { command: { action: 'save-to-library' } })
+  check('save to library', saved.ok === true, JSON.stringify(saved.data))
+  check('save <= 500 ms', typeof saved.data.ms === 'number' && saved.data.ms <= 500, `${saved.data.ms} ms`)
+  if (typeof saved.data.relPath === 'string') {
+    const file = readFileSync(join(status.effectiveLibraryDir, saved.data.relPath), 'utf8')
+    check('new file has front matter fields', ['id:', 'title:', 'tags:', 'favorite:', 'created:', 'updated:'].every(k => file.includes(`\n${k}`)), saved.data.relPath)
+  }
+
+  // 4. 读取 256 KiB 的条目
+  const big = `# 大文件\n\n${'内容'.repeat(256 * 1024 / 6)}\n`
+  writeFileSync(join(status.effectiveLibraryDir, 'e2e-256k.md'), big)
+  const read = await api('e2e', { command: { action: 'host-read', relPath: 'e2e-256k.md' } })
+  check('read 256 KiB <= 300 ms', read.ok === true && read.data.ms <= 300, `${read.data.ms} ms`)
+
+  // 5. 10 万字草稿里插入一个字符到绘制完成
+  const typing = await api('e2e', { command: { action: 'typing-latency', size: 100_000 } })
+  check('keystroke at 100k chars <= 50 ms', typing.ok === true && typing.data.ms <= 50, `${typing.data.ms} ms`)
+
+  // 6. 改全局快捷键后立即生效，插件不重启
+  const pidBefore = status.companionPid
+  const original = status.config.globalShortcut
+  const probe = 'Control+Alt+Shift+F9'
+  const update = await api('config', { patch: { globalShortcut: probe } })
+  check('config update accepted', update.ok === true, JSON.stringify(update))
+  let after = await api('status?since=-1')
+  const until = Date.now() + 10_000
+  while (after.shortcut?.accelerator !== probe && Date.now() < until) after = await api(`status?since=${after.seq}`)
+  check('new shortcut registered live', after.shortcut?.accelerator === probe && after.shortcut.registered === true, after.shortcut?.error?.code ?? '')
+  check('companion not restarted by config change', after.companionPid === pidBefore, `${pidBefore} -> ${after.companionPid}`)
+  await api('config', { patch: { globalShortcut: original } })
+
+  // 7. 停止 dsh，小程序随之退出
+  const pid = after.companionPid
+  dsh.kill('SIGTERM')
+  await new Promise(resolve => dsh.once('exit', resolve))
+  dsh = null
+  await sleep(2000)
+  let alive = false
+  try {
+    if (typeof pid === 'number') {
+      process.kill(pid, 0)
+      alive = true
+    }
+  } catch {
+    alive = false
+  }
+  check('companion exits with dsh', !alive, `pid ${pid}`)
+} catch (error) {
+  check('e2e run', false, error instanceof Error ? error.message : String(error))
+} finally {
+  if (dsh !== null) dsh.kill('SIGKILL')
+  if (!keep) rmSync(home, { recursive: true, force: true })
+  console.log(`\n${results.filter(r => r.ok).length}/${results.length} checks passed${keep ? `; kept ${home}` : ''}`)
+  process.exitCode = failed ? 1 : 0
+}
