@@ -129,7 +129,10 @@ export class RpcPeer<OutReq extends RequestMap, OutNote extends NotificationMap,
     if (typeof message.method === 'string') {
       const hasId = typeof message.id === 'number' || typeof message.id === 'string'
       if (hasId) {
-        void this.#handleRequest(message.id as number | string, message.method, message.params)
+        // #handleRequest 自己捕获处理函数的异常；这里的 catch 只兜底，防止任何拒绝变成未处理的 Promise。
+        this.#handleRequest(message.id as number | string, message.method, message.params).catch(() => {
+          this.#onProblem(`request-failed: ${String(message.method)}`)
+        })
       } else {
         this.#handleNotification(message.method, message.params)
       }

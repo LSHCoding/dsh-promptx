@@ -67,7 +67,8 @@
         "typescript/no-extra-non-null-assertion": "error",
         "typescript/no-extraneous-class": "error",
         // Lost promises in the agent loop are the repository's highest-value linted bug class.
-        "typescript/no-floating-promises": "error",
+        // 偏离官方：Host 里任何悬空的 Promise 拒绝都会让整个 dsh 退出，所以连 void 也不放过（design-spec D20）。
+        "typescript/no-floating-promises": ["error", { "ignoreVoid": false }],
         "typescript/no-for-in-array": "error",
         "typescript/no-implied-eval": "error",
         "typescript/no-invalid-void-type": "off", // Event signatures intentionally use void in source.

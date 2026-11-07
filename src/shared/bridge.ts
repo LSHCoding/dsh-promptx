@@ -94,6 +94,8 @@ export interface PromptxBridge {
     openSettings(): Promise<BridgeResult<{ navigated: boolean }>>
     /** 对话框打开或关闭；打开期间失焦不自动隐藏。 */
     setModalOpen(open: boolean): void
+    /** 按打开的栏位调整窗口的最小宽度（5.7：打开的栏位最小宽度之和，不超过屏幕可用区域）。 */
+    setMinWidth(width: number): void
   }
   prefs: {
     get(): Promise<Prefs>

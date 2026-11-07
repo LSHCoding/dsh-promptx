@@ -116,8 +116,13 @@ export interface MetaPatch {
 
 export type MetaConflict = 'modified' | 'missing' | 'noFrontMatter' | 'invalidFrontMatter' | 'unsupportedLayout'
 
+/**
+ * before 是 Host 读到并在其上修改的版本，after 是写入后的版本。小窗据此更新绑定：
+ * 改的是绑定的文件且 before 等于绑定记下的版本时，把绑定的版本换成 after（并更新标题）；
+ * 否则绑定不动，下次保存照常弹「文件已被外部修改」（design-spec 6.1）。
+ */
 export type MetaResult =
-  | { kind: 'saved'; entry: EntryMeta; version: FileVersion }
+  | { kind: 'saved'; entry: EntryMeta; before: FileVersion; after: FileVersion }
   | { kind: 'conflict'; conflict: MetaConflict }
 
 // ───────────────────────────── 回收站 ─────────────────────────────
@@ -186,6 +191,11 @@ export interface OptimizeSession {
 export type OptimizeEvent =
   | { type: 'session'; session: OptimizeSession | null }
   | { type: 'delta'; sessionId: string; roundId: string; text: string }
+  /**
+   * 第一轮在收到任何文本前以「没有可用模型」类错误结束：会话已丢弃，小窗收起会话栏，
+   * 只在底栏提示（需求 O-01「不开始会话」）。
+   */
+  | { type: 'discarded'; sessionId: string; error: ErrorInfo }
 
 // ───────────────────────────── 配置与状态 ─────────────────────────────
 
@@ -219,8 +229,12 @@ export interface CompanionConfig {
 
 export interface ShortcutStatus {
   accelerator: string
+  /** 是否在系统里登记成功。macOS 的登记不是独占的，成功也可能和别的应用冲突（见 warning）。 */
   registered: boolean
+  /** 没有登记的原因：组合不合法、登记失败、已被另一个 profile 的 PromptX 使用。 */
   error?: ErrorInfo
+  /** 登记成功但可能冲突：与 macOS 的系统快捷键相同。 */
+  warning?: ErrorInfo
 }
 
 /** 小程序上报给 Host 的状态。 */
@@ -236,6 +250,10 @@ export type RuntimeState = 'unsupported' | 'missing' | 'downloading' | 'extracti
 export interface RuntimeStatus {
   state: RuntimeState
   version: string
+  /** 删除运行时后暂停自动下载，直到用户点「下载」或下次插件启动。 */
+  paused?: boolean
+  /** 正在使用某个运行时版本的其他 profile（删除运行时被拒绝时显示）。 */
+  inUseBy?: Array<{ profile: string; version: string }>
   /** 当前或最后一次使用的下载源。 */
   source?: 'mirror' | 'official'
   received?: number
@@ -261,10 +279,17 @@ export interface PanelStatus {
     restartsExhausted?: boolean
   }
   shortcut: ShortcutStatus | null
-  /** 「打开配置页」请求的序号；页面看到它变大就切到插件页。 */
-  navigate: number
+  /**
+   * 最近一次「打开配置页」请求：seq 是序号，ageMs 是请求发出至今的毫秒数（由 Host 计算，不传绝对时间，
+   * 远程浏览器的时钟可能不同）。页面看到比自己处理过的更大的 seq 且 ageMs < 60000 时切到插件页。
+   */
+  navigate: { seq: number; ageMs: number } | null
   /** 平台（`process.platform`），配置页按它显示快捷键写法。 */
   platform: string
+  /** 同一个 profile 已有另一个 dsh 进程在运行 PromptX 时为 duplicate：这个进程不打开草稿、不启动小程序。 */
+  instance: 'active' | 'duplicate'
+  /** 小程序进程号（运行中时），手工验收时用来结束进程。 */
+  companionPid?: number
 }
 
 export type ConfigFieldError =

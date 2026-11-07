@@ -27,16 +27,25 @@ for (const line of (await response.text()).split('\n')) {
   if (match) githubSums.set(match[2], match[1])
 }
 
-const entries = TARGETS.map((target) => {
+// 文件大小用来限制下载量、核对续传的 Content-Range：取 GitHub 发布资源的 Content-Length。
+async function assetSize(file) {
+  const res = await fetch(`https://github.com/electron/electron/releases/download/v${version}/${file}`, { method: 'HEAD', redirect: 'follow' })
+  const length = Number(res.headers.get('content-length'))
+  if (!res.ok || !Number.isSafeInteger(length) || length <= 0) throw new Error(`${file} 取不到文件大小：HTTP ${res.status}`)
+  return length
+}
+
+const entries = []
+for (const target of TARGETS) {
   const file = `electron-v${version}-${target}.zip`
   const fromNpm = npmSums[file]
   const fromGithub = githubSums.get(file)
   if (!fromNpm || !fromGithub) throw new Error(`${file} 缺少校验值（npm: ${fromNpm ?? '无'}，GitHub: ${fromGithub ?? '无'}）`)
   if (fromNpm !== fromGithub) throw new Error(`${file} 两处校验值不一致：npm ${fromNpm}，GitHub ${fromGithub}`)
-  return { target, file, sha256: fromNpm }
-})
+  entries.push({ target, file, sha256: fromNpm, size: await assetSize(file) })
+}
 
-const lines = entries.map(e => `  '${e.target}': { file: '${e.file}', sha256: '${e.sha256}' },`).join('\n')
+const lines = entries.map(e => `  '${e.target}': { file: '${e.file}', sha256: '${e.sha256}', size: ${e.size} },`).join('\n')
 const content = `// 由 scripts/update-electron-checksums.mjs 生成，不要手改。
 // 校验值同时核对了 electron@${version} npm 包的 checksums.json 和 GitHub Releases 的 SHASUMS256.txt。
 
@@ -46,8 +55,8 @@ export const ELECTRON_VERSION = '${version}'
 /** 支持的平台-架构，与 Node 的 process.platform、process.arch 写法一致。 */
 export type RuntimeTarget = ${TARGETS.map(t => `'${t}'`).join(' | ')}
 
-/** 各平台压缩包的文件名和 SHA-256（小写十六进制）。 */
-export const ELECTRON_ASSETS: Readonly<Record<RuntimeTarget, { readonly file: string, readonly sha256: string }>> = {
+/** 各平台压缩包的文件名、SHA-256（小写十六进制）和字节数。 */
+export const ELECTRON_ASSETS: Readonly<Record<RuntimeTarget, { readonly file: string; readonly sha256: string; readonly size: number }>> = {
 ${lines}
 }
 `

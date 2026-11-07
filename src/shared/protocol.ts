@@ -39,6 +39,11 @@ export interface HelloResult {
   protocol: number
   hostVersion: string
   config: CompanionConfig
+  /**
+   * 运行模式。冒烟测试和端到端测试的处理函数只在这里说是 smoke / e2e 时才启用；
+   * 不从环境变量读，避免项目目录里的 .env 打开测试钩子（design-spec 9）。
+   */
+  mode: CompanionMode
 }
 
 /** 端到端测试命令，只在 PROMPTX_E2E=1 时注册。 */
@@ -72,12 +77,14 @@ export interface CompanionRequests {
   'draft.save': { params: { text: string; selection: TextSelection | null; binding: Binding | null }; result: { updatedAt: string } }
   'library.list': { params: LibraryListParams; result: LibraryListResult }
   'library.read': { params: { relPath: string }; result: LibraryReadResult }
-  'library.save': { params: { text: string; binding: Binding | null; folder: string | null; mode: SaveMode }; result: SaveResult }
+  /** requestId 用于新建文件去重：同一个 requestId 重发时返回已经建好的文件，不再建第二个。 */
+  'library.save': { params: { text: string; binding: Binding | null; folder: string | null; mode: SaveMode; requestId: string }; result: SaveResult }
   'library.updateMeta': { params: { relPath: string; patch: MetaPatch; addFrontMatter: boolean }; result: MetaResult }
   'library.delete': { params: { relPath: string }; result: { trashFile: string } }
   'trash.list': { params: { query: string }; result: TrashListResult }
   'trash.read': { params: { file: string }; result: { entry: TrashEntry; body: string } }
-  'trash.restore': { params: { file: string; target: RestoreTarget; acceptModified: boolean }; result: RestoreResult }
+  /** target 为 alternative 时带上对话框里显示的替代路径；这个路径已被占用时 Host 再返回 occupied。 */
+  'trash.restore': { params: { file: string; target: RestoreTarget; alternative: string | null; acceptModified: boolean }; result: RestoreResult }
   'optimize.start': { params: { text: string }; result: { session: OptimizeSession } }
   'optimize.followup': { params: { text: string }; result: { session: OptimizeSession } }
   'optimize.retry': { params: { roundId: string }; result: { session: OptimizeSession } }
@@ -167,16 +174,21 @@ export const RPC_ERROR = {
   business: -32010,
 } as const
 
-/** 小程序启动时由 Host 设置的环境变量。 */
+/**
+ * 小程序启动时由 Host 设置的环境变量。值都由 Host 计算，Host 从不把自己继承到的 PROMPTX_* 传下去。
+ * 运行模式不走环境变量，见 HelloResult.mode。
+ */
 export const COMPANION_ENV = {
   /** 小程序的数据目录：`<dsh 数据目录>/promptx`。 */
   dataDir: 'PROMPTX_DATA_DIR',
+  /** profile 名（显示用）。 */
   profile: 'PROMPTX_PROFILE',
+  /** profile 名的哈希（文件名用）。 */
+  profileHash: 'PROMPTX_PROFILE_HASH',
   parentPid: 'PROMPTX_PARENT_PID',
-  /** normal | smoke | e2e */
-  mode: 'PROMPTX_MODE',
-  /** 冒烟测试时使用的全局快捷键，避免和测试机上的组合冲突。 */
-  smokeShortcut: 'PROMPTX_SMOKE_SHORTCUT',
 } as const
+
+/** 启动参数里的标记，便于在进程列表里认出小程序（`pkill -f -- '--promptx-companion='`）。Electron 和 Chromium 都忽略它。 */
+export const COMPANION_MARKER_ARG = '--promptx-companion'
 
 export type CompanionMode = 'normal' | 'smoke' | 'e2e'

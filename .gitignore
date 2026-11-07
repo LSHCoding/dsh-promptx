@@ -25,3 +25,6 @@ tmp/
 .idea/
 .DS_Store
 .smoke-runtime/
+
+# Claude Code 的工作区（并行开发用的 git worktree）
+/.claude/
