@@ -40,6 +40,13 @@ export interface LibraryServiceOptions {
   now?: () => Date
   /** 生成 id 的随机字节，测试时可以固定。 */
   randomBytes?: (size: number) => Uint8Array
+  /**
+   * 每次操作前重新检查库目录的位置限制（design-spec 7.4，配置可能被手改）。返回 null 表示可以用；
+   * 返回错误时 list 报 unavailable，其他操作抛 promptx/library/unavailable。
+   */
+  checkRoot?: (root: string) => Promise<ErrorInfo | null>
+  /** 扫描时要跳过的目录（realpath）：dsh 数据目录、已知技能目录、`<dsh>/promptx`。 */
+  skipRealpaths?: () => readonly string[]
 }
 
 export interface LibraryApi {
