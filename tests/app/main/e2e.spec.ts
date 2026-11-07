@@ -152,6 +152,7 @@ describe('runE2eCommand: core-path', () => {
       ok: true,
       data: {
         showMs: 10,
+        readyMs: 10,
         copyToHiddenMs: 6,
         focused: true,
         rendererAck: true,
@@ -186,12 +187,13 @@ describe('runE2eCommand: core-path', () => {
     expect(harness.clipboard.text).toBe('what the user had copied')
   })
 
-  it('fails when the window never gets focus', async () => {
+  it('reports a missing keyboard focus without failing (recent macOS refuses focus to script-initiated shows)', async () => {
     const harness = new Harness()
     harness.focusOnShow = false
     const result = await runE2eCommand({ action: 'core-path', text: TEXT }, harness)
-    expect(result.ok).toBe(false)
+    expect(result.ok).toBe(true)
     expect(result.data.focused).toBe(false)
+    expect(typeof result.data.readyMs).toBe('number')
   })
 
   it('fails when the renderer does not answer, without a copy-to-hidden time', async () => {
