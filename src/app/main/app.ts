@@ -314,6 +314,14 @@ export class CompanionApp {
 
   #registerHostHandlers(): void {
     this.#peer.handle('ping', () => ({}))
+    // e2e.run 一开始就注册，但要等握手完成、且 Host 在 hello 回复里说是 e2e 模式才执行（design-spec 9）。
+    // 不能等握手之后再注册：Host 回复 hello 后立刻就算「运行中」，紧跟着发来的请求可能和 hello 的回复
+    // 在同一次读取里到达，那时握手的后续处理（一个微任务）还没执行，处理函数还不存在（本机端到端测试复现）。
+    this.#peer.handle('e2e.run', async (command) => {
+      const ok = await this.#handshake
+      if (!ok || this.#mode !== 'e2e') throw new PromptxError('promptx/internal', 'e2e disabled')
+      return runE2eCommand(command, this.#e2eDeps())
+    })
     this.#peer.handle('shutdown', async () => {
       await this.#beginExit('host-shutdown', this.#timings.flushMs)
       // 回复是在这个函数返回之后才写出去的：排到下一轮再退出，并等这一帧真的写进管道（macOS 上写管道是异步的）。
@@ -364,10 +372,6 @@ export class CompanionApp {
     }
     this.#mode = parseMode(result.mode)
     this.#logger.info('hello.done', { ms: this.#platform.now() - started, mode: this.#mode })
-    // 测试钩子只在 Host 明确说是 e2e 模式时才注册（design-spec 9）。
-    if (this.#mode === 'e2e') {
-      this.#peer.handle('e2e.run', command => runE2eCommand(command, this.#e2eDeps()))
-    }
     this.#handshakeState = 'done'
     this.#resolveHandshake(true)
     const config = parseCompanionConfig(result.config, null)

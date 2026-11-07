@@ -61,11 +61,13 @@ try {
     }
   }
 
-  const startedAt = Date.now()
+  const spawnedAt = Date.now()
   const bin = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+  // npx 只是包装：真正的 dsh 是它的子进程。放进单独的进程组，结束时对整个组发信号，才不会留下 dsh 和小程序。
   dsh = spawn(bin, ['-y', DSH, '--profile', PROFILE, '--no-open', '--port', '0'], {
     env: { ...env, DSH_PROMPTX_E2E: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   })
   dsh.once('error', (error) => {
     console.error(`dsh 启动失败：${error.message}`)
@@ -86,6 +88,9 @@ try {
     dsh.stdout.on('data', onData)
     dsh.stderr.on('data', onData)
   })
+  // N-01「dsh 启动后到小程序就绪」从 dsh 打印出地址（服务已经起来）开始计时；npx 解析包的时间不算。
+  const startedAt = Date.now()
+  console.log(`dsh up after ${startedAt - spawnedAt} ms`)
   const origin = new URL(tokenUrl).origin
 
   // 用带口令的地址换 cookie，之后的请求都带上它。
@@ -110,7 +115,10 @@ try {
   check('runtime ready', status.runtime.state === 'ready', status.runtime.error?.code ?? '')
   check('companion running', status.companion.state === 'running', status.companion.error?.code ?? '')
   check('dsh start to companion ready <= 3000 ms (cached runtime)', readyMs <= 3000, `${readyMs} ms`)
-  check('global shortcut registered', status.shortcut?.registered === true, status.shortcut?.error?.code ?? '')
+  // 快捷键的登记结果在握手之后由小程序单独上报，稍等一下。
+  const shortcutDeadline = Date.now() + 10_000
+  while (status.shortcut === null && Date.now() < shortcutDeadline) status = await api(`status?since=${status.seq}`)
+  check('global shortcut registered', status.shortcut?.registered === true, status.shortcut?.error?.code ?? status.shortcut?.warning?.code ?? '')
 
   // 2. 核心路径，跑 5 次取中位数
   const text = '# 写作助手\n\n## 要求\n\n- 第一项\n    - 缩进的子项\n\n```\ncode\n```\n'
@@ -166,8 +174,9 @@ try {
 
   // 7. 停止 dsh，小程序随之退出
   const pid = after.companionPid
-  dsh.kill('SIGTERM')
-  await new Promise(resolve => dsh.once('exit', resolve))
+  const exited = new Promise(resolve => dsh.once('exit', resolve))
+  process.kill(-dsh.pid, 'SIGTERM')
+  await exited
   dsh = null
   await sleep(2000)
   let alive = false
@@ -183,7 +192,13 @@ try {
 } catch (error) {
   check('e2e run', false, error instanceof Error ? error.message : String(error))
 } finally {
-  if (dsh !== null) dsh.kill('SIGKILL')
+  if (dsh !== null) {
+    try {
+      process.kill(-dsh.pid, 'SIGKILL')
+    } catch {
+      // 进程组已经不在。
+    }
+  }
   if (!keep) rmSync(home, { recursive: true, force: true })
   console.log(`\n${results.filter(r => r.ok).length}/${results.length} checks passed${keep ? `; kept ${home}` : ''}`)
   process.exitCode = failed ? 1 : 0

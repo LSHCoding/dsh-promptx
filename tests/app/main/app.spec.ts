@@ -727,9 +727,12 @@ describe('smoke mode', () => {
 })
 
 describe('e2e mode (testing-plan 5, D17)', () => {
-  it('does not register e2e.run unless the Host said e2e', async () => {
+  it('refuses e2e.run unless the Host said e2e', async () => {
     const { host } = await boot()
-    await expect(host.peer.request('e2e.run', { action: 'state' })).rejects.toMatchObject({ rpcCode: RPC_ERROR.methodNotFound })
+    await expect(host.peer.request('e2e.run', { action: 'state' })).rejects.toMatchObject({
+      rpcCode: RPC_ERROR.business,
+      info: { code: 'promptx/internal', detail: 'e2e disabled' },
+    })
   })
 
   it('runs the core path: show, copy and hide through the renderer, verify and restore the clipboard', async () => {
