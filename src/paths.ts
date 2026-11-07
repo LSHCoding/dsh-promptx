@@ -1,5 +1,6 @@
 // dsh 数据目录和 PromptX 自己的目录。插件自己的文件只放在 `<dsh 数据目录>/promptx/` 下（需求 7.10）。
 
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -51,9 +52,12 @@ export function expandHome(value: string, home: string = homedir()): string {
   return value
 }
 
-/** 存储单元的记录键要符合 [a-zA-Z0-9_-]+：profile 名里的其他字符换成下划线；没有 profile 时用 default。 */
-export function profileKey(profile: string | undefined): string {
-  const name = profile?.trim() ?? ''
-  if (name === '') return 'default'
-  return name.replace(/[^a-zA-Z0-9_-]/g, '_')
+/**
+ * profile 名 → 文件名和存储单元名里用的哈希：UTF-8 的 SHA-256 前 16 位小写十六进制。
+ * 不用「替换非法字符」：dsh 的 profile 名可以是中文和任意标点，替换会让「工作」「生活」撞成同一个键（审查意见 TC-05）。
+ * 没有 profile（dsh 不经 profile 启动）时用保留值 none，它不可能是 16 位十六进制。
+ */
+export function profileHash(profile: string | undefined): string {
+  if (profile === undefined || profile === '') return 'none'
+  return createHash('sha256').update(profile, 'utf8').digest('hex').slice(0, 16)
 }

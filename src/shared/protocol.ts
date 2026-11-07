@@ -51,6 +51,10 @@ export type E2eCommand =
   | { action: 'core-path'; text: string }
   | { action: 'save-to-library' }
   | { action: 'state' }
+  /** Host 自己处理：计时读取一条库条目（N-01 的 256 KiB 读取）。 */
+  | { action: 'host-read'; relPath: string }
+  /** 转给小窗：在 size 字的草稿里插入一个字符，测到绘制完成的耗时（N-01）。 */
+  | { action: 'typing-latency'; size: number }
 
 export interface E2eResult {
   ok: boolean
