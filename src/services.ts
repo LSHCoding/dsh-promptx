@@ -173,7 +173,8 @@ export interface RuntimeApi {
   resume(): void
   /** 小程序启动前登记租约，退出后释放；清理和删除不会动有存活租约的版本。 */
   acquireLease(version: string, pid: number): Promise<void>
-  releaseLease(): Promise<void>
+  /** 带上 pid 时只释放这个进程的租约：旧小程序晚到的退出事件不会删掉新小程序的租约。 */
+  releaseLease(pid?: number): Promise<void>
   /**
    * 删除运行时（调用方先停本 profile 的小程序）。其他 profile 的存活租约所在的版本不删，返回它们；
    * 之后进入暂停状态。
@@ -232,6 +233,8 @@ export interface SupervisorApi {
   restartsExhausted(): boolean
   /** 当前已握手的 peer；没有时为 null。 */
   peer(): HostPeer | null
+  /** 当前小程序进程号；没有进程时为 undefined。 */
+  pid(): number | undefined
   start(): void
   /** 停止（总时长受 timings 控制，默认 ≤ 4 秒）。之后不会自动重启。 */
   stop(reason: string): Promise<void>

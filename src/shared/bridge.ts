@@ -43,7 +43,7 @@ export interface BridgeEvents {
   /** 主进程要退出或隐藏前请求立即写回草稿；渲染进程写完后调用 flushed(id)。 */
   'flush': { id: number }
   /** 端到端测试命令（只在 e2e 模式下发送），渲染进程处理后调用 e2eDone。 */
-  'e2e': { id: number; action: string; text?: string }
+  'e2e': { id: number; action: string; text?: string; size?: number }
 }
 
 export type BridgeEventName = keyof BridgeEvents

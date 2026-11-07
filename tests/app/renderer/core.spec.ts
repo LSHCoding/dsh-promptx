@@ -376,7 +376,7 @@ describe('端到端测试命令', () => {
     const bridge = new FakeBridge()
     const controller = await start(bridge)
     type(controller, '原来的草稿')
-    bridge.emit('e2e', { id: 7, action: 'typing-latency', size: 100_000 } as never)
+    bridge.emit('e2e', { id: 7, action: 'typing-latency', size: 100_000 })
     await vi.advanceTimersByTimeAsync(10)
     const [id, result] = bridge.e2eDone.mock.calls[0] ?? []
     expect(id).toBe(7)

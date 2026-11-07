@@ -72,6 +72,8 @@ export interface SmokeReport {
   shortcut: CompanionStatus['shortcut']
   tray: boolean
   noSandbox: boolean
+  /** 向窗口发 close 后进程没有退出、窗口变为隐藏（Windows 的 Alt+F4 等系统关闭只隐藏）。 */
+  closeHides: boolean
 }
 
 /** 小程序 → Host 的请求。 */

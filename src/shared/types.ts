@@ -227,6 +227,10 @@ export interface CompanionConfig {
   profile: string
 }
 
+/**
+ * 约定：改快捷键时新组合登记失败，会退回旧组合——此时 registered 为 true、accelerator 是旧组合（和配置不同），
+ * 并带 error 或 warning 说明新组合为什么没生效。
+ */
 export interface ShortcutStatus {
   accelerator: string
   /** 是否在系统里登记成功。macOS 的登记不是独占的，成功也可能和别的应用冲突（见 warning）。 */
@@ -247,6 +251,9 @@ export interface CompanionStatus {
 
 export type RuntimeState = 'unsupported' | 'missing' | 'downloading' | 'extracting' | 'ready' | 'failed'
 
+/**
+ * 约定：state 为 downloading 但没有 received 时，表示在等另一个 dsh 进程完成下载（它持有下载锁）。
+ */
 export interface RuntimeStatus {
   state: RuntimeState
   version: string
