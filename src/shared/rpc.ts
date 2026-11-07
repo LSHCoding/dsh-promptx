@@ -97,8 +97,8 @@ export class RpcPeer<OutReq extends RequestMap, OutNote extends NotificationMap,
         this.#pending.delete(id)
         reject(new RpcError(RPC_ERROR.timeout, { code: 'promptx/channel/timeout', detail: method }))
       }, timeoutMs)
-      // 计时器不应阻止进程退出。
-      if (typeof timer === 'object' && 'unref' in timer) timer.unref()
+      // 计时器不应阻止进程退出。浏览器里 setTimeout 返回数字，没有 unref。
+      ;(timer as { unref?: () => void }).unref?.()
       this.#pending.set(id, { resolve: resolve, reject, timer })
       try {
         this.#send({ jsonrpc: '2.0', id, method, params })
