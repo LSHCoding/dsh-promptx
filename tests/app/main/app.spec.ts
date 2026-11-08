@@ -1,7 +1,7 @@
 // CompanionApp 的集成测试：假平台 + 真实协议（帧编解码和 RpcPeer 跑在两条管道上）+ 假界面。
 // 覆盖启动顺序、配置与外观、窗口与快捷键、IPC、退出前写回草稿、渲染进程崩溃、冒烟和端到端模式。
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CompanionApp, type CompanionTimings } from '../../../src/app/main/app.ts'
@@ -651,6 +651,34 @@ describe('global shortcut coordination (TC-02, D22)', () => {
 
     harness.platform.alive.delete(777)
     await until(() => (harness.host.lastStatus() as CompanionStatus).shortcut?.registered === true, 2000, 'takeover')
+    expect(JSON.parse(readFileSync(lock, 'utf8'))).toMatchObject({ pid: 4242, profile: 'promptx-dev' })
+  })
+
+  it('keeps refreshing the mtime of the lock it holds (heartbeat, F2)', async () => {
+    const { paths } = await boot()
+    const lock = shortcutLockPath(paths.locksDir, 'Control+P')
+    const old = new Date(Date.now() - 2 * 60_000)
+    utimesSync(lock, old, old)
+    await until(() => Date.now() - statSync(lock).mtimeMs < 60_000, 2000, 'refreshed lock')
+    expect(JSON.parse(readFileSync(lock, 'utf8'))).toMatchObject({ pid: 4242 })
+  })
+
+  it('gives the shortcut up when another live PromptX took its lock over, and takes it back once that one is gone (F2)', async () => {
+    const { platform, host, paths } = await boot()
+    const lock = shortcutLockPath(paths.locksDir, 'Control+P')
+    await until(() => (host.lastStatus() as CompanionStatus).shortcut?.registered === true, 2000, 'registered')
+    // 另一个 profile 把这边当成了已退出（例如 pid 复用的误判），接管了锁，而且还活着。
+    platform.alive.add(777)
+    writeFileSync(lock, JSON.stringify({ pid: 777, profile: 'work' }))
+    await until(() => (host.lastStatus() as CompanionStatus).shortcut?.registered === false, 2000, 'lost')
+    expect(host.lastStatus()).toMatchObject({
+      shortcut: { accelerator: 'Control+P', registered: false, error: { code: 'promptx/shortcut/held-by-profile', detail: 'work' } },
+    })
+    expect(platform.shortcuts.registered.size).toBe(0)
+    expect(JSON.parse(readFileSync(lock, 'utf8'))).toMatchObject({ pid: 777, profile: 'work' })
+    platform.alive.delete(777)
+    await until(() => (host.lastStatus() as CompanionStatus).shortcut?.registered === true, 2000, 'taken back')
+    expect([...platform.shortcuts.registered.keys()]).toEqual(['Control+P'])
     expect(JSON.parse(readFileSync(lock, 'utf8'))).toMatchObject({ pid: 4242, profile: 'promptx-dev' })
   })
 

@@ -1,8 +1,16 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { isProcessAlive, physicalShortcutKey, ShortcutLocks, shortcutLockPath } from '../../../src/app/main/shortcut-lock.ts'
+import {
+  isProcessAlive,
+  LOCK_CONFIRM_MS,
+  LOCK_STALE_MS,
+  physicalShortcutKey,
+  ShortcutLocks,
+  shortcutLockPath,
+  type LockFileTimes,
+} from '../../../src/app/main/shortcut-lock.ts'
 import { trapProcessErrors, useTempDir } from './helpers.ts'
 
 trapProcessErrors()
@@ -185,5 +193,190 @@ describe('ShortcutLocks', () => {
       .acquire('Control+P')
     expect(result).toEqual({ ok: true, locked: false })
     expect(problems.length).toBeGreaterThan(0)
+  })
+})
+
+describe('ShortcutLocks heartbeat (F2)', () => {
+  const MINUTE = 60_000
+
+  /** 测试用的单调时钟：只在测试里手动往前拨。墙上时钟和文件的 mtime 用真的。 */
+  interface Clock {
+    now: number
+  }
+
+  function locksDir(): string {
+    return join(tempDir(), 'locks')
+  }
+
+  function lockFile(): string {
+    return shortcutLockPath(locksDir(), 'Control+P')
+  }
+
+  function locksOf(pid: number, profile: string, alive: (pid: number) => boolean, clock: Clock, files?: LockFileTimes): ShortcutLocks {
+    return new ShortcutLocks({
+      dir: locksDir(),
+      pid,
+      profile,
+      isAlive: alive,
+      now: () => clock.now,
+      ...(files === undefined ? {} : { files }),
+    })
+  }
+
+  /** 把锁文件的 mtime 改成 ageMs 之前，模拟持有者这么久没刷新。 */
+  function age(ageMs: number): void {
+    const then = new Date(Date.now() - ageMs)
+    utimesSync(lockFile(), then, then)
+  }
+
+  function holderPid(): unknown {
+    return (JSON.parse(readFileSync(lockFile(), 'utf8')) as { pid: unknown }).pid
+  }
+
+  it('never takes a live holder\'s fresh lock, however long the contender waits', () => {
+    const alive = new Set([100, 200])
+    const clock = { now: 0 }
+    expect(locksOf(100, 'web', pid => alive.has(pid), clock).acquire('Control+P').ok).toBe(true)
+    const other = locksOf(200, 'work', pid => alive.has(pid), clock)
+    for (let check = 0; check < 6; check++) {
+      expect(other.heldByOther('Control+P')).toBe(true)
+      expect(other.acquire('Control+P')).toEqual({ ok: false, holder: { pid: 100, profile: 'web' } })
+      clock.now += 10 * MINUTE
+    }
+    expect(holderPid()).toBe(100)
+  })
+
+  it('takes a dead holder\'s lock at once, without waiting for the heartbeat to age', () => {
+    const clock = { now: 0 }
+    expect(locksOf(100, 'web', () => true, clock).acquire('Control+P').ok).toBe(true)
+    const other = locksOf(200, 'work', pid => pid === 200, clock)
+    expect(other.heldByOther('Control+P')).toBe(false)
+    expect(other.acquire('Control+P')).toEqual({ ok: true, locked: true })
+    expect(holderPid()).toBe(200)
+  })
+
+  it('takes a live pid\'s lock that stopped being refreshed only after 45 more seconds with the mtime unchanged', () => {
+    const alive = new Set([100, 200])
+    const clock = { now: 0 }
+    expect(locksOf(100, 'web', pid => alive.has(pid), clock).acquire('Control+P').ok).toBe(true)
+    const other = locksOf(200, 'work', pid => alive.has(pid), clock)
+    // 一分钟以内没刷新不算可疑。
+    age(LOCK_STALE_MS - 5000)
+    expect(other.acquire('Control+P').ok).toBe(false)
+    clock.now += 10 * MINUTE
+    expect(other.acquire('Control+P').ok).toBe(false)
+    // 两分钟没刷新（pid 被不相干的进程复用了）：先起疑，按单调时钟再等 45 秒、mtime 仍然没变才接管。
+    age(2 * MINUTE)
+    expect(other.heldByOther('Control+P')).toBe(true)
+    clock.now += LOCK_CONFIRM_MS - 1
+    expect(other.heldByOther('Control+P')).toBe(true)
+    expect(other.acquire('Control+P')).toEqual({ ok: false, holder: { pid: 100, profile: 'web' } })
+    clock.now += 1
+    expect(other.heldByOther('Control+P')).toBe(false)
+    expect(other.acquire('Control+P')).toEqual({ ok: true, locked: true })
+    expect(JSON.parse(readFileSync(lockFile(), 'utf8'))).toMatchObject({ pid: 200, profile: 'work' })
+    expect(readdirSync(locksDir())).toEqual([basename(lockFile())])
+  })
+
+  it('starts the 45 seconds over when the mtime changes, even if it is still old', () => {
+    const alive = new Set([100, 200])
+    const clock = { now: 0 }
+    expect(locksOf(100, 'web', pid => alive.has(pid), clock).acquire('Control+P').ok).toBe(true)
+    const other = locksOf(200, 'work', pid => alive.has(pid), clock)
+    age(2 * MINUTE)
+    expect(other.acquire('Control+P').ok).toBe(false)
+    clock.now += 30_000
+    age(90_000)
+    expect(other.acquire('Control+P').ok).toBe(false)
+    clock.now += LOCK_CONFIRM_MS - 1
+    expect(other.acquire('Control+P').ok).toBe(false)
+    clock.now += 1
+    expect(other.acquire('Control+P')).toEqual({ ok: true, locked: true })
+  })
+
+  it('a refresh by the holder in between cancels the takeover', () => {
+    const alive = new Set([100, 200])
+    const clock = { now: 0 }
+    const holder = locksOf(100, 'web', pid => alive.has(pid), clock)
+    expect(holder.acquire('Control+P').ok).toBe(true)
+    const other = locksOf(200, 'work', pid => alive.has(pid), clock)
+    age(2 * MINUTE)
+    expect(other.acquire('Control+P').ok).toBe(false)
+    expect(holder.refresh()).toEqual([])
+    expect(Date.now() - statSync(lockFile()).mtimeMs).toBeLessThan(LOCK_STALE_MS)
+    clock.now += 10 * MINUTE
+    expect(other.heldByOther('Control+P')).toBe(true)
+    expect(other.acquire('Control+P')).toEqual({ ok: false, holder: { pid: 100, profile: 'web' } })
+    expect(holderPid()).toBe(100)
+  })
+
+  it('does not take the lock when the holder refreshes it between the confirmation and the removal', () => {
+    const alive = new Set([100, 200])
+    const clock = { now: 0 }
+    const holder = locksOf(100, 'web', pid => alive.has(pid), clock)
+    expect(holder.acquire('Control+P').ok).toBe(true)
+    let refreshAfterRead = false
+    const files: LockFileTimes = {
+      mtimeMs: (path) => {
+        const mtime = statSync(path).mtimeMs
+        // 确认的那一刻读到的还是旧的 mtime，紧接着（挪走之前）持有者刷新了一次。
+        if (refreshAfterRead && path === lockFile()) {
+          refreshAfterRead = false
+          expect(holder.refresh()).toEqual([])
+        }
+        return mtime
+      },
+      touch: (path) => {
+        const now = new Date()
+        utimesSync(path, now, now)
+      },
+    }
+    const other = locksOf(200, 'work', pid => alive.has(pid), clock, files)
+    age(2 * MINUTE)
+    expect(other.acquire('Control+P').ok).toBe(false)
+    clock.now += LOCK_CONFIRM_MS
+    refreshAfterRead = true
+    expect(other.acquire('Control+P')).toEqual({ ok: false, holder: { pid: 100, profile: 'web' } })
+    expect(holderPid()).toBe(100)
+    expect(readdirSync(locksDir())).toEqual([basename(lockFile())])
+    expect(holder.refresh()).toEqual([])
+  })
+
+  it('refreshes the mtime of every lock it holds', () => {
+    const holder = locksOf(100, 'web', () => true, { now: 0 })
+    expect(holder.acquire('Control+P').ok).toBe(true)
+    expect(holder.acquire('Control+Alt+P').ok).toBe(true)
+    const old = new Date(Date.now() - 2 * MINUTE)
+    for (const key of ['Control+P', 'Control+Alt+P']) utimesSync(shortcutLockPath(locksDir(), key), old, old)
+    expect(holder.refresh()).toEqual([])
+    for (const key of ['Control+P', 'Control+Alt+P']) {
+      expect(Date.now() - statSync(shortcutLockPath(locksDir(), key)).mtimeMs).toBeLessThan(LOCK_STALE_MS)
+    }
+  })
+
+  it('notices that its lock was taken over, reports the live holder and leaves that lock alone', () => {
+    const clock = { now: 0 }
+    const holder = locksOf(100, 'web', () => true, clock)
+    expect(holder.acquire('Control+P').ok).toBe(true)
+    // 200 把 100 当成了已退出（例如 kill(pid, 0) 误判），接管了锁。
+    expect(locksOf(200, 'work', pid => pid === 200, clock).acquire('Control+P')).toEqual({ ok: true, locked: true })
+    expect(holder.refresh()).toEqual([{ key: 'Control+P', holder: { pid: 200, profile: 'work' } }])
+    // 不再算自己持有：之后的心跳不再管它，释放时也不删对方的锁。
+    expect(holder.refresh()).toEqual([])
+    holder.releaseAll()
+    expect(JSON.parse(readFileSync(lockFile(), 'utf8'))).toMatchObject({ pid: 200, profile: 'work' })
+  })
+
+  it('takes its lock back when the file disappeared or the one who took it is gone too', () => {
+    const clock = { now: 0 }
+    const holder = locksOf(100, 'web', pid => pid === 100, clock)
+    expect(holder.acquire('Control+P').ok).toBe(true)
+    rmSync(lockFile())
+    expect(holder.refresh()).toEqual([])
+    expect(holderPid()).toBe(100)
+    writeFileSync(lockFile(), `${JSON.stringify({ pid: 300, profile: 'gone' })}\n`)
+    expect(holder.refresh()).toEqual([])
+    expect(holderPid()).toBe(100)
+    expect(readdirSync(locksDir())).toEqual([basename(lockFile())])
   })
 })

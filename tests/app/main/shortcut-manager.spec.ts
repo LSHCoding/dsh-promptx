@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { Locale } from '../../../src/app/main/appearance.ts'
-import { ShortcutLocks, type LockResult } from '../../../src/app/main/shortcut-lock.ts'
+import { ShortcutLocks, shortcutLockPath, type LockResult, type LostLock } from '../../../src/app/main/shortcut-lock.ts'
 import { ShortcutManager, type ShortcutLockStore } from '../../../src/app/main/shortcut-manager.ts'
 import type { ShortcutStatus } from '../../../src/shared/types.ts'
 import { MemoryLogger, trapProcessErrors, useTempDir } from './helpers.ts'
@@ -40,11 +40,23 @@ class FakeBackend {
   }
 }
 
-/** 假的锁：heldByOthers 里的键被别的 profile 持有。 */
+/** 假的锁：heldByOthers 里的键被别的 profile 持有；takenOver 里的键在下一次心跳时报告为已被那个 profile 接管。 */
 class FakeLocks implements ShortcutLockStore {
   readonly held = new Set<string>()
   readonly heldByOthers = new Map<string, string>()
+  readonly takenOver = new Map<string, string>()
   readonly calls: string[] = []
+
+  refresh(): LostLock[] {
+    this.calls.push('refresh')
+    const lost: LostLock[] = []
+    for (const [key, profile] of this.takenOver) {
+      if (!this.held.delete(key)) continue
+      lost.push({ key, holder: { pid: 999, profile } })
+    }
+    this.takenOver.clear()
+    return lost
+  }
 
   acquire(key: string): LockResult {
     this.calls.push(`acquire ${key}`)
@@ -303,6 +315,73 @@ describe('ShortcutManager: waiting for another profile', () => {
   })
 })
 
+describe('ShortcutManager: heartbeat and losing the lock to another PromptX (F2)', () => {
+  it('refreshes the locks on every heartbeat and changes nothing while they are still its own', () => {
+    const { manager, backend, locks, statuses } = setup()
+    manager.apply('Control+P')
+    manager.heartbeat()
+    manager.heartbeat()
+    expect(locks.calls.filter(call => call === 'refresh')).toHaveLength(2)
+    expect(backend.calls).toEqual(['register Control+P'])
+    expect(statuses).toHaveLength(1)
+  })
+
+  it('gives the shortcut up when its lock was taken over, reports the new holder, and takes it back once that one is gone', () => {
+    const { manager, backend, locks, statuses, logger } = setup()
+    manager.apply('Control+P')
+    // 另一个 profile 把这边当成了已退出，接管了锁，而且还活着。
+    locks.takenOver.set('Control+P', 'work')
+    locks.heldByOthers.set('Control+P', 'work')
+    manager.heartbeat()
+    expect(backend.calls).toEqual(['register Control+P', 'unregister Control+P'])
+    const lost = { accelerator: 'Control+P', registered: false, error: { code: 'promptx/shortcut/held-by-profile', detail: 'work' } }
+    expect(manager.status()).toEqual(lost)
+    expect(statuses.at(-1)).toEqual(lost)
+    expect(logger.events('warn')).toContain('shortcut.lock-lost')
+    // 对方还在：之后的心跳只看一眼，不登记。
+    manager.heartbeat()
+    expect(backend.registered.size).toBe(0)
+    locks.heldByOthers.clear()
+    manager.heartbeat()
+    expect(backend.registered.has('Control+P')).toBe(true)
+    expect(manager.status()).toEqual({ accelerator: 'Control+P', registered: true })
+  })
+
+  it('when the fallback combination is taken over, reports why the configured one failed and waits for it', () => {
+    const { manager, backend, locks } = setup()
+    manager.apply('Control+P')
+    locks.heldByOthers.set('Control+Alt+P', 'work')
+    manager.apply('Control+Alt+P')
+    expect(manager.status()?.accelerator).toBe('Control+P')
+    locks.takenOver.set('Control+P', 'home')
+    locks.heldByOthers.set('Control+P', 'home')
+    manager.heartbeat()
+    expect(backend.registered.size).toBe(0)
+    expect(manager.status()).toEqual({
+      accelerator: 'Control+Alt+P',
+      registered: false,
+      error: { code: 'promptx/shortcut/held-by-profile', detail: 'work' },
+    })
+    locks.heldByOthers.delete('Control+Alt+P')
+    manager.heartbeat()
+    expect(manager.status()).toEqual({ accelerator: 'Control+Alt+P', registered: true })
+  })
+
+  it('ignores a lost lock that is not the combination in use, and does nothing after dispose', () => {
+    const { manager, backend, locks } = setup()
+    manager.apply('Control+P')
+    locks.held.add('Control+Alt+P')
+    locks.takenOver.set('Control+Alt+P', 'work')
+    manager.heartbeat()
+    expect(manager.status()).toEqual({ accelerator: 'Control+P', registered: true })
+    manager.dispose()
+    locks.calls.length = 0
+    manager.heartbeat()
+    expect(locks.calls).toEqual([])
+    expect(backend.calls).toEqual(['register Control+P', 'unregister Control+P'])
+  })
+})
+
 describe('ShortcutManager: system shortcuts (macOS)', () => {
   it('warns with the localized name when the combination is an enabled system shortcut', async () => {
     const { manager, backend, locale } = setup({ readSystemHotkeys: () => Promise.resolve(FIXTURE) })
@@ -400,6 +479,35 @@ describe('ShortcutManager: dispose', () => {
 })
 
 describe('ShortcutManager with real lock files', () => {
+  it('gives the combination up when a live profile took the lock over, and leaves that profile\'s lock alone (F2)', () => {
+    const dir = join(tempDir(), 'locks')
+    const alive = new Set([10, 20])
+    const backend = new FakeBackend()
+    const first = new ShortcutManager({
+      platform: 'darwin',
+      backend,
+      locks: new ShortcutLocks({ dir, pid: 10, profile: 'web', isAlive: candidate => alive.has(candidate) }),
+      locale: () => 'en',
+      onTrigger: () => {},
+      onStatus: () => {},
+      logger: new MemoryLogger(),
+    })
+    first.apply('Control+P')
+    // 20 把 10 当成了已退出（例如 pid 被复用的误判），接管了锁。
+    const second = new ShortcutLocks({ dir, pid: 20, profile: 'work', isAlive: candidate => candidate === 20 })
+    expect(second.acquire('Control+P')).toEqual({ ok: true, locked: true })
+    first.heartbeat()
+    expect(backend.registered.size).toBe(0)
+    expect(first.status()).toEqual({
+      accelerator: 'Control+P',
+      registered: false,
+      error: { code: 'promptx/shortcut/held-by-profile', detail: 'work' },
+    })
+    first.dispose()
+    expect(JSON.parse(readFileSync(shortcutLockPath(dir, 'Control+P'), 'utf8'))).toMatchObject({ pid: 20, profile: 'work' })
+    second.releaseAll()
+  })
+
   it('lets only one of two profiles own a combination and names the owner', () => {
     const dir = join(tempDir(), 'locks')
     const alive = new Set([10, 20])

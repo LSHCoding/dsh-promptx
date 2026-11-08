@@ -6,10 +6,19 @@
 // （「已被 profile X 的 PromptX 使用」而不是「已被其他应用占用」），所以各平台都用。
 //
 // 锁文件：`<dsh>/promptx/locks/shortcut-<组合的 SHA-256 前 16 位>.json`，内容是 pid 和 profile 名。
-// 持有者进程已不在才接管。不同 DSH_HOME 之间不协调（已知限制）。
+// 不同 DSH_HOME 之间不协调（已知限制）。
+//
+// 什么时候接管（审查 F2）。只看 pid 不够：断电、强制退出、崩溃之后 pid 可能已被不相干的进程复用（或者是别的用户的进程，
+// kill(pid, 0) 报 EPERM），旧锁文件会让快捷键永远登记不上、一直报「已被 profile X 的 PromptX 使用」。所以加心跳：
+// - 持有者每隔几秒（app.ts 的计时器，最长 LOCK_REFRESH_MS）把自己持有的锁文件的 mtime 改成现在；
+// - 持有者进程已不在：立即接管（原来的规则）；
+// - 持有者进程还在：某次看到 mtime 已经超过 LOCK_STALE_MS 没变，先记下；按本进程的单调时钟至少再过 LOCK_CONFIRM_MS、
+//   mtime 和内容都还一模一样，才算死锁接管。单调时钟在系统睡眠时不走，睡醒后持有者有机会先刷新，不会刚醒就被抢；
+// - 持有者刷新时发现锁已经不在自己名下（自己被当成了已退出），交给 ShortcutManager 注销快捷键、按被别的 profile 占用上报。
+// Host 的实例锁（src/companion/instance-lock.ts）用同一套规则。
 
 import { createHash } from 'node:crypto'
-import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseAccelerator, type AcceleratorModifier } from '../../shared/accelerator.ts'
 
@@ -23,6 +32,37 @@ export interface LockHolder {
  * 不 ok：另一个存活的 PromptX 持有这个组合。
  */
 export type LockResult = { ok: true; locked: boolean } | { ok: false; holder: LockHolder }
+
+/** 心跳时发现已经不在自己名下的锁：键和现在的持有者。 */
+export interface LostLock {
+  key: string
+  holder: LockHolder
+}
+
+/** 持有者刷新锁文件 mtime 的最长间隔（app.ts 按 min(heldRetryMs, 这个值) 调用 ShortcutManager.heartbeat）。 */
+export const LOCK_REFRESH_MS = 15_000
+
+/** mtime 超过这么久没变，才开始怀疑持有者已经不在（pid 被别的进程复用）。远大于刷新间隔，偶尔晚一两次不会误判。 */
+export const LOCK_STALE_MS = 60_000
+
+/** 起疑之后按本进程的单调时钟至少再等这么久，mtime 仍然没变才接管。 */
+export const LOCK_CONFIRM_MS = 45_000
+
+/** 锁文件的 mtime 读写，测试换成假的。 */
+export interface LockFileTimes {
+  /** 锁文件的 mtime（毫秒）。文件不在时抛出。 */
+  mtimeMs(path: string): number
+  /** 把锁文件的 mtime 改成现在（心跳）。 */
+  touch(path: string): void
+}
+
+const NODE_FILE_TIMES: LockFileTimes = {
+  mtimeMs: path => statSync(path).mtimeMs,
+  touch: (path) => {
+    const now = new Date()
+    utimesSync(path, now, now)
+  },
+}
 
 const PHYSICAL_ORDER: readonly AcceleratorModifier[] = ['Command', 'Control', 'Alt', 'Shift', 'Super']
 
@@ -66,10 +106,22 @@ export interface ShortcutLocksOptions {
   isAlive?: (pid: number) => boolean
   /** 锁目录不可用时调用（只传错误码），用于记日志。 */
   onProblem?: (code: string) => void
+  /** 单调时钟（毫秒，主进程传 platform.now，即 performance.now）：确认「一直没刷新」的等待按它算，系统睡眠时不走。 */
+  now?: () => number
+  /** 墙上时钟（毫秒），和锁文件的 mtime 比较用。 */
+  wallNow?: () => number
+  files?: LockFileTimes
 }
 
 /** 链接不支持时（某些网络盘、FAT 卷）退回独占创建。 */
 const LINK_UNSUPPORTED = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK'])
+
+/** 起疑时看到的锁：原文、mtime，和起疑那一刻的单调时钟。 */
+interface Suspect {
+  raw: string
+  mtimeMs: number
+  since: number
+}
 
 export class ShortcutLocks {
   readonly #dir: string
@@ -77,7 +129,12 @@ export class ShortcutLocks {
   readonly #profile: string
   readonly #isAlive: (pid: number) => boolean
   readonly #onProblem: (code: string) => void
+  readonly #now: () => number
+  readonly #wallNow: () => number
+  readonly #files: LockFileTimes
   readonly #held = new Set<string>()
+  /** 按锁文件路径记下的「持有者还活着、mtime 却久未刷新」的锁。 */
+  readonly #suspects = new Map<string, Suspect>()
 
   constructor(options: ShortcutLocksOptions) {
     this.#dir = options.dir
@@ -85,6 +142,9 @@ export class ShortcutLocks {
     this.#profile = options.profile
     this.#isAlive = options.isAlive ?? isProcessAlive
     this.#onProblem = options.onProblem ?? (() => {})
+    this.#now = options.now ?? (() => performance.now())
+    this.#wallNow = options.wallNow ?? Date.now
+    this.#files = options.files ?? NODE_FILE_TIMES
   }
 
   acquire(key: string): LockResult {
@@ -100,6 +160,7 @@ export class ShortcutLocks {
       const created = this.#create(path)
       if (created === 'created') {
         this.#held.add(key)
+        this.#suspects.delete(path)
         return { ok: true, locked: true }
       }
       if (created === 'failed') return { ok: true, locked: false }
@@ -111,11 +172,44 @@ export class ShortcutLocks {
         this.#held.add(key)
         return { ok: true, locked: true }
       }
-      if (holder !== null && this.#isAlive(holder.pid)) return { ok: false, holder }
-      // 持有者已不在（崩溃后留下的锁），或者文件坏了：挪走重来。
-      if (!this.#removeStale(path, raw)) return { ok: true, locked: false }
+      let confirmedMtime: number | undefined
+      if (holder !== null && this.#isAlive(holder.pid)) {
+        const stale = this.#staleSince(path, raw)
+        if (stale === null) return { ok: false, holder }
+        confirmedMtime = stale
+      }
+      // 持有者已不在（崩溃后留下的锁）、锁久未刷新且已确认，或者文件坏了：挪走重来。
+      this.#suspects.delete(path)
+      if (!this.#removeStale(path, raw, confirmedMtime)) return { ok: true, locked: false }
     }
     return { ok: true, locked: false }
+  }
+
+  /**
+   * 持有者进程还活着时，这把锁是不是已经没人维护（审查 F2）。mtime 超过 LOCK_STALE_MS 没变时先记下；
+   * 之后的检查里原文和 mtime 都一模一样、离起疑已经过了至少 LOCK_CONFIRM_MS（单调时钟）才算死锁，返回那个 mtime，
+   * 交给 #removeStale 在挪走时再核对一次。其余情况返回 null，中间看到任何变化都重新起算。
+   */
+  #staleSince(path: string, raw: string): number | null {
+    let mtimeMs: number
+    try {
+      mtimeMs = this.#files.mtimeMs(path)
+    } catch {
+      // 读不到 mtime（刚被删掉或换掉）：这一轮不下结论，下一轮重新看。
+      this.#suspects.delete(path)
+      return null
+    }
+    if (this.#wallNow() - mtimeMs <= LOCK_STALE_MS) {
+      this.#suspects.delete(path)
+      return null
+    }
+    const now = this.#now()
+    const suspect = this.#suspects.get(path)
+    if (suspect?.raw !== raw || suspect.mtimeMs !== mtimeMs) {
+      this.#suspects.set(path, { raw, mtimeMs, since: now })
+      return null
+    }
+    return now - suspect.since >= LOCK_CONFIRM_MS ? mtimeMs : null
   }
 
   /**
@@ -123,9 +217,10 @@ export class ShortcutLocks {
    * 等它 rm 的时候文件可能已经是快的那个刚建好的新锁，结果两边都以为自己拿到了。
    * 所以先 rename 到自己名下（只有一个进程能挪走同一个文件），挪走的内容和刚才读到的不同，
    * 说明挪走的是别人的新锁，用 link 放回去（目标又被建了时放不回，留给下一轮判断）。
+   * 按心跳判定的死锁（confirmedMtime 有值）还要核对 mtime：确认之后、挪走之前持有者刚好刷新过，说明它还活着，同样放回去。
    * 返回 false 表示锁目录出了问题，调用方退化成不协调。
    */
-  #removeStale(path: string, raw: string): boolean {
+  #removeStale(path: string, raw: string, confirmedMtime?: number): boolean {
     const aside = `${path}.${this.#pid}.stale`
     try {
       renameSync(path, aside)
@@ -135,7 +230,7 @@ export class ShortcutLocks {
       return false
     }
     try {
-      if (readRaw(aside) !== raw) {
+      if (readRaw(aside) !== raw || (confirmedMtime !== undefined && this.#mtimeOr(aside, Number.NaN) !== confirmedMtime)) {
         try {
           linkSync(aside, path)
         } catch {
@@ -152,10 +247,50 @@ export class ShortcutLocks {
     return true
   }
 
-  /** 只读地看一眼：锁文件在、内容可读、持有者不是自己且还活着。读不出来按没人持有算（acquire 时会接管坏文件）。 */
+  #mtimeOr(path: string, fallback: number): number {
+    try {
+      return this.#files.mtimeMs(path)
+    } catch {
+      return fallback
+    }
+  }
+
+  /**
+   * 只读地看一眼：锁文件在、内容可读、持有者不是自己且还活着，并且没有被确认为久未刷新的死锁（审查 F2）。
+   * 读不出来按没人持有算（acquire 时会接管坏文件）。不改动任何文件，只在内存里记下起疑的时间。
+   */
   heldByOther(key: string): boolean {
-    const holder = readHolder(shortcutLockPath(this.#dir, key))
-    return holder !== null && holder.pid !== this.#pid && this.#isAlive(holder.pid)
+    const path = shortcutLockPath(this.#dir, key)
+    const raw = readRaw(path)
+    const holder = raw === null ? null : parseHolder(raw)
+    if (raw === null || holder === null || holder.pid === this.#pid || !this.#isAlive(holder.pid)) return false
+    return this.#staleSince(path, raw) === null
+  }
+
+  /**
+   * 心跳（审查 F2）：把自己持有的每把锁的 mtime 改成现在，证明持有者还活着。锁文件已经不在自己名下时
+   * （自己被当成已退出、被别的 PromptX 接管，或者文件被删、被写坏），按 acquire 的规则重新判断一次：
+   * 还能拿回来就照常持有；另一个存活的 PromptX 持有着就从持有集合里去掉，返回给调用方注销快捷键。
+   * 锁目录出了问题（拿不回来、也说不出谁持有）时退化成不协调，不再刷新它，快捷键照常保留，和登记时的退化一致。
+   */
+  refresh(): LostLock[] {
+    const lost: LostLock[] = []
+    for (const key of [...this.#held]) {
+      const path = shortcutLockPath(this.#dir, key)
+      if (readHolder(path)?.pid === this.#pid) {
+        try {
+          this.#files.touch(path)
+        } catch (error) {
+          // 刷新不了（锁目录变成只读之类）：锁还在自己名下，下一次心跳再试；一直刷新不了时别人等过确认期会接管。
+          this.#onProblem(codeOf(error))
+        }
+        continue
+      }
+      this.#held.delete(key)
+      const result = this.acquire(key)
+      if (!result.ok) lost.push({ key, holder: result.holder })
+    }
+    return lost
   }
 
   /** 只删自己的锁：文件已被别人接管（我们被当成死进程）时不动它。 */

@@ -4,7 +4,8 @@
 // - register() 返回 false（Windows、Linux 上组合已被占用）报 taken；写法不合法报 invalid。
 // - 改组合：先注销旧的、释放旧锁，再登记新的；新的失败时重新登记旧的，状态写「新组合 X 登记失败，仍使用 Y」。
 // - macOS 上登记成功后再查系统快捷键，相同时状态带 system-conflict 警告（不影响登记）。
-// - 被另一个 profile 占着时，app.ts 定期调用 retryIfHeld()：对方退出后接手，不用等下一次配置推送。
+// - app.ts 定期调用 heartbeat()：刷新自己持有的锁（心跳，审查 F2），锁被别的 PromptX 接管时注销快捷键、报 held-by-profile；
+//   被另一个 profile 占着时看对方是否已经退出（retryIfHeld），退出后接手，不用等下一次配置推送。
 //
 // 状态（ShortcutStatus）的约定：
 // - 没有配置快捷键：null。
@@ -18,7 +19,7 @@ import { parseAccelerator } from '../../shared/accelerator.ts'
 import type { ErrorInfo, ShortcutStatus } from '../../shared/types.ts'
 import type { Locale } from './appearance.ts'
 import { errorCode, type CompanionLogger } from './logger.ts'
-import { physicalShortcutKey, type LockResult } from './shortcut-lock.ts'
+import { physicalShortcutKey, type LockHolder, type LockResult, type LostLock } from './shortcut-lock.ts'
 import { systemHotkeyName } from './strings.ts'
 import { systemConflictFromXml } from './symbolic-hotkeys.ts'
 
@@ -34,6 +35,8 @@ export interface ShortcutLockStore {
   releaseAll(): void
   /** 这个组合是否正被另一个存活的 PromptX 持有（只读，不抢锁）。 */
   heldByOther(key: string): boolean
+  /** 心跳：刷新自己持有的锁，返回已经被另一个存活的 PromptX 接管的那些。 */
+  refresh(): LostLock[]
 }
 
 export interface ShortcutManagerOptions {
@@ -189,8 +192,19 @@ export class ShortcutManager {
   }
 
   /**
-   * 配置的组合正被另一个 profile 的 PromptX 持有时，看看对方是否已经不在（正常退出会删锁，崩溃留下的锁按进程判断），
-   * 不在了就重新登记。只读一下锁文件，平时什么都不做；app.ts 每隔几秒调用一次。
+   * app.ts 每隔几秒调用一次（不超过 LOCK_REFRESH_MS）。先刷新自己持有的锁，证明自己还在（审查 F2）；
+   * 发现锁已经被另一个 PromptX 接管（自己被当成了已退出）就注销快捷键、按被那个 profile 占用上报，
+   * 然后和登记时被占一样，由 retryIfHeld 等对方退出后接手。
+   */
+  heartbeat(): void {
+    if (this.#disposed) return
+    for (const lost of this.#locks.refresh()) this.#lockLost(lost.key, lost.holder)
+    this.retryIfHeld()
+  }
+
+  /**
+   * 配置的组合正被另一个 profile 的 PromptX 持有时，看看对方是否已经不在（正常退出会删锁，崩溃留下的锁按进程和心跳判断），
+   * 不在了就重新登记。只读一下锁文件，平时什么都不做。
    */
   retryIfHeld(): void {
     if (this.#disposed || this.#requested === null) return
@@ -242,6 +256,26 @@ export class ShortcutManager {
       return { ok: false, error: { code: 'promptx/shortcut/taken' } }
     }
     return { ok: true, active: { accelerator, electron: parsed.canonical, key } }
+  }
+
+  /**
+   * 正在用的组合的锁被另一个存活的 PromptX 接管了（审查 F2）：macOS 的登记不独占，两边都登记着会同时切换、互相抢焦点，
+   * 所以这边注销。锁已经不在自己名下，#unregister 里的释放什么都不做，不会删掉对方的锁。
+   * 状态和登记时就被占一样报 held-by-profile；正在用的是退回的旧组合时，配置的新组合仍按它自己失败的原因上报。
+   */
+  #lockLost(key: string, holder: LockHolder): void {
+    const active = this.#active
+    if (active?.key !== key) return
+    this.#unregister(active)
+    this.#active = null
+    this.#generation++
+    this.#conflictId = null
+    const fallback = this.#fallbackFrom
+    this.#fallbackFrom = null
+    this.#failure = fallback ?? { accelerator: active.accelerator, key, error: { code: HELD_BY_PROFILE, detail: holder.profile } }
+    // 不记 profile 名：日志里只放状态和错误码（N-02）。
+    this.#logger.warn('shortcut.lock-lost')
+    this.#emit()
   }
 
   #unregister(active: Active): void {

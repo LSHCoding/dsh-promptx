@@ -41,7 +41,7 @@ import {
   RendererHealth,
 } from './renderer-health.ts'
 import { planSettingsOpen } from './settings.ts'
-import { ShortcutLocks } from './shortcut-lock.ts'
+import { LOCK_REFRESH_MS, ShortcutLocks } from './shortcut-lock.ts'
 import { ShortcutManager } from './shortcut-manager.ts'
 import { runTask, withTimeout } from './tasks.ts'
 import { buildTrayModel, type TrayAction } from './tray-model.ts'
@@ -59,7 +59,10 @@ export interface CompanionTimings {
   replyWriteMs: number
   /** 父进程检查的间隔。 */
   parentCheckMs: number
-  /** 全局快捷键被另一个 profile 占着时，多久看一次对方是否已经退出。 */
+  /**
+   * 快捷键锁的心跳间隔（审查 F2）：多久刷新一次自己持有的锁、看一次锁有没有被接管，被另一个 profile 占着时也按这个间隔
+   * 看对方是否已经退出。超过 LOCK_REFRESH_MS 时按 LOCK_REFRESH_MS。
+   */
   heldRetryMs: number
   /** 「设置」在网页模式下提示停留的时间。 */
   settingsToastMs: number
@@ -194,6 +197,8 @@ export class CompanionApp {
       onProblem: (code) => {
         this.#logger.warn('shortcut.lock-problem', { code })
       },
+      // 心跳的确认期按单调时钟算（审查 F2）：系统睡眠时不走，睡醒后持有者来得及先刷新。
+      now: () => options.platform.now(),
     })
     this.#shortcuts = new ShortcutManager({
       platform: options.platform.platform,
@@ -565,9 +570,12 @@ export class CompanionApp {
     this.#booted = true
     this.#logger.info('boot.done', { ms: this.#platform.now() - this.#startedAt, tray: this.#tray !== null })
     if (this.#config !== null) this.#shortcuts.apply(this.#config.globalShortcut)
+    // 快捷键锁的心跳和「被别的 profile 占着时等它退出」共用这个计时器（审查 F2）。间隔不超过锁的刷新上限，
+    // 否则别的 PromptX 会把还活着的这一个当成死锁接管。unref：不靠它让进程留着（退出由 #exitNow 清掉它）。
     this.#heldTimer = setInterval(() => {
-      this.#shortcuts.retryIfHeld()
-    }, this.#timings.heldRetryMs)
+      this.#shortcuts.heartbeat()
+    }, Math.min(this.#timings.heldRetryMs, LOCK_REFRESH_MS))
+    this.#heldTimer.unref()
     this.#updateTray()
     this.#reportStatus()
     if (this.#pendingCommand !== null) {
