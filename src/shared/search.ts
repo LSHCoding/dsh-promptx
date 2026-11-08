@@ -61,6 +61,16 @@ function compareByUpdatedThenTitle(a: EntryMeta, b: EntryMeta): number {
   return a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0
 }
 
+/**
+ * 去掉结尾的 `/`。路径来自小窗的请求参数，不用 `/\/+$/`：它遇到一长串 `/` 后面跟别的字符时是平方级回溯，
+ * 会在 Host 主线程上卡住（审查 SEC-02）。
+ */
+function trimTrailingSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path.charCodeAt(end - 1) === 0x2f) end--
+  return path.slice(0, end)
+}
+
 function inFolder(meta: EntryMeta, folder: FolderSel): boolean {
   switch (folder.kind) {
     case 'all':
@@ -69,7 +79,7 @@ function inFolder(meta: EntryMeta, folder: FolderSel): boolean {
       return meta.folder === ''
     case 'folder': {
       // 选中文件夹时包含所有子文件夹；`写作` 不能匹配到同级的 `写作素材`
-      const path = folder.path.replace(/\/+$/, '')
+      const path = trimTrailingSlashes(folder.path)
       return path === '' || meta.folder === path || meta.folder.startsWith(`${path}/`)
     }
   }

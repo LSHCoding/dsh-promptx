@@ -4,6 +4,12 @@
 /** 新建 Prompt 时自动提取的标题最多多少个字符（L-08）。 */
 export const TITLE_MAX_CHARS = 40
 
+/**
+ * 列表里从正文提取的标题最多多少个字符。正常的标题行远到不了这个长度；不设上限时，一个第一行就有 2 MiB 的文件
+ * 会变成 2 MiB 的列表标题，每次列表、搜索、排序都要带着它（审查 SEC-01）。front matter 里写的标题不受限制。
+ */
+export const DISPLAY_TITLE_MAX_CHARS = 200
+
 /** 由标题生成的文件名最多多少个字符（6.2）。 */
 export const FILE_STEM_MAX_CHARS = 60
 
@@ -35,19 +41,48 @@ function truncateGraphemes(text: string, max: number): string {
 }
 
 // ───────────────────────────── 标题 ─────────────────────────────
+//
+// 标题和围栏的判断对库里每个文件的每一行都要跑一遍，而且在 Host 主线程上同步执行。这里的正则只匹配有界的行首，
+// 其余部分用线性的循环处理：原来的 `(.*?)[ \t]*$`、`(?:^|[ \t]+)#+$`、`(.*)$` 遇到一长串空格（或反引号）后面跟
+// 别的字符时是平方级回溯，一个第一行有几十万个空格的共享文件就能让整个 dsh 卡住几分钟（审查 SEC-01）。
 
-/** CommonMark 的 ATX 标题：最多 3 个空格缩进，1 到 6 个 `#`，后面是空白或行尾。 */
-const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?[ \t]*$/
+const SPACE = 0x20
+const TAB = 0x09
+const HASH = 0x23
 
-/** 代码围栏：最多 3 个空格缩进，至少 3 个反引号或波浪号。 */
-const CODE_FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+/** CommonMark 的 ATX 标题开头：最多 3 个空格缩进，1 到 6 个 `#`，后面是空白或行尾。 */
+const ATX_OPENING = /^ {0,3}#{1,6}(?=[ \t]|$)/
+
+/** 代码围栏开头：最多 3 个空格缩进，至少 3 个反引号或波浪号。后面的信息串另取，不放进正则。 */
+const FENCE_OPENING = /^ {0,3}(`{3,}|~{3,})/
+
+/**
+ * 原来的正则用 `.` 匹配标题文字和信息串，`.` 不匹配这些行结束符：换行在切行时已经去掉，剩下 \u2028、\u2029。
+ * 含这两个字符的行原来既不算标题也不算围栏，保持这个判定。
+ */
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/
+
+function isBlankCode(code: number): boolean {
+  return code === SPACE || code === TAB
+}
 
 /** 标题行的文字：去掉开头的 `#`、首尾空白和结尾的 `#` 序列（前面要有空白，`# C#` 的标题是 `C#`）。不是标题行时返回 null。 */
 function atxHeadingText(line: string): string | null {
-  const match = ATX_HEADING.exec(line)
-  if (match === null) return null
-  const content = match[1] ?? ''
-  return content.replace(/(?:^|[ \t]+)#+$/, '').trim()
+  const opening = ATX_OPENING.exec(line)
+  if (opening === null || LINE_TERMINATOR.test(line)) return null
+  let start = opening[0].length
+  while (start < line.length && isBlankCode(line.charCodeAt(start))) start++
+  let end = line.length
+  while (end > start && isBlankCode(line.charCodeAt(end - 1))) end--
+  // 从行尾往前找结尾的 `#` 序列：整段都是 `#` 时标题为空；前面是空白时连同这段空白一起去掉，否则是标题的一部分
+  let closing = end
+  while (closing > start && line.charCodeAt(closing - 1) === HASH) closing--
+  if (closing === start) return ''
+  if (closing < end && isBlankCode(line.charCodeAt(closing - 1))) {
+    end = closing
+    while (end > start && isBlankCode(line.charCodeAt(end - 1))) end--
+  }
+  return line.slice(start, end).trim()
 }
 
 interface Fence {
@@ -55,20 +90,25 @@ interface Fence {
   length: number
 }
 
+/** 围栏行的标记、长度和信息串；不是围栏行时返回 null。 */
+function fenceLine(line: string): (Fence & { info: string }) | null {
+  const match = FENCE_OPENING.exec(line)
+  const run = match?.[1]
+  if (match === null || run === undefined || LINE_TERMINATOR.test(line)) return null
+  return { marker: run.charAt(0), length: run.length, info: line.slice(match[0].length) }
+}
+
 /** 围栏的开始行；反引号围栏的信息串里不能再有反引号，否则这一行不是围栏。 */
 function openingFence(line: string): Fence | null {
-  const match = CODE_FENCE.exec(line)
-  if (match === null) return null
-  const [, run = '', info = ''] = match
-  if (run.startsWith('`') && info.includes('`')) return null
-  return { marker: run.charAt(0), length: run.length }
+  const fence = fenceLine(line)
+  if (fence === null || (fence.marker === '`' && fence.info.includes('`'))) return null
+  return { marker: fence.marker, length: fence.length }
 }
 
 function closesFence(line: string, fence: Fence): boolean {
-  const match = CODE_FENCE.exec(line)
-  if (match === null) return false
-  const [, run = '', info = ''] = match
-  return run.charAt(0) === fence.marker && run.length >= fence.length && info.trim() === ''
+  const candidate = fenceLine(line)
+  if (candidate === null) return false
+  return candidate.marker === fence.marker && candidate.length >= fence.length && candidate.info.trim() === ''
 }
 
 /** 第一个有文字的 ATX 标题行。代码块里的 `# 注释` 不算标题。 */
@@ -123,13 +163,13 @@ function stripMarkdownExtension(name: string): string {
 }
 
 /**
- * 列表里显示的标题：front matter 的 title 不为空时用它；否则从正文提取（不限长度）；正文也没有文字时用不带 `.md` 的文件名。
+ * 列表里显示的标题：front matter 的 title 不为空时用它；否则从正文提取（最多 200 个字符）；正文也没有文字时用不带 `.md` 的文件名。
  * fileName 可以带文件夹，只取最后一段。
  */
 export function displayTitle(title: string | null | undefined, bodyLF: string, fileName: string): string {
   const own = title?.trim() ?? ''
   if (own !== '') return own
-  return extractTitle(bodyLF, Infinity) ?? stripMarkdownExtension(baseName(fileName))
+  return extractTitle(bodyLF, DISPLAY_TITLE_MAX_CHARS) ?? stripMarkdownExtension(baseName(fileName))
 }
 
 // ───────────────────────────── 文件名与 id ─────────────────────────────
@@ -201,7 +241,21 @@ export function tagKey(tag: string): string {
 }
 
 const TAG_SEPARATORS = /[,，;；\s]+/
-const TAG_EDGES = /^[#＃,，;；]+|[#＃,，;；]+$/g
+
+/** 标签两端要去掉的字符（都是单个 UTF-16 码元，逐个比较不会切开代理对）。 */
+const TAG_EDGE_CHARS = new Set(['#', '＃', ',', '，', ';', '；'])
+
+/**
+ * 去掉两端的 TAG_EDGE_CHARS。用循环而不是 `/[#＃,，;；]+$/`：后者遇到一长串 `#` 后面跟别的字符时是平方级回溯，
+ * 小窗传来的标签会在 Host 主线程上卡住（审查 SEC-02）。
+ */
+function trimTagEdges(tag: string): string {
+  let start = 0
+  let end = tag.length
+  while (start < end && TAG_EDGE_CHARS.has(tag.charAt(start))) start++
+  while (end > start && TAG_EDGE_CHARS.has(tag.charAt(end - 1))) end--
+  return tag.slice(start, end)
+}
 
 /**
  * 整理标签（L-09）：按中英文逗号、分号、换行和空白切分，去掉每个标签首尾空白和两端的 `#`、`,`、`;`（含全角），
@@ -212,7 +266,7 @@ export function normalizeTags(input: string | readonly string[]): string[] {
   const seen = new Set<string>()
   const tags: string[] = []
   for (const piece of parts.flatMap(part => part.split(TAG_SEPARATORS))) {
-    const tag = piece.trim().replace(TAG_EDGES, '').trim()
+    const tag = trimTagEdges(piece.trim()).trim()
     if (tag === '') continue
     const key = tagKey(tag)
     if (seen.has(key)) continue
