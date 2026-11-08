@@ -475,7 +475,10 @@ describe('trash record problems (design-spec 7.3, S02)', () => {
       '_trash/long.md': '# x\n',
       '_trash/fine.md': '# x\n',
     })
-    const entries = new Map((await makeService(root).trashList('')).entries.map(entry => [entry.file, entry.originalPath]))
+    // 固定按 linux 读：Windows 上的上限是 32,767，CI 的 Windows 任务按本机平台读会把这个路径当成合格的。
+    // Windows 的上限由上一条测试按 win32 检查
+    const service = makeService(root, {}, { platform: 'linux' })
+    const entries = new Map((await service.trashList('')).entries.map(entry => [entry.file, entry.originalPath]))
     expect(entries.get('long.md')).toBeNull()
     expect(entries.get('fine.md')).toBe('ok/fine.md')
   })
