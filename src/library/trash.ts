@@ -1,13 +1,13 @@
 // 回收站记录（需求 L-11、6.4，design-spec 7.3，审查意见 S02、S05）：`_trash/.promptx-trash.json`。
 // 记录随库目录一起移动，换机器或改库目录后仍能按原位置恢复。记录来自库目录里的文件，可能被同步工具、
 // 共享仓库或手工改过，读出来的每一项都重新校验，不合格或重复的项按「原位置未知」处理。
-// 读改写由调用方在库的修改队列里、持 withFileLock 跨进程锁完成，这里只管格式。
+// 读改写由调用方在库的修改队列里、持 withFileLock 跨进程锁完成，这里只管格式和锁的位置。
 
 import type { Stats } from 'node:fs'
 import { lstat, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { formatIsoUtc } from '../shared/library-rules.ts'
-import { errnoCode, moveNoClobber, nameKey, readRegularFile, replaceFile } from './fs-safe.ts'
+import { errnoCode, moveNoClobber, nameKey, readRegularFile, replaceFile, sha256Hex } from './fs-safe.ts'
 import type { FileRead, FsOptions } from './fs-safe.ts'
 import { isTrashFileName, promptRelPath } from './rel-path.ts'
 
@@ -25,6 +25,17 @@ export const MAX_RECORD_BYTES = 4 * 1024 * 1024
  * 超长的值在任何校验之前就丢掉，校验的代价不随攻击者写进记录的长度增长（审查 SEC-02）。
  */
 export const MAX_RECORD_PATH_CHARS = 1024
+
+/**
+ * 回收站记录锁的目标路径（withFileLock 会再加上 `.lock`）：`<lockDir>/trash-<回收站目录 realpath 的 SHA-256 前 16 位>`。
+ * 锁不放进库里（审查 SEC-03）：库目录可能来自共享仓库或同步工具，预先放好的 `_trash/.promptx-trash.json.lock`
+ * （写着一个存活的 pid，或者是指向命名管道的符号链接）会让每次删除、恢复等满 10 秒后失败，或者永远卡在读锁文件上，
+ * 连带同一个库后面排队的保存全部卡住。需求 6.3 也只允许插件在库里创建 Prompt 文件、文件夹、`_trash/` 和回收站记录。
+ * 用 realpath 命名：不同 profile 用不同写法（大小写、符号链接）配置同一个库时，拿到的是同一把锁。
+ */
+export function recordLockTarget(lockDir: string, trashDirReal: string): string {
+  return join(lockDir, `trash-${sha256Hex(Buffer.from(trashDirReal, 'utf8')).slice(0, 16)}`)
+}
 
 export interface TrashItem {
   /** `_trash/` 下的文件名。 */

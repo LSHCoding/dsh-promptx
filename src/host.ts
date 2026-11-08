@@ -147,6 +147,7 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
         }
       })
     },
+    lockDir: join(paths.root, 'locks'),
   })
   const draft = createDraftService({ facility: ctx.storageDomain, profile })
   // supervisor 在下面才创建；这些闭包只在它创建之后才会被调用。

@@ -47,6 +47,13 @@ export interface LibraryServiceOptions {
   checkRoot?: (root: string) => Promise<ErrorInfo | null>
   /** 扫描时要跳过的目录（realpath）：dsh 数据目录、已知技能目录、`<dsh>/promptx`。 */
   skipRealpaths?: () => readonly string[]
+  /**
+   * 跨进程锁所在的目录，Host 传 `<dsh>/promptx/locks`（用到时才建）。同一个 DSH_HOME 下的所有 profile 共用，
+   * 协调范围和实例锁、全局快捷键锁相同。回收站记录锁是其中的 `trash-<回收站目录 realpath 的哈希>.lock`，
+   * 不放进库目录：库里的东西可能来自共享仓库或同步工具，预先放好的锁文件能让删除、恢复和之后的保存全部卡住（审查 SEC-03）。
+   * 已知限制：不同 DSH_HOME 的 dsh 共用同一个库时，彼此的回收站记录读改写不互相协调。
+   */
+  lockDir: string
 }
 
 export interface LibraryApi {
