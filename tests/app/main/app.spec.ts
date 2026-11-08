@@ -262,6 +262,26 @@ describe('configuration and appearance (S-03)', () => {
     expect([...platform.shortcuts.registered.keys()]).toEqual(['Control+P'])
   })
 
+  it('reports status only after boot, with the resolved locale, and again whenever the locale changes (F5)', async () => {
+    const harness = start({ platform: { languages: ['zh-Hans-CN'] } })
+    await until(() => harness.app.mode !== null, 2000, 'hello reply')
+    await sleep(20)
+    // 握手完成了，但 app ready 之前还没有托盘和快捷键，系统语言也不保证读得到：不报。
+    expect(statuses(harness.host)).toEqual([])
+    harness.platform.ready()
+    await until(() => statuses(harness.host).length > 0, 2000, 'first status')
+    expect(harness.host.lastStatus()).toMatchObject({ locale: 'zh' })
+    // dsh 的语言设置改了。
+    harness.host.peer.notify('config', { ...BASE_CONFIG, locale: 'en' })
+    await until(() => (harness.host.lastStatus() as CompanionStatus).locale === 'en', 2000, 'en status')
+    // 跟随系统时，系统语言改了，下一次呼出时核对出来，也要报。
+    harness.host.peer.notify('config', { ...BASE_CONFIG, locale: null })
+    await until(() => (harness.host.lastStatus() as CompanionStatus).locale === 'zh', 2000, 'zh status')
+    harness.platform.languages = ['en-GB']
+    harness.platform.shortcuts.press('Control+P')
+    await until(() => (harness.host.lastStatus() as CompanionStatus).locale === 'en', 2000, 'system language status')
+  })
+
   it('rebuilds the tray menu in the new language', async () => {
     const { platform, host } = await boot({ hello: { config: { ...BASE_CONFIG, locale: 'en' } } })
     await until(() => platform.tray?.statusLine().startsWith('● Running') === true, 2000, 'english tray')
@@ -615,6 +635,35 @@ describe('renderer crashes (S14, design-spec 5.4)', () => {
     await sleep(20)
     expect(platform.window.calls).not.toContain('reload')
     expect(platform.exitCode).toBeNull()
+  })
+
+  it('reports the crash in the status until the reloaded renderer is ready again (CR-03)', async () => {
+    const { platform, host, renderer } = await boot()
+    renderer.ready()
+    expect(host.lastStatus()).toMatchObject({ rendererError: null })
+    platform.window.rendererGone('crashed')
+    await until(() => (host.lastStatus() as CompanionStatus).rendererError !== null, 2000, 'renderer error status')
+    expect(host.lastStatus()).toMatchObject({ rendererError: { code: 'promptx/companion/renderer-gone', detail: 'crashed' } })
+    renderer.ready()
+    await until(() => (host.lastStatus() as CompanionStatus).rendererError === null, 2000, 'recovered status')
+    expect(platform.exitCode).toBeNull()
+  })
+
+  it('with hide-on-blur, a dialog that was open when the renderer crashed no longer blocks hiding after the reload (CR-02)', async () => {
+    const { platform, renderer } = await boot({ hello: { config: { ...BASE_CONFIG, hideOnBlur: true } } })
+    renderer.ready()
+    platform.shortcuts.press('Control+P')
+    renderer.send(IPC_CHANNELS.windowSetModalOpen, true)
+    // 对话框开着：失焦不隐藏（判断在 blur 之后约 100 ms）。
+    platform.window.blur()
+    await sleep(200)
+    expect(platform.window.visible).toBe(true)
+    // 界面带着对话框一起崩了，重新载入后不会再发 setModalOpen(false)。
+    platform.window.rendererGone('crashed')
+    renderer.ready()
+    platform.window.focus()
+    platform.window.blur()
+    await until(() => !platform.window.visible, 2000, 'hide on blur after the reload')
   })
 
   it('exits 3 when the window stays unresponsive', async () => {
