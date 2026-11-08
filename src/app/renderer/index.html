@@ -2,10 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <!-- 只允许包内的本地文件（技术方案 5.4、9）。CodeMirror 用内联 style 元素注入自己的基础样式，所以 style-src 带 'unsafe-inline'。 -->
+    <!--
+      只允许包内的本地文件（技术方案 5.4、9）。CodeMirror 用内联 style 元素注入自己的基础样式，所以 style-src 带 'unsafe-inline'。
+      base-uri、form-action 不归 default-src 管，单独关掉（审查加固建议）。script-src 不改成 'self'：file:// 页面的 'self'
+      在 Chromium 里同样匹配本地文件，收紧不了什么，反而可能让脚本加载不了。
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src file:; style-src file: 'unsafe-inline'; img-src file: data:; font-src file:"
+      content="default-src 'none'; script-src file:; style-src file: 'unsafe-inline'; img-src file: data:; font-src file:; base-uri 'none'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PromptX</title>
