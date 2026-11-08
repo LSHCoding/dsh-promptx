@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { Locale } from '../../../src/app/main/appearance.ts'
 import { ShortcutLocks, shortcutLockPath, type LockResult, type LostLock } from '../../../src/app/main/shortcut-lock.ts'
-import { ShortcutManager, type ShortcutLockStore } from '../../../src/app/main/shortcut-manager.ts'
+import { ShortcutManager, TRIGGER_GUARD_MS, type ShortcutLockStore } from '../../../src/app/main/shortcut-manager.ts'
 import type { ShortcutStatus } from '../../../src/shared/types.ts'
 import { MemoryLogger, trapProcessErrors, useTempDir } from './helpers.ts'
 
@@ -443,6 +443,22 @@ describe('ShortcutManager: triggering', () => {
     expect(triggers.count).toBe(1)
     clock.now += 200
     backend.press('Control+P')
+    expect(triggers.count).toBe(2)
+  })
+
+  it('counts a held-down shortcut that auto-repeats as one press (CR-08)', () => {
+    const { manager, backend, triggers, clock } = setup({ platform: 'win32' })
+    manager.apply('Control+Alt+P')
+    backend.press('Control+Alt+P')
+    // Windows 的 RegisterHotKey：按住 1 秒，系统按键盘自动重复的节奏约每 33 ms 回调一次。
+    for (let held = 33; held <= 1000; held += 33) {
+      clock.now += 33
+      backend.press('Control+Alt+P')
+    }
+    expect(triggers.count).toBe(1)
+    // 松开后再按（和最后一次重复隔开至少 150 ms）才是下一次。
+    clock.now += TRIGGER_GUARD_MS
+    backend.press('Control+Alt+P')
     expect(triggers.count).toBe(2)
   })
 

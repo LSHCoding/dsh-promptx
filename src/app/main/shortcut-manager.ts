@@ -67,10 +67,10 @@ type Attempt = { ok: true; active: Active } | { ok: false; error: ErrorInfo }
 const HELD_BY_PROFILE = 'promptx/shortcut/held-by-profile'
 
 /**
- * Windows 的 RegisterHotKey 按住不放时会连续触发；两次触发间隔太短就当成同一次，
- * 否则按住快捷键时小窗会反复显示、隐藏。
+ * Windows 的 RegisterHotKey（Linux 上也可能）按住不放时会按键盘自动重复的节奏连续回调；和上一次回调间隔太短的
+ * 都算同一次按下，否则按住快捷键时小窗会反复显示、隐藏。
  */
-const TRIGGER_GUARD_MS = 150
+export const TRIGGER_GUARD_MS = 150
 
 export class ShortcutManager {
   readonly #platform: string
@@ -94,7 +94,8 @@ export class ShortcutManager {
   /** 每次 apply 加一；异步的系统快捷键检查回来时代号变了就丢弃结果。 */
   #generation = 0
   #pending: Promise<void> = Promise.resolve()
-  #lastTrigger = Number.NEGATIVE_INFINITY
+  /** 上一次快捷键回调的时间，被当成自动重复吞掉的那些也算。 */
+  #lastCallback = Number.NEGATIVE_INFINITY
   #disposed = false
 
   constructor(options: ShortcutManagerOptions) {
@@ -309,8 +310,11 @@ export class ShortcutManager {
 
   #trigger(): void {
     const now = this.#now()
-    if (now - this.#lastTrigger < TRIGGER_GUARD_MS) return
-    this.#lastTrigger = now
+    const previous = this.#lastCallback
+    // 每次回调都记下时间，被吞掉的也算（审查 CR-08）。只记真正触发的那次的话，按住不放时自动重复每 33 ms 左右回调一次，
+    // 离上次触发一满 150 ms 就又放过一次，小窗照样每 150 ms 切换一回；和上一次回调比，一串连续的重复只算一次按下。
+    this.#lastCallback = now
+    if (now - previous < TRIGGER_GUARD_MS) return
     try {
       this.#onTrigger()
     } catch (error) {
