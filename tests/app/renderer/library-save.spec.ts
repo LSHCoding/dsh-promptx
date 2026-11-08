@@ -359,6 +359,78 @@ describe('两次 ⌘S 合并（技术方案 5.5，审查 S05）', () => {
     expect(controller.store.getState().draft.librarySaving).toBe(false)
   })
 
+  // 外部审查第二轮复核：合并的那次等在途的保存回来才发，读的是那时的编辑区和绑定；中途换了内容来源就不能再发，
+  // 否则会把刚打开、没改过的文件重写一遍（补 updated），或者把草稿建进刚换的库里。
+
+  function heldSaves(bridge: FakeBridge): Array<Deferred<BridgeResult<SaveResult>>> {
+    const results: Array<Deferred<BridgeResult<SaveResult>>> = []
+    bridge.handle('library.save', () => {
+      const result = deferred<BridgeResult<SaveResult>>()
+      results.push(result)
+      return result.promise
+    })
+    bridge.handle('library.read', () => ok(readResult(entry('写作/模板.md', { title: '模板' }), '模板正文', 'tpl-v1')))
+    return results
+  }
+
+  it('合并的那次排队期间打开了别的条目：不再发，返回 cancelled', async () => {
+    const bridge = boundBridge()
+    const results = heldSaves(bridge)
+    const controller = await start(bridge)
+    const first = controller.save()
+    const second = controller.save()
+    await settle()
+    // 编辑区和绑定的正文一致，没有未保存的内容，打开不弹确认
+    await controller.library.openEntry('写作/模板.md')
+    expect(controller.store.getState().draft.binding?.relPath).toBe('写作/模板.md')
+    results[0]?.resolve(ok({ kind: 'saved', binding: binding('代码审查.md', '库里的正文', { sha256: 'v1' }), entry: entry('代码审查.md'), created: false }))
+    expect(await first).toBe('saved')
+    expect(await second).toBe('cancelled')
+    expect(bridge.callsTo('library.save')).toHaveLength(1)
+    expect(controller.store.getState().draft.binding?.relPath).toBe('写作/模板.md')
+  })
+
+  it('打开别的条目之后再按 ⌘S：另排一次，存的是新打开的条目', async () => {
+    const bridge = boundBridge()
+    const results = heldSaves(bridge)
+    const controller = await start(bridge)
+    const first = controller.save()
+    const stale = controller.save()
+    await settle()
+    await controller.library.openEntry('写作/模板.md')
+    const fresh = controller.save()
+    results[0]?.resolve(ok({ kind: 'saved', binding: binding('代码审查.md', '库里的正文', { sha256: 'v1' }), entry: entry('代码审查.md'), created: false }))
+    expect(await first).toBe('saved')
+    expect(await stale).toBe('cancelled')
+    await settle()
+    expect(bridge.callsTo('library.save')).toHaveLength(2)
+    expect(bridge.callsTo('library.save')[1]).toMatchObject({ text: '模板正文', binding: { relPath: '写作/模板.md', sha256: 'tpl-v1' } })
+    results[1]?.resolve(ok({ kind: 'saved', binding: binding('写作/模板.md', '模板正文', { sha256: 'tpl-v2' }), entry: entry('写作/模板.md'), created: false }))
+    expect(await fresh).toBe('saved')
+    expect(controller.store.getState().draft.binding?.sha256).toBe('tpl-v2')
+  })
+
+  it('新建在途时「在编辑器中打开」选了「保存」，随后换了库：合并的那次不再发，不读取，提示库目录已更换', async () => {
+    const bridge = new FakeBridge()
+    const results = heldSaves(bridge)
+    const controller = await start(bridge)
+    type(controller, '草稿')
+    const first = controller.save()
+    const opening = controller.library.openEntry('写作/模板.md')
+    await settle()
+    chooseDialog(controller, 'save')
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    results[0]?.resolve(created('草稿.md', '草稿'))
+    expect(await first).toBe('saved')
+    await opening
+    expect(bridge.callsTo('library.save')).toHaveLength(1)
+    expect(bridge.callsTo('library.read')).toEqual([])
+    expect(controller.store.getState().draft.binding).toBeNull()
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
   it('第一次没有存成（冲突后取消）：合并的那次也不再发', async () => {
     const bridge = boundBridge()
     bridge.handle('library.save', () => ok({ kind: 'conflict', conflict: 'modified' }))

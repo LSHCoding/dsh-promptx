@@ -30,7 +30,8 @@ export function bindingFromRead(libraryDir: string, read: LibraryReadResult): Bi
 
 export class LibrarySave {
   private current: Promise<SaveOutcome> | null = null
-  private followUp: Promise<SaveOutcome> | null = null
+  /** 在途时再按 ⌘S 合并成的那一次，记下按下时的草稿代次（见 save）。 */
+  private followUp: { promise: Promise<SaveOutcome>; generation: number } | null = null
   /** 结果未知的新建请求：同一代绑定下重试时沿用它的 requestId。 */
   private pendingCreate: { requestId: string; generation: number } | null = null
 
@@ -45,14 +46,20 @@ export class LibrarySave {
 
   /** ⌘S 或工具栏「保存」。返回这次（或合并后的那次）保存的结果，供「在编辑器中打开」的「保存」判断要不要继续载入。 */
   save(): Promise<SaveOutcome> {
-    if (this.current !== null) {
-      this.followUp ??= this.current.then((outcome) => {
-        this.followUp = null
-        return outcome === 'saved' ? this.start('normal') : outcome
+    if (this.current === null) return this.start('normal')
+    // 合并的那一次等在途的保存回来才发，到时读的是那时的编辑区和绑定。只对按下保存时的内容来源有效：
+    // 这期间打开了别的条目、清空、重新载入或换了库（都会换代），就不再发，否则会把刚打开、没改过的文件
+    // 重写一遍（补 updated、id，红线 2），或者把草稿建进刚换的库里（外部审查第二轮复核）。换代后再按 ⌘S 另排一次。
+    const generation = this.draft.generation
+    if (this.followUp?.generation !== generation) {
+      const promise: Promise<SaveOutcome> = this.current.then((outcome) => {
+        if (this.followUp?.promise === promise) this.followUp = null
+        if (outcome !== 'saved') return outcome
+        return this.draft.generation === generation ? this.start('normal') : 'cancelled'
       })
-      return this.followUp
+      this.followUp = { promise, generation }
     }
-    return this.start('normal')
+    return this.followUp.promise
   }
 
   /** 有保存在途（含冲突对话框还没选完）。 */
