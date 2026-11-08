@@ -1,5 +1,6 @@
 // 库内相对路径的校验（design-spec 6.1、7.3，审查意见 S02）。来自小程序的路径和回收站记录里读出的路径都经过这里：
 // 先按 normalizeRelPath 规范化（不能是绝对路径，不能含 `..`、以 `.` 开头的段和空段），再按用途加上限制。
+// 反斜杠只在 Windows 上当分隔符，其他平台上含反斜杠的路径直接拒绝（审查 H6）。
 
 import { isMarkdownFileName, normalizeRelPath, splitRelPath } from '../shared/library-rules.ts'
 import { isWindowsDeviceName, nameKey } from './fs-safe.ts'
@@ -25,11 +26,20 @@ function segmentsSafe(relPath: string, platform: NodeJS.Platform): boolean {
 }
 
 /**
+ * 反斜杠只在 Windows 上是路径分隔符。macOS、Linux 上 `x\y.md` 是库根目录下一个名字里带反斜杠的文件，
+ * 如果照 normalizeRelPath 换成 `x/y.md`，对它的收藏、删除就会落到另一个文件 `x/y.md` 上（审查 H6，红线 2）。
+ * 所以这两个平台上含反斜杠的路径一律拒绝，扫描也不列出这类名字（scan.ts）。
+ */
+function hasForeignSeparator(input: string, platform: NodeJS.Platform): boolean {
+  return platform !== 'win32' && input.includes('\\')
+}
+
+/**
  * 库里一个 Prompt 文件的相对路径：规范化后以 `.md` 结尾（不区分大小写），不在回收站里。不合格返回 null。
  * 参数是 unknown：协议传来的值在运行时不一定是字符串。
  */
 export function promptRelPath(input: unknown, platform: NodeJS.Platform = process.platform): string | null {
-  if (typeof input !== 'string') return null
+  if (typeof input !== 'string' || hasForeignSeparator(input, platform)) return null
   const relPath = normalizeRelPath(input)
   if (relPath === null || !segmentsSafe(relPath, platform)) return null
   if (!isMarkdownFileName(splitRelPath(relPath).name)) return null
@@ -40,7 +50,7 @@ export function promptRelPath(input: unknown, platform: NodeJS.Platform = proces
 /** 库里一个文件夹的相对路径；null 和空串表示库根目录（返回空串）。不合格返回 null。 */
 export function folderRelPath(input: unknown, platform: NodeJS.Platform = process.platform): string | null {
   if (input === null || input === '') return ''
-  if (typeof input !== 'string') return null
+  if (typeof input !== 'string' || hasForeignSeparator(input, platform)) return null
   const folder = normalizeRelPath(input)
   if (folder === null || !segmentsSafe(folder, platform)) return null
   if (isTrashName(folder.split('/', 1)[0] ?? '', platform)) return null

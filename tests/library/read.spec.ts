@@ -28,10 +28,10 @@ describe('library.read (L-05, L-07)', () => {
     expect(result.entry).toMatchObject({ relPath: '写作/a.md', folder: '写作', title: '标题', id: 'prompt_20261107_120000_1a2b3c4d', status: 'ok' })
   })
 
-  it('accepts backslashes from Windows paths and returns the full text of files with broken front matter', async () => {
+  it('accepts backslashes from Windows paths on Windows and returns the full text of files with broken front matter', async () => {
     const root = await temp.make()
     await writeTree(root, { 'a/b.md': '---\ntitle: never closed\n# Heading\n' })
-    const result = await makeService(root).read('a\\b.md')
+    const result = await makeService(root, {}, { platform: 'win32' }).read('a\\b.md')
     expect(result.entry.status).toBe('invalid-meta')
     expect(result.body).toBe('---\ntitle: never closed\n# Heading\n')
   })

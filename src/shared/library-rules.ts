@@ -283,6 +283,8 @@ export function normalizeTags(input: string | readonly string[]): string[] {
  * 规范化来自小窗或 Agent 的库内相对路径（技术方案 6.1）：反斜杠换成正斜杠；
  * 拒绝绝对路径（`/` 开头、`C:` 这样的盘符）、空段、`.` 和 `..`、以 `.` 开头的段、含 NUL 的路径。
  * 合法时返回用 `/` 连接的路径，否则返回 null。
+ * 反斜杠只在 Windows 上是分隔符；macOS、Linux 上它是文件名里的普通字符，Host 的校验（library/rel-path.ts）
+ * 在调用这里之前就拒绝含反斜杠的路径（审查 H6）。
  */
 export function normalizeRelPath(input: string): string | null {
   const path = input.replaceAll('\\', '/')
