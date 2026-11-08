@@ -55,6 +55,7 @@ export const en: Record<keyof typeof zh, string> = {
   'toast.reloaded': 'Loaded the version on disk.',
   'toast.editedWhileLoading': 'The editor changed while loading, so its content wasn\'t replaced.',
   'toast.unsavedNotOpened': 'The editor still has changes that weren\'t saved to the file, so the prompt wasn\'t opened.',
+  'toast.libraryChanged': 'The library folder changed, so the action was cancelled.',
   'toast.editing': 'Editing library prompt: {title}',
   'toast.inserted': 'Inserted: {title}',
   'toast.nothingToInsert': '"{title}" has no content to insert.',

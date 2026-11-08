@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { undo } from '@codemirror/commands'
 import { DEFAULT_PREFS, type BridgeResult } from '../../../src/shared/bridge.ts'
-import type { LibraryListResult, LibraryReadResult, MetaResult, SaveResult } from '../../../src/shared/types.ts'
+import type {
+  LibraryListResult,
+  LibraryReadResult,
+  MetaResult,
+  RestoreResult,
+  SaveResult,
+  TrashEntry,
+  TrashListResult,
+} from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import {
   binding,
@@ -719,5 +727,424 @@ describe('库目录变了（library.changed）', () => {
     expect(controller.store.getState().library.selected).toBeNull()
     expect(bridge.callsTo('library.list').length).toBe(lists + 1)
     expect(bridge.callsTo('library.list').at(-1)?.refresh).toBe(true)
+  })
+
+  // 外部审查第 2 条：请求只带相对路径，插件按新的库目录解释，确认框开着时换了库，确认就会作用到另一个库里同路径的文件。
+
+  function switchLibrary(bridge: FakeBridge): Promise<void> {
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    return settle()
+  }
+
+  it('删除确认框开着时换了库目录：确认后不发删除请求，提示操作已取消', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('library.delete', () => ok({ trashFile: '代码审查.md' }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    const removing = controller.library.remove(REVIEW.relPath)
+    await settle()
+    await switchLibrary(bridge)
+    chooseDialog(controller, 'delete')
+    await removing
+    expect(bridge.callsTo('library.delete')).toEqual([])
+    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '库目录已更换，操作已取消。' })
+  })
+
+  it('换了库目录后点「取消」：照常什么都不做，也不提示', async () => {
+    const bridge = libraryBridge()
+    const controller = await start(bridge)
+    const removing = controller.library.remove(REVIEW.relPath)
+    await settle()
+    await switchLibrary(bridge)
+    chooseDialog(controller, 'cancel')
+    await removing
+    expect(bridge.callsTo('library.delete')).toEqual([])
+    expect(controller.store.getState().toast).toBeNull()
+  })
+
+  it('重命名对话框开着时换了库目录：保存后不发请求', async () => {
+    const bridge = libraryBridge()
+    const controller = await start(bridge)
+    await controller.library.open()
+    const renaming = controller.library.rename(REVIEW.relPath)
+    await settle()
+    await switchLibrary(bridge)
+    controller.resolveDialog(openDialog(controller).id, { button: 'save', form: { title: '新标题', tags: '' } })
+    await renaming
+    expect(bridge.callsTo('library.updateMeta')).toEqual([])
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('补 front matter 的确认框开着时换了库目录：确认后不带 addFrontMatter 重发', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('library.updateMeta', () => ok({ kind: 'conflict', conflict: 'noFrontMatter' }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    const favoriting = controller.library.toggleFavorite(REVIEW.relPath)
+    await settle()
+    await switchLibrary(bridge)
+    chooseDialog(controller, 'addFrontMatter')
+    await favoriting
+    expect(bridge.callsTo('library.updateMeta').map(params => params.addFrontMatter)).toEqual([false])
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('恢复时原位置被占用、确认框开着时换了库目录：确认后不恢复到替代路径', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [] }))
+    bridge.handle('trash.restore', () => ok({ kind: 'occupied', alternative: '写作/旧版-2.md' }))
+    const controller = await start(bridge)
+    const restoring = controller.library.restore('旧版.md')
+    await settle()
+    await switchLibrary(bridge)
+    chooseDialog(controller, 'alternative')
+    await restoring
+    expect(bridge.callsTo('trash.restore')).toHaveLength(1)
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('回收站文件改过、确认框开着时换了库目录：确认后不恢复', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [] }))
+    bridge.handle('trash.restore', () => ok({ kind: 'modified' }))
+    const controller = await start(bridge)
+    const restoring = controller.library.restore('a.md')
+    await settle()
+    await switchLibrary(bridge)
+    chooseDialog(controller, 'restore')
+    await restoring
+    expect(bridge.callsTo('trash.restore')).toHaveLength(1)
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('「在编辑器中打开」的未保存确认框开着时换了库目录：选「保存」也不保存、不读取', async () => {
+    const bridge = libraryBridge()
+    const controller = await start(bridge)
+    type(controller, '草稿')
+    const opening = controller.library.openEntry(REVIEW.relPath)
+    await settle()
+    await switchLibrary(bridge)
+    chooseDialog(controller, 'save')
+    await opening
+    expect(bridge.callsTo('library.save')).toEqual([])
+    expect(bridge.callsTo('library.read')).toEqual([])
+    expect(controller.editor.getText()).toBe('草稿')
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('「在编辑器中打开」读取期间换了库目录：读回后不载入，草稿和绑定不变', async () => {
+    const bridge = libraryBridge()
+    const read: Deferred<BridgeResult<LibraryReadResult>> = deferred()
+    bridge.handle('library.read', () => read.promise)
+    const controller = await start(bridge)
+    const opening = controller.library.openEntry(REVIEW.relPath)
+    await settle()
+    await switchLibrary(bridge)
+    read.resolve(ok(readResult(REVIEW, '检查边界条件。')))
+    await opening
+    expect(controller.editor.getText()).toBe('')
+    expect(controller.store.getState().draft.binding).toBeNull()
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('库目录没换过：删除、恢复照常进行（代次只在 library.changed 时变）', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('library.delete', () => ok({ trashFile: '代码审查.md' }))
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [] }))
+    bridge.handle('trash.restore', params => (params.target === 'alternative'
+      ? ok({ kind: 'restored', relPath: params.alternative ?? '' })
+      : ok({ kind: 'occupied', alternative: '写作/旧版-2.md' })))
+    const controller = await start(bridge)
+    // 上一次换库之后发起的操作不受那次换库影响
+    await switchLibrary(bridge)
+    const removing = controller.library.remove(REVIEW.relPath)
+    await settle()
+    chooseDialog(controller, 'delete')
+    await removing
+    expect(bridge.callsTo('library.delete')).toEqual([{ relPath: REVIEW.relPath }])
+    const restoring = controller.library.restore('旧版.md')
+    await settle()
+    chooseDialog(controller, 'alternative')
+    await restoring
+    expect(bridge.callsTo('trash.restore')).toHaveLength(2)
+    expect(toastText(controller)).toBe('已恢复到：写作/旧版-2.md')
+  })
+
+  // 审查复核 c0、c2、c7、c8：只在确认后核对代次还不够。换库后旧库的行要是还在，从旧行发起的操作记下的已经是新代次，
+  // 照样落到新库里同路径的文件上；新库第一次列出是全量扫描，慢盘上这段时间可以有几秒。
+
+  it('换库时旧库的列表、回收站列表、选中和菜单当场清掉；新库列表回来之前，旧路径上的操作什么都不发', async () => {
+    const bridge = libraryBridge()
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.select(REVIEW.relPath)
+    controller.openMenu(`entry:${REVIEW.relPath}`, { left: 0, top: 0, right: 10, bottom: 10 })
+    const list: Deferred<BridgeResult<LibraryListResult>> = deferred()
+    bridge.handle('library.list', () => list.promise)
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    const state = controller.store.getState()
+    expect(state.library.list).toBeNull()
+    expect(state.library.trash).toBeNull()
+    expect(state.library.selected).toBeNull()
+    expect(state.menu).toBeNull()
+    await controller.library.toggleFavorite(WRITING.relPath)
+    await controller.library.rename(REVIEW.relPath)
+    expect(controller.store.getState().dialog).toBeNull()
+    expect(bridge.callsTo('library.updateMeta')).toEqual([])
+    list.resolve(ok(listResult([entry('新库.md')])))
+    await settle()
+    expect(controller.store.getState().library.list?.entries.map(item => item.relPath)).toEqual(['新库.md'])
+  })
+
+  it('侧栏开着、新库列表还没回来时确认删除：不发请求（代次在收到 library.changed 的那一刻就加一）', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('library.delete', () => ok({ trashFile: '代码审查.md' }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    const removing = controller.library.remove(REVIEW.relPath)
+    await settle()
+    const list: Deferred<BridgeResult<LibraryListResult>> = deferred()
+    bridge.handle('library.list', () => list.promise)
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    chooseDialog(controller, 'delete')
+    await settle()
+    expect(bridge.callsTo('library.delete')).toEqual([])
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+    // 先断言、再放行列表：修复退化时删除成功后要刷新列表，等的正是这个挂起的请求，先 await 会一直等到超时
+    list.resolve(ok(listResult([])))
+    await removing
+  })
+
+  it('侧栏收起时，换库前发出的列表查询在换库后才回来：不把旧库的列表放回去', async () => {
+    const bridge = libraryBridge()
+    const controller = await start(bridge)
+    const old: Deferred<BridgeResult<LibraryListResult>> = deferred()
+    bridge.handle('library.list', () => old.promise)
+    const refreshing = controller.library.refresh(false)
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    old.resolve(ok(listResult([REVIEW, WRITING])))
+    await refreshing
+    expect(controller.store.getState().library.list).toBeNull()
+  })
+
+  it('回收站视图里换库：旧的回收站列表清掉，点旧文件不读取', async () => {
+    const bridge = libraryBridge()
+    const old = { file: '旧版.md', title: '旧版', deletedAt: 1, originalPath: '旧版.md' }
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [old] }))
+    bridge.handle('trash.read', () => ok({ entry: old, body: '# 旧' }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'trash' })
+    expect(controller.store.getState().library.trash?.entries).toHaveLength(1)
+    const trash: Deferred<BridgeResult<TrashListResult>> = deferred()
+    bridge.handle('trash.list', () => trash.promise)
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    expect(controller.store.getState().library.trash).toBeNull()
+    await controller.library.selectTrash('旧版.md')
+    expect(bridge.callsTo('trash.read')).toEqual([])
+    trash.resolve(ok({ recordState: 'ok', entries: [] }))
+    await settle()
+    expect(controller.store.getState().library.trash?.entries).toEqual([])
+  })
+
+  // 外部审查第二轮复核：换库时清掉的每一项都要有测试守着，晚到的旧结果不能放回来，也不能改新库的状态。
+
+  const OLD_TRASH: TrashEntry = { file: '旧版.md', title: '旧版', deletedAt: 1, originalPath: '旧版.md' }
+
+  it('回收站视图里换库：文件夹栏要用的列表一起读回来（侧栏开着、收起后再展开都一样）', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [] }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'trash' })
+    bridge.handle('library.list', () => ok(listResult([], { folders: ['B文件夹'] })))
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    expect(controller.store.getState().library.list?.folders).toEqual(['B文件夹'])
+    expect(bridge.callsTo('library.list').at(-1)?.refresh).toBe(true)
+    await controller.library.close()
+    bridge.handle('library.list', () => ok(listResult([], { folders: ['C文件夹'] })))
+    bridge.emit('library.changed', { libraryDir: '/library-C' })
+    await settle()
+    expect(controller.store.getState().library.list).toBeNull()
+    await controller.library.toggle()
+    expect(controller.store.getState().library.view).toBe('trash')
+    expect(controller.store.getState().library.list?.folders).toEqual(['C文件夹'])
+  })
+
+  it('回收站视图里搜索的查询还在途、侧栏收起后换库：查询晚到也不把旧库的回收站放回去', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [] }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'trash' })
+    const pending: Deferred<BridgeResult<TrashListResult>> = deferred()
+    bridge.handle('trash.list', () => pending.promise)
+    controller.library.setQuery('旧')
+    await vi.advanceTimersByTimeAsync(100)
+    await controller.library.close()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    pending.resolve(ok({ recordState: 'ok', entries: [OLD_TRASH] }))
+    await settle()
+    expect(controller.store.getState().library.trash).toBeNull()
+  })
+
+  it('预览的读取还在途时换库：读回来也不显示旧库的预览', async () => {
+    const bridge = libraryBridge()
+    const controller = await start(bridge)
+    await controller.library.open()
+    const read: Deferred<BridgeResult<LibraryReadResult>> = deferred()
+    bridge.handle('library.read', () => read.promise)
+    const selecting = controller.library.select(REVIEW.relPath)
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    read.resolve(ok(readResult(REVIEW, '旧库正文')))
+    await selecting
+    expect(controller.store.getState().library.preview).toBeNull()
+  })
+
+  it('回收站预览的读取还在途时换库：选中和预览清掉，旧的读取晚到、新库里有同名文件也不恢复', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [OLD_TRASH] }))
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'trash' })
+    const read: Deferred<BridgeResult<{ entry: TrashEntry; body: string }>> = deferred()
+    bridge.handle('trash.read', () => read.promise)
+    const selecting = controller.library.selectTrash(OLD_TRASH.file)
+    await settle()
+    expect(controller.store.getState().library.trashSelected).toBe(OLD_TRASH.file)
+    const list: Deferred<BridgeResult<TrashListResult>> = deferred()
+    bridge.handle('trash.list', () => list.promise)
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    expect(controller.store.getState().library.trashSelected).toBeNull()
+    expect(controller.store.getState().library.trashPreview).toBeNull()
+    read.resolve(ok({ entry: OLD_TRASH, body: '# 旧' }))
+    await selecting
+    expect(controller.store.getState().library.trashPreview).toBeNull()
+    list.resolve(ok({ recordState: 'ok', entries: [OLD_TRASH] }))
+    await settle()
+    expect(controller.store.getState().library.trashSelected).toBeNull()
+    expect(controller.store.getState().library.trashPreview).toBeNull()
+  })
+
+  it('换库时旧库列表和回收站的错误一起清掉', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('library.list', () => fail('promptx/library/unavailable', 'EACCES'))
+    bridge.handle('trash.list', () => fail('promptx/library/unavailable', 'EACCES'))
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'trash' })
+    expect(controller.store.getState().library.listError).not.toBeNull()
+    expect(controller.store.getState().library.trashError).not.toBeNull()
+    await controller.library.close()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    expect(controller.store.getState().library.listError).toBeNull()
+    expect(controller.store.getState().library.trashError).toBeNull()
+  })
+
+  it('删除的结果在换库之后才回来：新库里同路径、刚打开的条目，绑定和选中都不动；删除确实做了，照常提示', async () => {
+    const bridge = libraryBridge()
+    const deleting: Deferred<BridgeResult<{ trashFile: string }>> = deferred()
+    bridge.handle('library.delete', () => deleting.promise)
+    const controller = await start(bridge)
+    bridge.emit('config', config({ confirmDelete: false }))
+    await controller.library.open()
+    const removing = controller.library.remove(REVIEW.relPath)
+    await settle()
+    expect(bridge.callsTo('library.delete')).toHaveLength(1)
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    await controller.library.select(REVIEW.relPath)
+    await controller.library.openEntry(REVIEW.relPath)
+    expect(controller.store.getState().draft.binding?.relPath).toBe(REVIEW.relPath)
+    deleting.resolve(ok({ trashFile: '代码审查.md' }))
+    await removing
+    expect(controller.store.getState().draft.binding?.relPath).toBe(REVIEW.relPath)
+    expect(controller.store.getState().library.selected).toBe(REVIEW.relPath)
+    expect(toastText(controller)).toBe('Prompt 已移入回收站。')
+  })
+
+  it('改元数据的冲突在换库之后才回来：不再弹补 front matter 的确认，按已取消处理', async () => {
+    const bridge = libraryBridge()
+    const pending: Deferred<BridgeResult<MetaResult>> = deferred()
+    bridge.handle('library.updateMeta', () => pending.promise)
+    const controller = await start(bridge)
+    await controller.library.open()
+    const favoriting = controller.library.toggleFavorite(REVIEW.relPath)
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    pending.resolve(ok({ kind: 'conflict', conflict: 'noFrontMatter' }))
+    await favoriting
+    expect(controller.store.getState().dialog).toBeNull()
+    expect(bridge.callsTo('library.updateMeta')).toHaveLength(1)
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+  })
+
+  it('改元数据成功的结果在换库之后才回来：不拿旧库文件的新版本去改新库里同路径条目的绑定', async () => {
+    const bridge = libraryBridge()
+    const pending: Deferred<BridgeResult<MetaResult>> = deferred()
+    bridge.handle('library.updateMeta', () => pending.promise)
+    const controller = await start(bridge)
+    await controller.library.open()
+    const favoriting = controller.library.toggleFavorite(REVIEW.relPath)
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    // 新库里同路径的文件和旧库的一模一样（摘要相同），刚被打开
+    await controller.library.openEntry(REVIEW.relPath)
+    const bound = controller.store.getState().draft.binding
+    expect(bound?.sha256).toBe(`sha-${REVIEW.relPath}`)
+    pending.resolve(ok({
+      kind: 'saved',
+      entry: { ...REVIEW, favorite: true },
+      before: { sha256: `sha-${REVIEW.relPath}`, size: bound?.size ?? 0 },
+      after: { sha256: 'old-library-after', size: 99 },
+    }))
+    await favoriting
+    expect(controller.store.getState().draft.binding?.sha256).toBe(`sha-${REVIEW.relPath}`)
+    expect(toastText(controller)).toBe('已收藏。')
+  })
+
+  it('恢复的结果在换库之后才回来：占用不再弹确认；恢复成功照常提示，新库回收站里同名文件的选中不动', async () => {
+    const bridge = libraryBridge()
+    bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [OLD_TRASH] }))
+    bridge.handle('trash.read', () => ok({ entry: OLD_TRASH, body: '# 旧' }))
+    let pending: Deferred<BridgeResult<RestoreResult>> = deferred()
+    bridge.handle('trash.restore', () => pending.promise)
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'trash' })
+    const occupied = controller.library.restore(OLD_TRASH.file)
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    pending.resolve(ok({ kind: 'occupied', alternative: '旧版-2.md' }))
+    await occupied
+    expect(controller.store.getState().dialog).toBeNull()
+    expect(bridge.callsTo('trash.restore')).toHaveLength(1)
+    expect(toastText(controller)).toBe('库目录已更换，操作已取消。')
+
+    pending = deferred()
+    const restored = controller.library.restore(OLD_TRASH.file)
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-C' })
+    await settle()
+    await controller.library.selectTrash(OLD_TRASH.file)
+    expect(controller.store.getState().library.trashSelected).toBe(OLD_TRASH.file)
+    pending.resolve(ok({ kind: 'restored', relPath: '旧版.md' }))
+    await restored
+    expect(controller.store.getState().library.trashSelected).toBe(OLD_TRASH.file)
+    expect(toastText(controller)).toBe('已恢复到：旧版.md')
   })
 })

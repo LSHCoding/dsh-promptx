@@ -28,6 +28,12 @@ export class Library {
   private trashPreviewToken = 0
   private insertToken = 0
   private openToken = 0
+  /**
+   * 库目录的代次：插件推来 library.changed 时加一。删除、改元数据、恢复、打开这些操作的请求只带相对路径，
+   * 插件按请求到达时的库目录解释它；用户确认之前库目录换了，同一个相对路径指的就是另一个库里的文件。
+   * 所以这些操作开始时记下代次，确认之后核对，变了就停下（外部审查第 2 条）。
+   */
+  private libraryGeneration = 0
   private searchTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -81,7 +87,11 @@ export class Library {
 
   /** 列表或回收站，按当前视图刷新并重读磁盘。 */
   reload(): Promise<void> {
-    return this.state.view === 'trash' ? this.refreshTrash() : this.refresh(true)
+    if (this.state.view !== 'trash') return this.refresh(true)
+    // 回收站视图里文件夹栏同样列出库里的真实文件夹（需求 5.5）。换库时列表清空了，这里一起读，
+    // 否则要等用户先点「全部」才看得到新库的文件夹（外部审查第二轮复核）
+    if (this.state.list !== null) return this.refreshTrash()
+    return Promise.all([this.refreshTrash(), this.refresh(true)]).then(() => undefined)
   }
 
   // ───────────────────────────── 筛选与搜索（L-03、L-04） ─────────────────────────────
@@ -256,6 +266,7 @@ export class Library {
       this.toasts.success(text(this.ctx, 'toast.editing', { title: binding.title }))
       return
     }
+    const generation = this.libraryGeneration
     // 读回后允许整篇替换掉的内容：没有未保存内容时是现在的全文，「放弃」时是用户确认放弃的那份，「保存」时是实际存进文件的那份。
     // 读取（和保存）要等插件回复，这期间编辑区仍可输入；整篇替换会清空撤销记录，替换掉这期间的新内容就再也找不回来，
     // 所以读回时编辑区和这份不一样就不替换（红线 1，外部审查第 1 条）。
@@ -273,9 +284,14 @@ export class Library {
         defaultButton: 'save',
         escapeButton: 'cancel',
       })
+      if (choice.button !== 'save' && choice.button !== 'discard') return
+      if (this.libraryChangedSince(generation)) return
       if (choice.button === 'save') {
+        const outcome = await this.saver.save()
+        // 保存期间换了库：打开已取消，不管保存结果如何都先说明这一点
+        if (this.libraryChangedSince(generation)) return
         // 保存失败（含冲突后没有存成）就停下，什么都不替换。
-        if (await this.saver.save() !== 'saved') return
+        if (outcome !== 'saved') return
         // 存进文件的只是确认保存那一刻的内容（新建超时后重试时，是插件记下的上一次结果）。编辑区里还有没存进去的改动，
         // 就不再读取、不替换，提示原因，用户再保存一次就能打开（外部审查第 1 条复核）
         replaceable = this.draft.binding?.savedBody ?? null
@@ -283,15 +299,14 @@ export class Library {
           this.toasts.error(text(this.ctx, 'toast.unsavedNotOpened'))
           return
         }
-      } else if (choice.button === 'discard') {
-        replaceable = this.ctx.editor.getText()
       } else {
-        return
+        replaceable = this.ctx.editor.getText()
       }
     }
     const token = ++this.openToken
     const result = await this.ctx.bridge.call('library.read', { relPath })
     if (token !== this.openToken) return
+    if (this.libraryChangedSince(generation)) return
     if (!result.ok) {
       // 读取失败：提示原因，草稿和绑定都不变（L-07）。
       this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
@@ -315,6 +330,7 @@ export class Library {
     this.toasts.beginAction()
     const entry = this.entry(relPath)
     if (entry === undefined || entry.status === 'unreadable') return
+    const generation = this.libraryGeneration
     const choice = await this.dialogs.open({
       title: text(this.ctx, 'dialog.rename.title'),
       buttons: [dialogButton(this.ctx, 'cancel', 'common.cancel'), dialogButton(this.ctx, 'save', 'dialog.rename.save', 'primary')],
@@ -326,7 +342,7 @@ export class Library {
     const title = choice.form.title.trim()
     // 标题去掉首尾空白后为空时「保存」不可用；这里再兜一次底。
     if (title === '') return
-    await this.updateMeta(relPath, { title, tags: normalizeTags(choice.form.tags) }, 'toast.metaSaved')
+    await this.updateMeta(relPath, { title, tags: normalizeTags(choice.form.tags) }, 'toast.metaSaved', false, generation)
   }
 
   async toggleFavorite(relPath: string): Promise<void> {
@@ -336,20 +352,32 @@ export class Library {
     await this.updateMeta(relPath, { favorite: !entry.favorite }, entry.favorite ? 'toast.unfavorited' : 'toast.favorited')
   }
 
-  private async updateMeta(relPath: string, patch: MetaPatch, success: MessageKey, addFrontMatter = false): Promise<void> {
+  /** generation：用户做决定（重命名对话框、补 front matter 的确认）之前的库目录代次，见 libraryGeneration。 */
+  private async updateMeta(
+    relPath: string,
+    patch: MetaPatch,
+    success: MessageKey,
+    addFrontMatter = false,
+    generation = this.libraryGeneration,
+  ): Promise<void> {
+    if (this.libraryChangedSince(generation)) return
     const result = await this.ctx.bridge.call('library.updateMeta', { relPath, patch, addFrontMatter })
     if (!result.ok) {
       this.toasts.error(text(this.ctx, 'toast.metaFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     const value = result.value
+    // 结果回来时库目录已经换了：改的是旧库里的文件。绑定、选中和预览都属于新库，不拿旧库的结果去改它们；
+    // 冲突也不再弹对话框（对话框说的是旧库里的文件），按已取消处理（外部审查第二轮复核）
+    const current = generation === this.libraryGeneration
     if (value.kind === 'saved') {
-      this.applyMetaToBinding(relPath, value)
+      if (current) this.applyMetaToBinding(relPath, value)
       this.toasts.success(text(this.ctx, success))
       await this.refresh(false)
-      if (this.state.selected === relPath) await this.loadPreview(value.entry)
+      if (current && this.state.selected === relPath) await this.loadPreview(value.entry)
       return
     }
+    if (this.libraryChangedSince(generation)) return
     switch (value.conflict) {
       case 'noFrontMatter': {
         // 没有 front matter 的文件先确认补上（L-09、L-10 按 L-08 的方式）。
@@ -360,7 +388,7 @@ export class Library {
           defaultButton: 'addFrontMatter',
           escapeButton: 'cancel',
         })
-        if (choice.button === 'addFrontMatter') await this.updateMeta(relPath, patch, success, true)
+        if (choice.button === 'addFrontMatter') await this.updateMeta(relPath, patch, success, true, generation)
         return
       }
       case 'modified': {
@@ -425,6 +453,7 @@ export class Library {
 
   async remove(relPath: string): Promise<void> {
     this.toasts.beginAction()
+    const generation = this.libraryGeneration
     if (this.ctx.store.getState().config?.confirmDelete !== false) {
       const choice = await this.dialogs.open({
         title: text(this.ctx, 'dialog.delete.title'),
@@ -434,21 +463,26 @@ export class Library {
         escapeButton: 'cancel',
       })
       if (choice.button !== 'delete') return
+      if (this.libraryChangedSince(generation)) return
     }
     const result = await this.ctx.bridge.call('library.delete', { relPath })
     if (!result.ok) {
       this.toasts.error(text(this.ctx, 'toast.deleteFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
-    // 被删的条目正绑定在编辑区：内容不变，解除绑定，之后保存会新建文件。
-    if (this.draft.binding?.relPath === relPath) {
-      this.draft.setBinding(null, true)
-      this.draft.flushSoon()
-    }
-    if (this.state.selected === relPath) {
-      this.cancelInsert()
-      this.previewToken++
-      this.update(library => ({ ...library, selected: null, preview: null }))
+    // 删除回来时库目录已经换了：删的是旧库里的文件，新库里同路径的条目可能刚被打开或选中，不能把它的绑定和选中清掉
+    // （外部审查第二轮复核）。删除确实做了，照常提示
+    if (generation === this.libraryGeneration) {
+      // 被删的条目正绑定在编辑区：内容不变，解除绑定，之后保存会新建文件。
+      if (this.draft.binding?.relPath === relPath) {
+        this.draft.setBinding(null, true)
+        this.draft.flushSoon()
+      }
+      if (this.state.selected === relPath) {
+        this.cancelInsert()
+        this.previewToken++
+        this.update(library => ({ ...library, selected: null, preview: null }))
+      }
     }
     this.toasts.success(text(this.ctx, 'toast.movedToTrash'))
     await this.refresh(false)
@@ -496,17 +530,36 @@ export class Library {
    * 恢复（L-11）：原位置被占用时确认后恢复到替代路径，把对话框里显示的那个路径原样带回去，插件发现它此时也被占用就再返回 occupied；
    * 回收站里的文件在删除后被修改过时先提示，确认后仍可恢复。
    */
-  async restore(file: string, target: RestoreTarget = 'original', alternative: string | null = null, acceptModified = false): Promise<void> {
+  async restore(file: string): Promise<void> {
+    await this.restoreFile(file, 'original', null, false, this.libraryGeneration)
+  }
+
+  /** generation：用户点「恢复」时的库目录代次；确认替代路径、确认恢复改过的文件之后据此核对，见 libraryGeneration。 */
+  private async restoreFile(
+    file: string,
+    target: RestoreTarget,
+    alternative: string | null,
+    acceptModified: boolean,
+    generation: number,
+  ): Promise<void> {
     this.toasts.beginAction()
+    if (this.libraryChangedSince(generation)) return
     const result = await this.ctx.bridge.call('trash.restore', { file, target, alternative, acceptModified })
     if (!result.ok) {
       this.toasts.error(text(this.ctx, 'toast.restoreFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     const value = result.value
+    // 结果回来时库目录已经换了：恢复的是旧库回收站里的文件。新库回收站里同名文件的选中不动；
+    // 要用户再确认的结果（占用、改过）不再弹对话框，按已取消处理（外部审查第二轮复核）
+    const current = generation === this.libraryGeneration
+    if (!current && value.kind !== 'restored') {
+      this.libraryChangedSince(generation)
+      return
+    }
     switch (value.kind) {
       case 'restored':
-        if (this.state.trashSelected === file) {
+        if (current && this.state.trashSelected === file) {
           this.trashPreviewToken++
           this.update(library => ({ ...library, trashSelected: null, trashPreview: null }))
         }
@@ -521,7 +574,7 @@ export class Library {
           defaultButton: 'alternative',
           escapeButton: 'cancel',
         })
-        if (choice.button === 'alternative') await this.restore(file, 'alternative', value.alternative, acceptModified)
+        if (choice.button === 'alternative') await this.restoreFile(file, 'alternative', value.alternative, acceptModified, generation)
         return
       }
       case 'modified': {
@@ -533,7 +586,7 @@ export class Library {
           defaultButton: 'cancel',
           escapeButton: 'cancel',
         })
-        if (choice.button === 'restore') await this.restore(file, target, alternative, true)
+        if (choice.button === 'restore') await this.restoreFile(file, target, alternative, true, generation)
         return
       }
       case 'missing':
@@ -545,19 +598,47 @@ export class Library {
 
   // ───────────────────────────── 库目录变了 ─────────────────────────────
 
-  /** 插件推来 library.changed：绑定的库目录不同就解除绑定（L-01），侧栏开着就重读。 */
+  /**
+   * 插件推来 library.changed（只在库目录真的变了时推）：绑定的库目录不同就解除绑定（L-01），侧栏开着就重读；
+   * 代次加一，还开着的确认框之后再确认也不会作用到新库里（外部审查第 2 条）。
+   */
   async onLibraryChanged(libraryDir: string): Promise<void> {
+    this.libraryGeneration++
     this.draft.checkLibraryDir(libraryDir)
     this.cancelInsert()
+    // 旧库的列表、回收站列表、选中和预览当场清掉，还在途的旧结果也作废，和代次加一在同一步完成：
+    // 列表里的相对路径到了插件那边按新库解释，旧行还能点的话，删除、重命名、收藏会落到新库里同路径的文件上。
+    // 新库第一次列出要全量扫描，慢盘上要几秒；侧栏收起时不重读，旧列表会一直留到下次展开（外部审查第 2 条复核）
+    this.listToken++
+    this.trashToken++
     this.previewToken++
     this.trashPreviewToken++
-    this.update(library => ({ ...library, selected: null, preview: null, trashSelected: null, trashPreview: null }))
+    this.update(library => ({
+      ...library,
+      list: null,
+      listError: null,
+      trash: null,
+      trashError: null,
+      selected: null,
+      preview: null,
+      trashSelected: null,
+      trashPreview: null,
+    }))
+    // 行的「更多」菜单不随失焦关闭：换库前开着的菜单会挂到新库同路径的那一行上
+    this.ctx.store.update(state => (state.menu === null ? state : { ...state, menu: null }))
     if (this.state.open) await this.reload()
   }
 
   dispose(): void {
     if (this.searchTimer !== null) clearTimeout(this.searchTimer)
     this.searchTimer = null
+  }
+
+  /** 从 generation 那一代到现在库目录换过：提示这次操作已取消，返回 true（见 libraryGeneration）。 */
+  private libraryChangedSince(generation: number): boolean {
+    if (generation === this.libraryGeneration) return false
+    this.toasts.error(text(this.ctx, 'toast.libraryChanged'))
+    return true
   }
 
   private update(updater: (library: LibrarySlice) => LibrarySlice): void {
