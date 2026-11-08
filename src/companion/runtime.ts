@@ -8,7 +8,8 @@
 //   慢网下（镜像不通、改走 GitHub 时一个多小时很常见）会被第二个进程抢走，两个进程往同一个 .part 里追加。
 //   被接管的一方（例如电脑睡眠后醒来）停下自己的下载，回去等接管的进程装好；
 // - 租约：运行时目录被所有 profile 共用，各 profile 装的插件版本可能不同，清理和删除不能动别的 profile 正在用的版本；
-// - 删除运行时后暂停自动下载；崩溃留下的、没有 .ready 的版本目录先挪开再装。
+// - 删除运行时后暂停自动下载；崩溃留下的、没有 .ready 的版本目录先挪开再装；
+// - 解压和辅助工具只拿到最小的环境变量，解压结果按清单核对齐了才改名、写 .ready（审查 SEC-04）。
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -102,6 +103,24 @@ export function executableSegments(platform: string): readonly string[] {
     default:
       return ['electron']
   }
+}
+
+/**
+ * 解压后除可执行文件外必须在的文件，相对版本目录、用 `/` 分隔（审查 SEC-04）。按 Electron 44 发布包的文件清单
+ * （electron 仓库 script/zip_manifests/dist_zip.*.manifest，各平台、各架构）和本机解压出的 macOS 运行时核对过。
+ * 只挑启动必需、又最能看出解压出了问题的几个：
+ * - default_app.asar：Electron 靠它加载命令行里给的小程序目录（launch.ts 把 lib/app 作为第一个参数）；
+ * - icudtl.dat、v8_context_snapshot.bin：Chromium 启动必读。macOS 上快照的文件名带架构（`.arm64.bin`），改查框架本体；
+ * - locales/en-US.pak：Linux、Windows 的默认语言包。Info-ZIP unzip 被 `UNZIP=-LL` 改成小写、被 `-j` 拍平目录时，
+ *   它和 default_app.asar 最先对不上；
+ * - macOS 的框架本体和 icudtl.dat 都经过框架里的符号链接（`Versions/Current`）去查，符号链接没保留下来也算缺。
+ */
+export function requiredRuntimeFiles(platform: string): readonly string[] {
+  if (platform === 'darwin') {
+    const framework = 'Electron.app/Contents/Frameworks/Electron Framework.framework'
+    return ['Electron.app/Contents/Resources/default_app.asar', `${framework}/Electron Framework`, `${framework}/Resources/icudtl.dat`]
+  }
+  return ['resources/default_app.asar', 'locales/en-US.pak', 'icudtl.dat', 'v8_context_snapshot.bin']
 }
 
 function isSupportedTarget(target: string): target is RuntimeTarget {
@@ -378,6 +397,14 @@ export class RuntimeManager implements RuntimeApi {
     run().then(
       (install) => {
         if (this.#task === task) this.#task = null
+        // 审查 H2：#obtain 里每个 await（检查是否已装好、清理、放锁）期间任务都可能被中止（dispose()、remove()、
+        // 调用方都放弃了），它照样会把找到或刚装好的版本返回出来，卸载后的插件就会拿它启动 Electron，
+        // remove() 也正要删掉它。所以在交出结果的这一处统一再看一次中止信号，覆盖 #obtain 的所有返回路径。
+        // 状态不改回 missing：版本确实装好了，配置页照实显示。
+        if (controller.signal.aborted) {
+          reject(abortError(controller.signal))
+          return
+        }
         resolve(install)
       },
       (error: unknown) => {
@@ -709,6 +736,10 @@ export class RuntimeManager implements RuntimeApi {
       if (!(await pathExists(join(staging, ...this.#segments)))) {
         throw new PromptxError('promptx/runtime/extract-failed', 'the archive has no Electron executable')
       }
+      // 只看可执行文件不够（审查 SEC-04）：文件名被改成小写、目录被拍平时可执行文件往往还在。
+      // 清单对不上按解压失败处理：删掉 staging，压缩包本身通过了校验，留着给重试。
+      const missing = await firstMissing(staging, requiredRuntimeFiles(this.#platform))
+      if (missing !== undefined) throw new PromptxError('promptx/runtime/extract-failed', `missing ${missing}`)
       await this.#clearStaleTarget()
       await renameWithRetry(staging, this.#installDir)
     } catch (error) {
@@ -1057,27 +1088,33 @@ export class RuntimeManager implements RuntimeApi {
 
 // ───────────────────────────── 解压工具 ─────────────────────────────
 
+/** 运行系统工具的函数，和 runTool 同形。 */
+export type ToolRunner = typeof runTool
+
 /**
  * 各平台默认的解压方式（design-spec 5.1、5.6、D4）：
  * - macOS：`/usr/bin/ditto -x -k --noqtn`，保留 Electron Framework 里的符号链接，不加隔离标记；
  * - Windows：系统自带的 `%SystemRoot%\System32\tar.exe -xf`（bsdtar，能解 zip）；
  * - Linux：`unzip -q`，没装 unzip 时报 promptx/runtime/unzip-missing 并提示安装（Linux 为预览平台）。
- * env 只给测试用（模拟没装 unzip）。
+ * 工具只拿到 toolEnv 挑出来的环境变量（审查 SEC-04）。env 是挑变量的来源，run 是运行工具的函数，
+ * 两个参数都只给测试用（模拟没装 unzip、检查传给工具的环境变量）。
  */
 export function defaultExtractor(
   platform: string,
   env: NodeJS.ProcessEnv = process.env,
+  run: ToolRunner = runTool,
 ): (zip: string, dest: string, signal?: AbortSignal) => Promise<void> {
+  const childEnv = toolEnv(platform, env)
   if (platform === 'darwin') {
-    return (zip, dest, signal) => runTool('/usr/bin/ditto', ['-x', '-k', '--noqtn', zip, dest], { signal })
+    return (zip, dest, signal) => run('/usr/bin/ditto', ['-x', '-k', '--noqtn', zip, dest], { signal, env: childEnv })
   }
   if (platform === 'win32') {
-    const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows'
-    return (zip, dest, signal) => runTool(win32.join(systemRoot, 'System32', 'tar.exe'), ['-xf', zip, '-C', dest], { signal })
+    const systemRoot = envValue(env, 'SystemRoot', true) ?? 'C:\\Windows'
+    return (zip, dest, signal) => run(win32.join(systemRoot, 'System32', 'tar.exe'), ['-xf', zip, '-C', dest], { signal, env: childEnv })
   }
   return async (zip, dest, signal) => {
     try {
-      await runTool('unzip', ['-q', zip, '-d', dest], { signal, env })
+      await run('unzip', ['-q', zip, '-d', dest], { signal, env: childEnv })
     } catch (error) {
       if (errnoCode(error) === 'ENOENT') throw new PromptxError('promptx/runtime/unzip-missing', 'unzip was not found in PATH')
       throw error
@@ -1087,6 +1124,7 @@ export function defaultExtractor(
 
 /**
  * 运行一个系统工具，退出码为 0 时成功。不经 shell，参数用数组（design-spec 9「子进程参数注入」）。
+ * 不传 env 时只给 toolEnv(process.platform) 挑出的环境变量，不继承 Host 的（审查 SEC-04）：macOS 去隔离标记的 xattr 走的就是这里。
  * 创建 ChildProcess 后第一件事就是挂 error 监听：可执行文件不存在（ENOENT）、没有权限（EACCES）时 Node 发 error 事件，
  * 没人接就是未捕获的异常，会让整个 dsh 退出（审查 S03）。
  */
@@ -1103,7 +1141,8 @@ export function runTool(
     }
     let child
     try {
-      child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], shell: false, windowsHide: true, env: options.env ?? process.env })
+      const env = options.env ?? toolEnv(process.platform)
+      child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], shell: false, windowsHide: true, env })
     } catch (error) {
       reject(asError(error))
       return
@@ -1145,6 +1184,40 @@ export function runTool(
     })
     signal?.addEventListener('abort', onAbort, { once: true })
   })
+}
+
+/**
+ * 解压和辅助工具（ditto、tar.exe、unzip、xattr）的环境变量：只有 PATH（Windows 上再加 SystemRoot、windir、TEMP、TMP、PATHEXT）
+ * 和固定的 LANG=C、LC_ALL=C，其余一律不传（审查 SEC-04）。
+ * 坑：dsh 命令行启动时把启动目录的 .env 合进 process.env，只拦 PATH 这类启动相关的变量名，UNZIP、UNZIPOPT 不在其中。
+ * Info-ZIP unzip 从 UNZIP、UNZIPOPT 读默认选项，克隆来的仓库里一行 `UNZIP=-LL` 或 `UNZIP=-j` 就能把文件名改成小写、
+ * 把目录拍平，可执行文件却还在，坏掉的目录会被标成就绪，所有 profile 共用；bsdtar 也读 TAR_READER_OPTIONS。
+ * 所以不继承，按名字挑：PATH 用来找 unzip，dsh 不许 .env 设它；Windows 那几个系统总会设好，.env 不覆盖已有的值，
+ * 少了 SystemRoot 等变量有的系统组件初始化不了。语言环境固定成 C，工具的行为和报错文字不随用户设置变化。
+ */
+function toolEnv(platform: string, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const windows = platform === 'win32'
+  const names = windows ? ['PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'PATHEXT'] : ['PATH']
+  const env: NodeJS.ProcessEnv = {}
+  for (const name of names) {
+    const value = envValue(source, name, windows)
+    if (value !== undefined) env[name] = value
+  }
+  env.LANG = 'C'
+  env.LC_ALL = 'C'
+  return env
+}
+
+/**
+ * 取一个环境变量。Windows 的变量名不分大小写（PATH 实际常写成 Path）：真正的 process.env 自己会处理，
+ * 测试传进来的普通对象不会，所以 ignoreCase 时按大小写不敏感再找一遍。
+ */
+function envValue(source: NodeJS.ProcessEnv, name: string, ignoreCase: boolean): string | undefined {
+  const exact = source[name]
+  if (exact !== undefined || !ignoreCase) return exact
+  const upper = name.toUpperCase()
+  const key = Object.keys(source).find(candidate => candidate.toUpperCase() === upper)
+  return key === undefined ? undefined : source[key]
 }
 
 // ───────────────────────────── 小工具 ─────────────────────────────
@@ -1209,6 +1282,21 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * files（相对 dir、用 `/` 分隔）里第一个不在的，都在时返回 undefined。用 stat 而不是 lstat：要跟着符号链接走，
+ * macOS 框架里的链接断了也算缺（审查 SEC-04）。
+ */
+async function firstMissing(dir: string, files: readonly string[]): Promise<string | undefined> {
+  for (const file of files) {
+    try {
+      await stat(join(dir, ...file.split('/')))
+    } catch {
+      return file
+    }
+  }
+  return undefined
 }
 
 async function readdirOrEmpty(path: string): Promise<string[]> {
