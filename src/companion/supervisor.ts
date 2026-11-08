@@ -22,6 +22,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
+  RENDERER_FATAL_EXIT_CODE,
   RPC_ERROR,
   type CompanionNotifications,
   type CompanionRequests,
@@ -99,6 +100,10 @@ export class CompanionSupervisor implements SupervisorApi {
   #restartTimer: NodeJS.Timeout | undefined
   #stopping: Promise<void> | null = null
   #startAfterStop = false
+  /** close() 之后不再启动：插件卸载的停止和配置页的重启撞在一起时，重启不能在卸载之后又拉起一个进程（审查 H2）。 */
+  #closed = false
+  /** 每次 stop() 加一。restart() 据此判断等待期间有没有别人要求停止。 */
+  #stopSeq = 0
 
   constructor(options: SupervisorOptions) {
     this.#options = options
@@ -131,6 +136,7 @@ export class CompanionSupervisor implements SupervisorApi {
   }
 
   start(): void {
+    if (this.#closed) return
     if (this.#stopping !== null) {
       // 正在停止：等停完再启动，避免新旧两个进程同时在跑。
       this.#startAfterStop = true
@@ -143,10 +149,11 @@ export class CompanionSupervisor implements SupervisorApi {
   stop(reason: string): Promise<void> {
     // 以最后一次调用为准：停止之前排队的 start() 作废。
     this.#startAfterStop = false
+    this.#stopSeq += 1
     if (this.#stopping !== null) return this.#stopping
     const stopping = this.#shutdown(reason).finally(() => {
       this.#stopping = null
-      if (this.#startAfterStop) {
+      if (this.#startAfterStop && !this.#closed) {
         this.#startAfterStop = false
         this.#freshStart()
       }
@@ -155,8 +162,19 @@ export class CompanionSupervisor implements SupervisorApi {
     return stopping
   }
 
+  /** 停止并且以后不再启动（插件卸载时用）。 */
+  close(reason: string): Promise<void> {
+    this.#closed = true
+    return this.stop(reason)
+  }
+
   async restart(): Promise<void> {
-    await this.stop('restart')
+    const stopping = this.stop('restart')
+    const seq = this.#stopSeq
+    await stopping
+    // 等待期间又有人要求停止（插件卸载、删除运行时）：以后来的为准，不再启动（审查 H2）。
+    // 两个调用等的是同一个停止过程，不判断的话这里会在对方以为已经停好之后再拉起一个进程。
+    if (this.#closed || seq !== this.#stopSeq) return
     this.start()
   }
 
@@ -170,6 +188,7 @@ export class CompanionSupervisor implements SupervisorApi {
   }
 
   #launch(): void {
+    if (this.#closed) return
     this.#generation += 1
     const generation = this.#generation
     const controller = new AbortController()
@@ -482,7 +501,9 @@ export class CompanionSupervisor implements SupervisorApi {
       this.#logger.info('companion exited (pid %d, %s)', run.pid, detail)
       this.#notifyProcess({ type: 'exited', pid: run.pid })
     }
-    this.#lose(run, { code: 'promptx/companion/exited', detail })
+    // 界面进程反复崩溃时小程序用约定的退出码退出，配置页据此显示「小窗界面反复崩溃」而不是笼统的意外退出（审查 CR-03）。
+    const lost = signal === null && code === RENDERER_FATAL_EXIT_CODE ? 'promptx/companion/renderer-gone' : 'promptx/companion/exited'
+    this.#lose(run, { code: lost, detail })
   }
 
   #markExited(run: Run): void {

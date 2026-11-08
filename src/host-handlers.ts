@@ -7,6 +7,7 @@ import { PromptxError } from './shared/errors.ts'
 import type {
   Binding,
   CompanionStatus,
+  ErrorInfo,
   FolderSel,
   LibraryScope,
   MetaPatch,
@@ -90,7 +91,9 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
   peer.handle('host.openSettings', () => deps.openSettings())
 
   peer.on('status', (status) => {
-    if (isRecord(status)) deps.onStatus(status)
+    // 字段不合格的整条忽略：Host 拿 locale 选优化指令的语言、拿 rendererError 给配置页显示，不能用半截数据。
+    const parsed = companionStatus(status)
+    if (parsed !== null) deps.onStatus(parsed)
   })
   peer.on('host.restartCompanion', () => {
     deps.onRestartRequest()
@@ -163,6 +166,25 @@ function binding(value: unknown): Binding | null {
     size: nonNegativeInt(v.size, 'binding.size'),
     savedBody: str(v.savedBody, 'binding.savedBody'),
   }
+}
+
+function errorInfo(value: unknown): ErrorInfo | null | undefined {
+  if (value === null) return null
+  if (!isRecord(value) || typeof value.code !== 'string') return undefined
+  if (value.detail !== undefined && typeof value.detail !== 'string') return undefined
+  return value.detail === undefined ? { code: value.code } : { code: value.code, detail: value.detail.slice(0, 300) }
+}
+
+/** status 通知的检查。shortcut 原样交给配置页（页面自己会再检查）；其余字段都要合格，否则返回 null。 */
+export function companionStatus(value: unknown): CompanionStatus | null {
+  if (!isRecord(value)) return null
+  const { shortcut, tray, visible, locale } = value
+  if (shortcut !== null && !isRecord(shortcut)) return null
+  if (typeof tray !== 'boolean' || typeof visible !== 'boolean') return null
+  if (locale !== 'zh' && locale !== 'en') return null
+  const rendererError = errorInfo(value.rendererError)
+  if (rendererError === undefined) return null
+  return { shortcut: shortcut as CompanionStatus['shortcut'], tray, visible, locale, rendererError }
 }
 
 function metaPatch(value: unknown): MetaPatch {

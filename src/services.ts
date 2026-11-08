@@ -236,8 +236,10 @@ export interface SupervisorApi {
   /** 当前小程序进程号；没有进程时为 undefined。 */
   pid(): number | undefined
   start(): void
-  /** 停止（总时长受 timings 控制，默认 ≤ 4 秒）。之后不会自动重启。 */
+  /** 停止（总时长受 timings 控制，默认 ≤ 4 秒）。之后不会自动重启，start() 可以再启动。 */
   stop(reason: string): Promise<void>
-  /** 手动重启：重置失败计数。 */
+  /** 停止，并且之后的 start()、restart() 都不再启动进程（插件卸载时用）。 */
+  close(reason: string): Promise<void>
+  /** 手动重启：重置失败计数。等待停止期间又有人调用 stop() 或 close() 时不再启动。 */
   restart(): Promise<void>
 }

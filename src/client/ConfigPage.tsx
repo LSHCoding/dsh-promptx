@@ -472,6 +472,10 @@ function StatusField({ t, status, actions }: { t: PromptxTranslate; status: Pane
       {companion.state === 'restarting' && companion.error !== undefined
         ? <p className="promptx-hint">{t('companionLastError', { reason: errorText(t, companion.error) })}</p>
         : null}
+      {/* 运行中但界面进程崩溃了、正在重新加载：小程序随 status 报上来（design-spec 5.4，审查 CR-03）。 */}
+      {companion.state === 'running' && companion.error?.code === 'promptx/companion/renderer-gone'
+        ? <p className="promptx-hint">{t('rendererReloading')}</p>
+        : null}
       {status.companionPid === undefined ? null : <p className="promptx-hint">{t('pidHint', { pid: status.companionPid })}</p>}
       <ActionFailure t={t} actions={actions} of={['show', 'restart']} />
     </div>

@@ -3,6 +3,7 @@
 //
 // 生命周期（design-spec 4.1）：apply 顶层同步注册所有监听和 effect；主 effect 的 setup 只创建对象，
 // 取锁、下载运行时、启动小程序都在后台任务里，清理时按「中止后台任务 → 停小程序 → 释放租约 → 关草稿 → 释放实例锁」进行。
+// 实例锁拿不到时每隔几秒重试，拿到后靠心跳续着；没拿到锁时配置页上的启动、下载、删除操作一律拒绝（审查 H1、F2）。
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
@@ -10,12 +11,12 @@ import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import { realpathSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { setTimeout as delay } from 'node:timers/promises'
 import pkg from '../package.json' with { type: 'json' }
 import { background } from './background.ts'
-import { acquireInstanceLock } from './companion/instance-lock.ts'
+import { acquireInstanceLock, HEARTBEAT_MS, type HeldInstanceLock } from './companion/instance-lock.ts'
 import { buildLaunchSpec, resolveAppDir } from './companion/launch.ts'
 import { ELECTRON_VERSION } from './companion/electron-release.ts'
 import { RuntimeManager } from './companion/runtime.ts'
@@ -26,12 +27,12 @@ import { LibraryService } from './library/service.ts'
 import { OptimizeService } from './optimize/service.ts'
 import { profileHash, promptxPaths, resolveDshHome } from './paths.ts'
 import type { HostPeer, LlmLike, ModelSelection } from './services.ts'
-import { PromptxError } from './shared/errors.ts'
+import { PromptxError, toErrorInfo } from './shared/errors.ts'
 import { translate } from './shared/i18n/index.ts'
 import { DEFAULT_INSTRUCTION } from './shared/instructions.ts'
 import type { CompanionMode, E2eCommand, E2eResult } from './shared/protocol.ts'
-import type { CompanionConfig, PromptxConfig } from './shared/types.ts'
-import { type Appearance, resolveAppearance, resolveInstructionLocale } from './web/appearance.ts'
+import type { CompanionConfig, CompanionState, ErrorInfo, PanelStatus, PromptxConfig } from './shared/types.ts'
+import { type Appearance, type AppearanceLocale, mapLocaleTag, resolveAppearance, resolveInstructionLocale } from './web/appearance.ts'
 import { checkLibraryRoot, createConfigUpdater, type LocationContext } from './web/config-update.ts'
 import { attachCompanionHandlers } from './host-handlers.ts'
 import { planOpenSettings } from './web/open-settings.ts'
@@ -62,6 +63,21 @@ function optional(ctx: Context, name: string): unknown {
 /** 插件条目在 cordis.patch.yml 里的 id，也是 dsh 设置的命名空间。 */
 const SETTINGS_NAMESPACE = 'promptx'
 
+/** 实例锁被别的进程持有时，隔这么久再试一次。 */
+const LOCK_RETRY_MS = 3_000
+
+/**
+ * Host 自己推断的系统语言：小程序还没上报过语言时才用（之后以小程序报的为准，它能读到系统的语言列表）。
+ * Node 的默认语言来自 LANG 等环境变量，从访达启动的桌面版里可能没有，所以只是兜底。
+ */
+function hostSystemLocale(): AppearanceLocale {
+  try {
+    return mapLocaleTag(Intl.DateTimeFormat().resolvedOptions().locale) ?? 'en'
+  } catch {
+    return 'en'
+  }
+}
+
 export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
   const logger = ctx.logger('promptx')
   const dshHome = resolveDshHome(optional(ctx, 'dshHomePath') as ((...segments: string[]) => string) | undefined)
@@ -77,11 +93,20 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
   let connection: ConnectionLike | undefined
   let reportedLocale: string | null = null
   let appearance: Appearance = { locale: null, theme: 'system' }
+  /** 小程序上报的界面语言（dsh 没有语言偏好时它跟随系统语言）。 */
+  let companionLocale: AppearanceLocale | null = null
+  /** 小程序上报的界面崩溃状态：运行中但界面正在重新加载时显示在配置页。 */
+  let rendererError: ErrorInfo | null = null
+  /** 本实例是否持有实例锁。没有时不启动小程序，配置页的启动、下载、删除操作都拒绝。 */
+  let lockHeld = false
+  /** 本实例最近启动的小程序进程号：卸载时只释放它的运行时租约。 */
+  let lastSpawnedPid: number | undefined
 
   // ─────────── 配置、外观、库目录位置 ───────────
 
   const effectiveLibraryDir = () => resolveLibraryDir(config.libraryDir.get(), { dshHome, defaultLibrary: paths.defaultLibrary })
-  const instructionLocale = () => resolveInstructionLocale(appearance, 'zh')
+  // 优化默认指令、「未命名 Prompt」的语言和小窗界面一致（需求 O-08，design-spec 4.7，审查 F5）。
+  const instructionLocale = () => resolveInstructionLocale(appearance, companionLocale ?? hostSystemLocale())
 
   const skillSettings = (): { dirs: string[]; agentsHome: string | undefined } => {
     const result = { dirs: [] as string[], agentsHome: undefined as string | undefined }
@@ -166,6 +191,15 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
   const pushConfig = () => {
     peer()?.notify('config', companionConfig())
   }
+  /** 配置页上的小程序状态。运行中时显示界面崩溃后正在重新加载的情况（design-spec 5.4，审查 CR-03）。 */
+  const companionView = (state: CompanionState, error: ErrorInfo | undefined, exhausted: boolean): PanelStatus['companion'] => {
+    const shown = state === 'running' ? (rendererError ?? undefined) : error
+    return { state, ...(shown === undefined ? {} : { error: shown }), restartsExhausted: exhausted }
+  }
+  /** 配置页的操作只在持有实例锁时可用：重复的实例启动小程序会和另一个进程同时写同一份草稿（产品红线 1，审查 H1）。 */
+  const requireActive = (): void => {
+    if (!lockHeld) throw new PromptxError('promptx/instance/duplicate')
+  }
   const refreshAppearance = () => {
     appearance = resolveAppearance({ describe: () => settings?.describe() ?? [], reportedLocale })
     pushConfig()
@@ -201,7 +235,10 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
         optimize,
         openSettings,
         onStatus: (status) => {
-          store.patch({ shortcut: status.shortcut })
+          companionLocale = status.locale
+          rendererError = status.rendererError
+          const companion = companionView(supervisor.state(), supervisor.error(), supervisor.restartsExhausted())
+          store.patch({ shortcut: status.shortcut, companion })
         },
         onRestartRequest: () => {
           background(logger, 'restart companion', () => supervisor.restart())
@@ -210,11 +247,13 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
     },
     helloResult: () => ({ hostVersion: pkg.version, config: companionConfig(), mode }),
     onStateChange: (state, error) => {
-      const restartsExhausted = supervisor.restartsExhausted()
-      store.patch({ companion: { state, ...(error === undefined ? {} : { error }), restartsExhausted } })
+      // 新进程会重新上报；旧进程的界面状态不再有意义。
+      if (state !== 'running') rendererError = null
+      store.patch({ companion: companionView(state, error, supervisor.restartsExhausted()) })
     },
     onProcess: (event) => {
       if (event.type === 'spawned') {
+        lastSpawnedPid = event.pid
         store.patch({ companionPid: event.pid })
         background(logger, 'acquire runtime lease', runtime.acquireLease(ELECTRON_VERSION, event.pid))
       } else {
@@ -285,8 +324,12 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
       store,
       updateConfig,
       companion: {
-        restart: () => supervisor.restart(),
+        restart: () => {
+          requireActive()
+          return supervisor.restart()
+        },
         show: () => {
+          requireActive()
           const channel = peer()
           if (channel === null) throw new PromptxError('promptx/channel/closed')
           channel.notify('window.command', { command: 'show' })
@@ -294,10 +337,13 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
       },
       runtime: {
         download: async () => {
+          requireActive()
           runtime.resume()
           if (supervisor.state() !== 'running') await supervisor.restart()
         },
         remove: async () => {
+          // 重复的实例和正在运行的小程序同属一个 profile，租约保护不了它：删运行时只能由持锁的实例做。
+          requireActive()
           await supervisor.stop('runtime-delete')
           const result = await runtime.remove()
           store.patch({ runtime: runtime.status() })
@@ -323,35 +369,93 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
 
   ctx.effect(() => {
     const abort = new AbortController()
-    let releaseLock: (() => Promise<void>) | null = null
+    let lock: HeldInstanceLock | null = null
+    let heartbeat: NodeJS.Timeout | undefined
     const offRuntime = runtime.onChange((status) => {
       store.patch({ runtime: status })
     })
-    background(logger, 'startup', (async () => {
-      const lockPath = join(paths.root, 'locks', `instance-${profile.hash}.lock`)
-      await mkdir(join(paths.root, 'locks'), { recursive: true })
-      const lock = await acquireInstanceLock(lockPath)
-      if (!lock.acquired) {
-        store.patch({ instance: 'duplicate' })
-        logger.warn('another dsh process already runs PromptX for this profile (pid %d)', lock.holderPid)
-        return
+    const lockPath = join(paths.root, 'locks', `instance-${profile.hash}.lock`)
+
+    /**
+     * 取实例锁，拿不到就隔几秒再试：另一个 dsh 进程退出后这里自动接手；锁文件里的 pid 被无关进程复用时，
+     * 等心跳确认过期后接手（审查 F2）；锁目录暂时写不进去时在配置页显示原因，并继续重试（审查 H1）。
+     */
+    // 写成函数：await 之后状态可能已经变了，直接读属性会被类型收窄成「一定没中止」。
+    const closing = () => abort.signal.aborted
+    const acquire = async (): Promise<void> => {
+      let warned = false
+      while (!closing()) {
+        try {
+          const result = await acquireInstanceLock(lockPath)
+          if (result.acquired) {
+            if (closing()) await result.release()
+            else hold(result)
+            return
+          }
+          if (!warned) {
+            warned = true
+            logger.warn('another dsh process already runs PromptX for this profile (pid %d); retrying', result.holderPid)
+          }
+          store.patch({ instance: 'duplicate' })
+        } catch (error) {
+          const info = toErrorInfo(error)
+          logger.warn('instance lock failed: %s%s', info.code, info.detail === undefined ? '' : ` (${info.detail})`)
+          store.patch({ instance: 'active', companion: { state: 'failed', error: info, restartsExhausted: false } })
+        }
+        try {
+          await delay(LOCK_RETRY_MS, undefined, { signal: abort.signal })
+        } catch {
+          // 插件卸载：不再重试。
+          return
+        }
       }
-      if (abort.signal.aborted) {
-        await lock.release()
-        return
-      }
-      releaseLock = () => lock.release()
+    }
+
+    const hold = (held: HeldInstanceLock): void => {
+      lock = held
+      lockHeld = true
+      store.patch({ instance: 'active' })
+      heartbeat = setInterval(() => {
+        background(logger, 'instance lock heartbeat', beat())
+      }, HEARTBEAT_MS)
+      heartbeat.unref()
       supervisor.start()
-    })())
+    }
+
+    /**
+     * 心跳。锁被接管了，说明另一个 dsh 进程认定本进程已经不在（本进程卡住了约两分钟）：
+     * 让出，停掉小程序，回到重试，免得两个进程同时写同一份草稿。
+     */
+    const beat = async (): Promise<void> => {
+      const held = lock
+      if (held === null || (await held.refresh()) || lock !== held) return
+      logger.error('the instance lock was taken over by another dsh process; stopping the companion')
+      clearInterval(heartbeat)
+      heartbeat = undefined
+      lock = null
+      lockHeld = false
+      store.patch({ instance: 'duplicate' })
+      // release 不会删别人的锁文件，只是把本进程的登记清掉，之后才能重新去抢。
+      await held.release().catch(() => {})
+      await supervisor.stop('instance-lock-lost')
+      if (!closing()) background(logger, 'instance lock', acquire())
+    }
+
+    background(logger, 'instance lock', acquire())
     return async () => {
       abort.abort()
+      clearInterval(heartbeat)
       offRuntime()
-      await supervisor.stop('host-closing').catch(() => {})
+      await supervisor.close('host-closing').catch(() => {})
       optimize.dispose()
-      await runtime.releaseLease().catch(() => {})
+      // 只释放本实例启动过的小程序的租约：同一个 profile 的另一个实例的租约文件同名，不带 pid 会把它删掉（审查 H3）。
+      if (lastSpawnedPid !== undefined) await runtime.releaseLease(lastSpawnedPid).catch(() => {})
       runtime.dispose()
       await draft.close().catch(() => {})
-      await releaseLock?.().catch(() => {})
+      const held = lock
+      lock = null
+      lockHeld = false
+      await held?.release().catch(() => {})
       store.close()
     }
   }, 'promptx: companion lifecycle')

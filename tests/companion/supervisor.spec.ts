@@ -259,7 +259,8 @@ describe('CompanionSupervisor', () => {
     h.supervisor.start()
     await waitFor(() => h.supervisor.state() === 'failed', 'failed')
     expect(h.supervisor.restartsExhausted()).toBe(true)
-    expect(h.supervisor.error()).toEqual({ code: 'promptx/companion/exited', detail: 'code 3' })
+    // exit-early 以 3 退出，正是小程序界面反复崩溃时用的退出码，配置页据此显示「小窗界面反复崩溃」（审查 CR-03）。
+    expect(h.supervisor.error()).toEqual({ code: 'promptx/companion/renderer-gone', detail: 'code 3' })
     h.args = ['--mode=normal']
     await h.supervisor.restart()
     await waitFor(() => h.supervisor.state() === 'running', 'running after restart')
@@ -565,5 +566,46 @@ describe('CompanionSupervisor', () => {
     h.supervisor.start()
     await waitFor(() => h.supervisor.state() === 'running' && h.spawned.length === 2, 'started again')
     expect(h.supervisor.restartsExhausted()).toBe(false)
+  })
+
+  // 审查 H2：配置页的「重启」和插件卸载撞在一起时，重启不能在卸载之后又拉起一个进程。
+  it('does not relaunch after close() when a restart was waiting for the same stop', async () => {
+    const h = createHarness(['--mode=normal'])
+    h.supervisor.start()
+    await waitFor(() => h.supervisor.state() === 'running', 'running')
+    const restarting = h.supervisor.restart()
+    const closing = h.supervisor.close('host-closing')
+    await Promise.all([restarting, closing])
+    await sleep(300)
+    expect(h.launches).toBe(1)
+    expect(h.supervisor.state()).toBe('stopped')
+    expect(h.spawned.every(pid => !pidAlive(pid))).toBe(true)
+    h.supervisor.start()
+    await h.supervisor.restart()
+    await sleep(200)
+    expect(h.launches).toBe(1)
+  })
+
+  it('lets a later stop() win over a restart that is still stopping', async () => {
+    const h = createHarness(['--mode=normal'])
+    h.supervisor.start()
+    await waitFor(() => h.supervisor.state() === 'running', 'running')
+    const restarting = h.supervisor.restart()
+    const stopping = h.supervisor.stop('runtime-delete')
+    await Promise.all([restarting, stopping])
+    await sleep(300)
+    expect(h.launches).toBe(1)
+    expect(h.supervisor.state()).toBe('stopped')
+    // 不是 close：之后照常可以再启动。
+    h.supervisor.start()
+    await waitFor(() => h.supervisor.state() === 'running' && h.launches === 2, 'started again')
+  })
+
+  it('still restarts when nothing else asked to stop', async () => {
+    const h = createHarness(['--mode=normal'])
+    h.supervisor.start()
+    await waitFor(() => h.supervisor.state() === 'running', 'running')
+    await h.supervisor.restart()
+    await waitFor(() => h.supervisor.state() === 'running' && h.launches === 2, 'running after restart')
   })
 })
