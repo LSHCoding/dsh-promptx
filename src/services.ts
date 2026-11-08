@@ -33,7 +33,10 @@ export type HostLogger = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 // ───────────────────────────── 库（src/library/service.ts） ─────────────────────────────
 
 export interface LibraryServiceOptions {
-  /** 当前库目录的绝对路径（配置变了会返回新值）。 */
+  /**
+   * 当前库目录（配置变了会返回新值），正常是绝对路径。手改补丁文件写进去的相对路径不按当前目录解析、原样传进来，
+   * 库服务据此报 library-dir-relative（审查 H5）。
+   */
   getRoot: () => string
   /** 新建 Prompt 提取不到标题时用的占位标题（按界面语言）。 */
   untitledTitle: () => string
