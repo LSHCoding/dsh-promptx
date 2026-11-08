@@ -37,8 +37,17 @@ if (!MODES.has(mode)) {
   process.exit(2)
 }
 
+// close-stdout 模式自己关掉 stdout 之后不再写（send 看这个标记）。
+let stdoutClosed = false
+
 // Host 关掉管道后再写会 EPIPE：直接退出，不要让异常把测试输出弄乱。
-process.stdout.on('error', () => process.exit(0))
+// close-stdout 模式例外：它测的是「stdout 关了但进程还活着」，要等 Host 来结束它。Linux 上紧挨着关 stdout 发出的
+// ping 回复可能以 EPIPE 失败，这时退出的话 Host 看到的是正常退出（exited），测不到它要测的情形（偶发失败，
+// 在 Linux 容器里 40 次约 1 到 6 次）。
+process.stdout.on('error', () => {
+  if (mode === 'close-stdout') return
+  process.exit(0)
+})
 process.stderr.on('error', () => {})
 
 let nextId = 1
@@ -47,7 +56,7 @@ const pingDelay = Number(options.get('ping-delay') ?? 0)
 let pingsInFlight = 0
 
 function send(message) {
-  if (!process.stdout.writable) return
+  if (stdoutClosed || !process.stdout.writable) return
   process.stdout.write(`${JSON.stringify(message)}\n`)
 }
 
@@ -157,6 +166,7 @@ async function main() {
   if (mode === 'crash-after-ready') setTimeout(() => process.exit(1), 50)
   if (mode === 'close-stdout') {
     setTimeout(() => {
+      stdoutClosed = true
       process.stdout.end()
     }, 50)
   }
