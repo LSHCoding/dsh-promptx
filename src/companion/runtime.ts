@@ -397,6 +397,14 @@ export class RuntimeManager implements RuntimeApi {
     run().then(
       (install) => {
         if (this.#task === task) this.#task = null
+        // 审查 H2：#obtain 里每个 await（检查是否已装好、清理、放锁）期间任务都可能被中止（dispose()、remove()、
+        // 调用方都放弃了），它照样会把找到或刚装好的版本返回出来，卸载后的插件就会拿它启动 Electron，
+        // remove() 也正要删掉它。所以在交出结果的这一处统一再看一次中止信号，覆盖 #obtain 的所有返回路径。
+        // 状态不改回 missing：版本确实装好了，配置页照实显示。
+        if (controller.signal.aborted) {
+          reject(abortError(controller.signal))
+          return
+        }
         resolve(install)
       },
       (error: unknown) => {

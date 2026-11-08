@@ -1126,6 +1126,43 @@ describe('RuntimeManager cancellation', () => {
     expect(await exists(join(root, INSTALL))).toBe(false)
   })
 
+  // 审查 H2：任务中止之后，找到或刚装好的版本不能再交出去，否则卸载后的插件还会拿它启动 Electron。
+  it('does not hand out an installed runtime when disposed during the install check', async () => {
+    const root = await newRoot()
+    await fakeInstall(root, INSTALL)
+    const manager = createManager(root, null)
+    // ensure() 同步跑到检查安装的第一个 await 才返回：这时卸载，检查随后照样会找到装好的版本。
+    const pending = manager.ensure()
+    manager.dispose()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError', message: 'disposed' })
+    // 装好的版本原样留着，状态也照实是 ready。
+    expect(manager.status().state).toBe('ready')
+    expect(await exists(join(root, INSTALL, '.ready'))).toBe(true)
+  })
+
+  it('does not hand out an installed runtime that remove() is about to delete', async () => {
+    const root = await newRoot()
+    await fakeInstall(root, INSTALL)
+    const manager = createManager(root, null)
+    const pending = manager.ensure().catch((error: unknown) => error)
+    const result = await manager.remove()
+    expect(result.removed).toEqual([VERSION])
+    expect(await pending).toMatchObject({ name: 'AbortError', message: 'the runtime is being removed' })
+  })
+
+  it('does not hand out a freshly installed runtime when disposed before the task settles', async () => {
+    const root = await newRoot()
+    const server = await startServer({ mirror: serve() })
+    const manager = createManager(root, server)
+    // 刚装好、状态变成 ready 的那一刻卸载：之后 #obtain 还要清理、放锁才返回。
+    manager.onChange((status) => {
+      if (status.state === 'ready') manager.dispose()
+    })
+    await expect(manager.ensure()).rejects.toMatchObject({ name: 'AbortError', message: 'disposed' })
+    expect(await exists(join(root, INSTALL, '.ready'))).toBe(true)
+    expect(await exists(join(root, '.lock'))).toBe(false)
+  })
+
   it('aborts while waiting for another process\'s lock', async () => {
     const root = await newRoot()
     await writeLock(root, liveProcess(), 0)
