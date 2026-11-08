@@ -106,7 +106,9 @@ export class AppController {
     this.saver = new LibrarySave(this.ctx, this.draft, this.toasts, this.dialogs, () => {
       if (this.store.getState().library.open) runTask(this.library.refresh(false))
     })
-    this.library = new Library(this.ctx, this.draft, this.toasts, this.dialogs, this.saver, this.layout)
+    this.library = new Library(this.ctx, this.draft, this.toasts, this.dialogs, this.saver, this.layout, () => {
+      this.requestFocus('search')
+    })
     this.optimize = new Optimize(this.ctx, this.toasts, this.dialogs, this.layout, () => {
       this.focusFollowupIfIdle()
     })

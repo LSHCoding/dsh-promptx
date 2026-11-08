@@ -163,6 +163,30 @@ describe('工具栏（需求 5.3、S-02）', () => {
     expect(library.getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('点「库」展开侧栏时焦点进搜索框，再点收起时焦点回到编辑区（需求 4.3 第 1 步，审查 CR-06）', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.list', () => ok(listResult([entry('a.md')])))
+    await mountApp(bridge)
+    editorContent().focus()
+    const library = within(toolbar()).getByRole('button', { name: '库' })
+    // 和真实点击一样先按下：工具栏按钮按下时不抢编辑区的焦点（keepFocus）。
+    fireEvent.mouseDown(library)
+    await act(async () => {
+      fireEvent.click(library)
+      await settle()
+    })
+    const search = screen.getByRole('searchbox', { name: '搜索 Prompt' })
+    expect(document.activeElement).toBe(search)
+
+    fireEvent.mouseDown(library)
+    await act(async () => {
+      fireEvent.click(library)
+      await settle()
+    })
+    expect(screen.queryByRole('searchbox')).toBeNull()
+    expect(document.activeElement).toBe(editorContent())
+  })
+
   it('有会话时出现「会话」；进行中「优化」变成「停止」', async () => {
     const bridge = new FakeBridge()
     bridge.handle('optimize.state', () => ok({ session: session('s1', [round('r1')]) }))

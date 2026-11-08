@@ -37,6 +37,8 @@ export class Library {
     private readonly dialogs: Dialogs,
     private readonly saver: LibrarySave,
     private readonly layout: PaneLayout,
+    /** 把焦点交给搜索框（和 ⌘L 同一个焦点请求）。 */
+    private readonly focusSearch: () => void,
   ) {}
 
   get state(): LibrarySlice {
@@ -61,9 +63,20 @@ export class Library {
     if (hadFocus || nothingFocused()) this.ctx.editor.focus()
   }
 
+  /**
+   * 工具栏「库」。展开时和 ⌘L 一样把焦点放进搜索框（需求 4.3 第 1 步「侧栏展开，焦点在搜索框」，审查 CR-06）：
+   * 按钮带 keepFocus，点下去焦点留在编辑区，不交出去的话用户接着打的搜索词会打进草稿。侧栏一出现就交，不等列表重读完。
+   * 收起时焦点照旧由 close() 交回编辑区。
+   */
   async toggle(): Promise<void> {
     this.toasts.beginAction()
-    await (this.state.open ? this.close() : this.open())
+    if (this.state.open) {
+      await this.close()
+      return
+    }
+    await this.layout.open('library')
+    this.focusSearch()
+    await this.reload()
   }
 
   /** 列表或回收站，按当前视图刷新并重读磁盘。 */

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { undo } from '@codemirror/commands'
 import { DEFAULT_PREFS, type BridgeResult } from '../../../src/shared/bridge.ts'
-import type { LibraryReadResult, MetaResult } from '../../../src/shared/types.ts'
+import type { LibraryListResult, LibraryReadResult, MetaResult } from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import {
   binding,
@@ -71,6 +71,25 @@ describe('展开与收起（L-01、L-02）', () => {
     expect(bridge.storedPrefs.panes.library).toBe(false)
     await controller.library.toggle()
     expect(bridge.callsTo('library.list').filter(params => params.refresh)).toHaveLength(2)
+  })
+
+  it('工具栏「库」展开时和 ⌘L 一样请求把焦点放进搜索框，收起时不再请求（需求 4.3 第 1 步，审查 CR-06）', async () => {
+    const bridge = libraryBridge()
+    const list: Deferred<BridgeResult<LibraryListResult>> = deferred()
+    bridge.handle('library.list', () => list.promise)
+    const controller = await start(bridge)
+    expect(controller.store.getState().focus).toBeNull()
+    const opening = controller.library.toggle()
+    await settle()
+    // 侧栏一出现就交焦点，不等列表重读完。
+    expect(controller.store.getState().library.open).toBe(true)
+    expect(controller.store.getState().focus?.target).toBe('search')
+    list.resolve(ok(listResult([REVIEW])))
+    await opening
+    const request = controller.store.getState().focus
+    await controller.library.toggle()
+    expect(controller.store.getState().library.open).toBe(false)
+    expect(controller.store.getState().focus).toBe(request)
   })
 
   it('启动时按偏好恢复侧栏、文件夹、筛选和标签', async () => {
