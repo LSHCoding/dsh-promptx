@@ -79,6 +79,16 @@ describe('复制并隐藏（F-03）', () => {
     expect(bridge.window.hide).not.toHaveBeenCalled()
   })
 
+  it('剪贴板读回不一致：提示自己的原因，不露出 read-back mismatch（审查 CR-04）', async () => {
+    const bridge = new FakeBridge()
+    bridge.window.copyAndHide.mockResolvedValueOnce(fail('promptx/clipboard/write-failed', 'read-back mismatch'))
+    const controller = await start(bridge)
+    type(controller, '内容')
+    expect((await controller.copyAndHide()).ok).toBe(false)
+    // 修复前：「复制失败：写入剪贴板失败（read-back mismatch）」。
+    expect(toastText(controller)).toBe('复制失败：剪贴板里读回的内容和要复制的不一致，可能被剪贴板工具改写了')
+  })
+
   it('⌘↩ 触发复制并隐藏；Windows 上是 Ctrl+Enter', async () => {
     const mac = new FakeBridge('darwin')
     const controller = await start(mac)
@@ -339,9 +349,18 @@ describe('设置', () => {
     expect(bridge.window.openSettings).toHaveBeenCalledTimes(1)
     expect(toastText(controller)).toBe('已在 dsh 页面打开 PromptX 设置。')
 
+    // 认不出原因时只说一遍「无法打开插件配置」，不再是「无法打开插件配置：无法打开插件配置」（审查 CR-04）。
     bridge.window.openSettings.mockResolvedValueOnce(fail('promptx/settings/unavailable'))
     await controller.openSettings()
-    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '无法打开插件配置：无法打开插件配置' })
+    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '无法打开插件配置' })
+    // 主进程拒绝打开的地址：说原因，不露出 unsupported url 这种机器写法。
+    bridge.window.openSettings.mockResolvedValueOnce(fail('promptx/settings/unavailable', 'unsupported url'))
+    await controller.openSettings()
+    expect(toastText(controller)).toBe('无法打开插件配置：插件给出的配置页地址无法交给系统打开')
+    // 别的错误码照常填进原因。
+    bridge.window.openSettings.mockResolvedValueOnce(fail('promptx/channel/closed'))
+    await controller.openSettings()
+    expect(toastText(controller)).toBe('无法打开插件配置：与插件的连接已断开')
   })
 })
 
@@ -412,6 +431,10 @@ describe('读取失败的原因', () => {
     bridge.handle('library.read', () => fail('promptx/library/unreadable', 'EIO: i/o error'))
     await controller.library.copyBody('big.md')
     expect(toastText(controller)).toBe('读取失败：磁盘读写出错')
+    // 库目录在列出之后变得不可用（配置被手改）：说明位置限制，不露出 library-dir-skills（审查 CR-04）。
+    bridge.handle('library.read', () => fail('promptx/library/unavailable', 'library-dir-skills'))
+    await controller.library.copyBody('big.md')
+    expect(toastText(controller)).toBe('读取失败：库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取')
   })
 })
 

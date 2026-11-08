@@ -109,6 +109,15 @@ describe('草稿载入（F-01）', () => {
     await mountApp(bridge)
     expect(screen.getByRole('alert').textContent).toContain('草稿读取失败：草稿记录无法读取')
     expect(editorContent().getAttribute('contenteditable')).toBe('false')
+    // 存储层的错误代码说成原因（审查 CR-04）：修复前是「草稿记录无法读取（malformed-medium）」。
+    bridge.handle('draft.load', () => fail('promptx/draft/unreadable', 'malformed-medium'))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '重试' }))
+      await settle()
+    })
+    expect(screen.getByRole('alert').textContent).toContain('草稿读取失败：草稿文件已损坏')
+    expect(screen.getByRole('alert').textContent).not.toContain('malformed-medium')
+    bridge.handle('draft.load', () => ok({ record: draftRecord('恢复了') }))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '重试' }))
       await settle()
@@ -328,6 +337,34 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(editorContent().getAttribute('contenteditable')).toBe('true')
   })
 
+  it('库目录不可用：位置限制说成可读的原因，「库目录不可用」只出现一次（审查 CR-04）', async () => {
+    const bridge = new FakeBridge()
+    let detail: string | undefined = 'library-dir-skills'
+    bridge.handle('library.list', () => ok(listResult([], {
+      state: 'unavailable',
+      error: detail === undefined ? { code: 'promptx/library/unavailable' } : { code: 'promptx/library/unavailable', detail },
+    })))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    const alert = (): string => screen.getByText(/^库目录不可用/).textContent ?? ''
+    // 修复前：「库目录不可用：库目录不可用（library-dir-skills）」。
+    expect(alert()).toBe('库目录不可用：库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取')
+    detail = 'library-dir-relative'
+    await act(async () => {
+      await controller.library.refresh(true)
+    })
+    expect(alert()).toBe('库目录不可用：库目录要写绝对路径，或以 ~ 开头')
+    // 没有原因时只说一遍，不是「库目录不可用：库目录不可用」。
+    detail = undefined
+    await act(async () => {
+      await controller.library.refresh(true)
+    })
+    expect(alert()).toBe('库目录不可用')
+    expect(document.body.textContent).not.toContain('library-dir')
+  })
+
   it('列表行：标题、星标（有无障碍文字）、相对时间和最多两个标签、标记；悬停时的三个操作', async () => {
     const now = Date.now()
     const bridge = new FakeBridge()
@@ -391,6 +428,29 @@ describe('库侧栏（L-02 至 L-11）', () => {
       await settle()
     })
     expect(controller.editor.getText()).toBe('# 写作助手\n\n要求')
+  })
+
+  it('预览读取失败：文件过大说成原因；库目录变得不可用时说明位置限制，前缀只说一遍（审查 CR-04）', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.list', () => ok(listResult([entry('a.md'), entry('b.md')])))
+    bridge.handle('library.read', params => (params.relPath === 'a.md'
+      ? fail('promptx/library/unreadable', 'too-large')
+      : fail('promptx/library/unavailable', 'library-dir-reserved')))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    const previewError = (): string | null | undefined => document.querySelector('.px-preview-error')?.textContent
+    await act(async () => {
+      fireEvent.click(rows()[0] as HTMLElement)
+      await settle()
+    })
+    expect(previewError()).toBe('文件超过 2 MiB，无法打开')
+    await act(async () => {
+      fireEvent.click(rows()[1] as HTMLElement)
+      await settle()
+    })
+    expect(previewError()).toBe('库目录不可用：库目录不能放在 dsh 的数据目录里（默认的 promptx/library 除外）')
   })
 
   it('回收站视图：隐藏分段筛选和标签下拉，搜索框照常可用；行显示「N 天前删除」和原来所在的文件夹', async () => {

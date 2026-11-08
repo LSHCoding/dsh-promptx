@@ -8,7 +8,7 @@ import type { EntryMeta, FolderSel, LibraryListResult, LibraryScope, MetaPatch, 
 import { insertSnippet } from '../editor/commands.ts'
 import { focusWithin, nothingFocused } from '../focus.ts'
 import type { LibrarySlice } from '../state/state.ts'
-import { dialogButton, readReason, reason, runTask, text, type Context } from './context.ts'
+import { dialogButton, reason, runTask, text, type Context } from './context.ts'
 import type { Dialogs } from './dialogs.ts'
 import type { Draft } from './draft.ts'
 import type { PaneLayout } from './layout.ts'
@@ -208,7 +208,7 @@ export class Library {
     // 读取期间换了选中项、收起了侧栏（包括为会话栏腾地方被收起）或隐藏了小窗：这次插入作废（L-06）。
     if (token !== this.insertToken || !this.state.open || this.state.selected !== relPath) return
     if (!result.ok) {
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, result.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     const title = result.value.entry.title
@@ -268,7 +268,7 @@ export class Library {
     if (token !== this.openToken) return
     if (!result.ok) {
       // 读取失败：提示原因，草稿和绑定都不变（L-07）。
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, result.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     // 整篇替换并清空撤销记录（E-01），进入绑定状态。
@@ -382,7 +382,7 @@ export class Library {
     this.toasts.beginAction()
     const result = await this.ctx.bridge.call('library.read', { relPath })
     if (!result.ok) {
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, result.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     // 只写剪贴板，小窗不隐藏，草稿不变。

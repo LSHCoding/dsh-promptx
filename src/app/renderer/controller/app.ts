@@ -13,7 +13,7 @@ import { focusWithin, nothingFocused } from '../focus.ts'
 import { matchWindowCommand } from '../shortcuts.ts'
 import { initialState, type AppState, type DialogResult, type FocusRequest, type MenuState, type PaneSizes } from '../state/state.ts'
 import { createStore, type Store } from '../state/store.ts'
-import { reason, runTask, text, type Context } from './context.ts'
+import { failure, reason, runTask, text, type Context } from './context.ts'
 import { Dialogs } from './dialogs.ts'
 import { Draft } from './draft.ts'
 import { PaneLayout } from './layout.ts'
@@ -309,7 +309,8 @@ export class AppController {
     this.draft.flushSoon()
     const result = await this.bridge.window.openSettings()
     if (!result.ok) {
-      this.toasts.error(text(this.ctx, 'toast.settingsFailed', { reason: reason(this.ctx, result.error) }))
+      // 「无法打开插件配置：{原因}」的前缀就是 settings/unavailable 自己的文案，认不出原因时不再说两遍（审查 CR-04）。
+      this.toasts.error(failure(this.ctx, 'toast.settingsFailed', 'promptx/settings/unavailable', result.error))
       return
     }
     if (result.value.navigated) this.toasts.success(text(this.ctx, 'toast.settingsOpened'))

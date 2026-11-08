@@ -269,4 +269,20 @@ export const en: Record<keyof typeof zh, string> = {
   'errno.ENAMETOOLONG': 'the file name is too long',
   'errno.EMFILE': 'too many open files',
   'errno.EIO': 'disk read or write error',
+  'errno.EFBIG': 'the file is too large',
+
+  // ───────── 原因代码 ─────────
+  'detail.library-dir-relative': 'use an absolute path, or one starting with ~',
+  'detail.library-dir-reserved': 'the library cannot be inside the dsh data folder, except the default promptx/library',
+  'detail.library-dir-skills': 'the library cannot be inside a dsh skills folder, or its prompts would be read as skills',
+  'detail.read-back-mismatch': 'the clipboard didn\'t keep the copied text; a clipboard tool may have changed it',
+  'detail.lock-timeout': 'the trash record is locked; try again later',
+  'detail.unsupported-url': 'the settings address from the plugin can\'t be opened by the system',
+  'detail.draft.malformed-medium': 'the draft file is damaged',
+  'detail.draft.version-mismatch': 'the draft file was written by an unsupported version',
+  'detail.draft.invalid-record': 'the draft record isn\'t in the expected format',
+  'detail.draft.already-open': 'the draft storage is still in use; try again in a moment',
+  'detail.draft.unknown-state': 'the draft storage is in an unknown state',
+  'detail.draft.closed': 'the plugin is shutting down',
+  'detail.draft.not-loaded': 'the draft hasn\'t been loaded yet',
 }
