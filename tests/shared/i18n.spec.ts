@@ -255,6 +255,11 @@ describe('插件写在 detail 里的原因代码（审查 CR-04）', () => {
     expect(errorReason('zh', { code: 'promptx/library/unreadable', detail: 'not-utf8' })).toBe('文件不是 UTF-8 编码，无法打开')
     expect(errorReason('zh', { code: 'promptx/library/unreadable', detail: 'read-failed' })).toBe('文件读取失败')
     expect(errorReason('zh', { code: 'promptx/library/write-failed', detail: 'EFBIG: file too large' })).toBe('文件太大')
+    // 外部审查第 4 条：回收站记录满了，删除回滚，要告诉用户怎么办（D32）
+    expect(errorReason('zh', { code: 'promptx/trash/record-failed', detail: 'trash-record-full' }))
+      .toBe('回收站里的文件太多，记录已满，请先手动清理库目录里的 _trash 文件夹')
+    expect(errorReason('en', { code: 'promptx/trash/record-failed', detail: 'trash-record-full' }))
+      .toBe('the trash holds too many files for its record; clean up the _trash folder in the library first')
   })
 
   it('草稿错误里的存储层代码说成原因（编辑区「草稿读取失败」、底栏「草稿保存失败」）', () => {

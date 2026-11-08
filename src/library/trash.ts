@@ -6,6 +6,7 @@
 import type { Stats } from 'node:fs'
 import { lstat, rename } from 'node:fs/promises'
 import { join } from 'node:path'
+import { PromptxError } from '../shared/errors.ts'
 import { formatIsoUtc } from '../shared/library-rules.ts'
 import { errnoCode, moveNoClobber, nameKey, readRegularFile, replaceFile, sha256Hex } from './fs-safe.ts'
 import type { FileRead, FsOptions } from './fs-safe.ts'
@@ -21,10 +22,22 @@ export const RECORD_VERSION = 1
 export const MAX_RECORD_BYTES = 4 * 1024 * 1024
 
 /**
- * 记录项里 file、originalPath 的长度上限（UTF-16 码元）。文件名最多 255 字节，正常的路径到不了这个长度；
- * 超长的值在任何校验之前就丢掉，校验的代价不随攻击者写进记录的长度增长（审查 SEC-02）。
+ * 记录项里 file、originalPath 的长度上限（UTF-16 码元）。超长的值在任何校验之前就丢掉，校验的代价不随攻击者写进记录的长度增长
+ * （审查 SEC-02；逐项的校验都是线性的）。取 Linux 的 PATH_MAX 4096：macOS、Linux 上相对路径的码元数不超过它的字节数，
+ * 插件能打开的文件，删除时写进记录的原路径读回来都还在。原来的 1024 在 Linux 上会让文件夹很深的文件删除后变成「原位置未知」，
+ * 写的时候照常写、读的时候整项丢掉（外部审查复核）。
  */
-export const MAX_RECORD_PATH_CHARS = 1024
+export const MAX_RECORD_PATH_CHARS = 4096
+
+/**
+ * Windows 上的同一个上限。Node 在 Windows 上用 `\\?\` 长路径，相对路径最长能到 32,767 个码元，插件能列出、能删除的文件
+ * 都在这个范围里；按 4096 读，文件夹极深的文件删除后同样会变成「原位置未知」。整份记录仍受 MAX_RECORD_BYTES 限制，
+ * 逐项校验是线性的（外部审查第二轮复核）。
+ */
+export const WINDOWS_MAX_RECORD_PATH_CHARS = 32_767
+
+/** 记录再写就超过 MAX_RECORD_BYTES 时报的原因代码（promptx/trash/record-failed 的 detail）。 */
+export const RECORD_FULL = 'trash-record-full'
 
 /**
  * 回收站记录锁的目标路径（withFileLock 会再加上 `.lock`）：`<lockDir>/trash-<回收站目录 realpath 的 SHA-256 前 16 位>`。
@@ -76,7 +89,8 @@ function parseItem(value: unknown, platform: NodeJS.Platform): TrashItem | null 
   if (!isObject(value)) return null
   const { file, originalPath, deletedAt, sha256, size } = value
   if (typeof file !== 'string' || typeof originalPath !== 'string') return null
-  if (file.length > MAX_RECORD_PATH_CHARS || originalPath.length > MAX_RECORD_PATH_CHARS) return null
+  const maxChars = platform === 'win32' ? WINDOWS_MAX_RECORD_PATH_CHARS : MAX_RECORD_PATH_CHARS
+  if (file.length > maxChars || originalPath.length > maxChars) return null
   if (!isTrashFileName(file, platform)) return null
   // 原路径和小程序传来的路径同样校验：`../` 之类的值不能把恢复的文件带到库目录之外
   const original = promptRelPath(originalPath, platform)
@@ -142,7 +156,11 @@ export async function readTrashRecord(trashDir: string, platform: NodeJS.Platfor
   return { state: 'ok', items, mentioned }
 }
 
-/** 原子写入整份记录（临时文件 + fsync + rename）。只写合格的项：不合格、陈旧的项借这次写入清掉。 */
+/**
+ * 原子写入整份记录（临时文件 + fsync + rename）。只写合格的项：不合格、陈旧的项借这次写入清掉。
+ * 写出来超过 MAX_RECORD_BYTES 时不写，抛 promptx/trash/record-failed（RECORD_FULL），原来的记录不动（外部审查第 4 条）：
+ * 超过上限的记录下次读取时整份按读不出来处理，所有项都变成「原位置未知」，下一次删除还会把它改名移开。
+ */
 export async function writeTrashRecord(trashDir: string, items: Iterable<TrashItem>, options: FsOptions = {}): Promise<void> {
   const list = [...items].map(item => ({
     file: item.file,
@@ -151,9 +169,10 @@ export async function writeTrashRecord(trashDir: string, items: Iterable<TrashIt
     sha256: item.sha256,
     size: item.size,
   }))
-  const text = `${JSON.stringify({ version: RECORD_VERSION, items: list }, null, 2)}\n`
+  const bytes = Buffer.from(`${JSON.stringify({ version: RECORD_VERSION, items: list }, null, 2)}\n`, 'utf8')
+  if (bytes.length > MAX_RECORD_BYTES) throw new PromptxError('promptx/trash/record-failed', RECORD_FULL)
   const ops = options.ops === undefined ? {} : { ops: options.ops }
-  await replaceFile(join(trashDir, RECORD_FILE), Buffer.from(text, 'utf8'), { ...ops, expected: null, mode: undefined })
+  await replaceFile(join(trashDir, RECORD_FILE), bytes, { ...ops, expected: null, mode: undefined })
 }
 
 function* brokenRecordNames(stamp: string): Generator<string, never, unknown> {

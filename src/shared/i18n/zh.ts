@@ -282,6 +282,7 @@ export const zh = {
   'detail.library-dir-skills': '库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取',
   'detail.read-back-mismatch': '剪贴板里读回的内容和要复制的不一致，可能被剪贴板工具改写了',
   'detail.lock-timeout': '回收站记录被锁住了，请稍后再试',
+  'detail.trash-record-full': '回收站里的文件太多，记录已满，请先手动清理库目录里的 _trash 文件夹',
   'detail.unsupported-url': '插件给出的配置页地址无法交给系统打开',
   // 草稿错误的 detail（dsh 存储层的错误代码），放进「草稿读取失败：{原因}」「草稿保存失败：{原因}」。
   'detail.draft.malformed-medium': '草稿文件已损坏',

@@ -2,7 +2,16 @@ import { execFileSync } from 'node:child_process'
 import { chmod, lstat, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { MAX_RECORD_BYTES, MAX_RECORD_PATH_CHARS, RECORD_FILE, readTrashRecord } from '../../src/library/trash.ts'
+import {
+  MAX_RECORD_BYTES,
+  MAX_RECORD_PATH_CHARS,
+  RECORD_FILE,
+  RECORD_FULL,
+  readTrashRecord,
+  writeTrashRecord,
+  WINDOWS_MAX_RECORD_PATH_CHARS,
+  type TrashItem,
+} from '../../src/library/trash.ts'
 import {
   NOW_STAMP,
   canTestPermissions,
@@ -34,6 +43,11 @@ async function readRecord(root: string): Promise<RecordShape> {
 
 async function trashFiles(root: string): Promise<string[]> {
   return (await readdir(join(root, '_trash'))).sort()
+}
+
+/** 一条格式合格的记录项（摘要对不对不影响这里的测试）。 */
+function item(file: string, originalPath: string): TrashItem {
+  return { file, originalPath, deletedAt: '2026-11-01T00:00:00Z', sha256: '0'.repeat(64), size: 1 }
 }
 
 describe('delete (L-11, 6.4)', () => {
@@ -339,6 +353,65 @@ describe('trash record problems (design-spec 7.3, S02)', () => {
     expect((await readRecord(root)).items.map(item => item.originalPath)).toEqual(['b.md'])
   })
 
+  // 外部审查第 4 条：读的时候超过 4 MiB 按读不出来处理，写的时候原来不查，一次正常删除就能把合格的记录写成读不出来，
+  // 所有项都变成「原位置未知」。现在写之前查，超过上限就不写，删除回滚。
+  it('refuses to write a record past the read limit and keeps the old one (external review 4)', async () => {
+    const root = await temp.make()
+    await mkdir(join(root, '_trash'), { recursive: true })
+    const before = [item('a.md', 'a.md')]
+    await writeTrashRecord(join(root, '_trash'), before)
+    const original = await readFile(join(root, '_trash', RECORD_FILE))
+    const longPath = `${'很长的文件夹'.repeat(150)}/x.md`
+    const tooMany = Array.from({ length: Math.ceil(MAX_RECORD_BYTES / longPath.length) }, (_, index) => item(`f${index}.md`, longPath))
+    await expect(writeTrashRecord(join(root, '_trash'), tooMany)).rejects.toMatchObject({ code: 'promptx/trash/record-failed', detail: RECORD_FULL })
+    expect(await readFile(join(root, '_trash', RECORD_FILE))).toEqual(original)
+  })
+
+  it('rolls a delete back when its record item would push the record past the limit (external review 4)', async () => {
+    const root = await temp.make()
+    const trashDir = join(root, '_trash')
+    // 一份读得出来、离上限只差约 100 字节的记录，每项的文件都真的在 `_trash/` 里
+    const segment = '很长的文件夹名'.repeat(11)
+    const longFolder = Array.from({ length: 12 }, (_, index) => `${segment}${index}`).join('/')
+    const items: TrashItem[] = []
+    const files: Record<string, string> = {}
+    const sizeOf = (list: TrashItem[]): number => Buffer.byteLength(`${JSON.stringify({ version: 1, items: list }, null, 2)}\n`)
+    const add = (originalPath: string): void => {
+      const file = `f${items.length}.md`
+      files[`_trash/${file}`] = `${items.length}\n`
+      items.push({ ...item(file, originalPath), sha256: sha256Of(`${items.length}\n`), size: `${items.length}\n`.length })
+    }
+    const perItem = sizeOf([item('f0.md', `${longFolder}/f0.md`)]) - sizeOf([])
+    // 先按估算一次加够（序号变长后每项会多几个字节，少加 3 项留出余量），再逐项补到只差两项的位置；整份序列化只做几次
+    const count = Math.floor(MAX_RECORD_BYTES / perItem) - 3
+    for (let index = 0; index < count; index++) add(`${longFolder}/f${index}.md`)
+    while (sizeOf(items) + 2 * perItem < MAX_RECORD_BYTES) add(`${longFolder}/f${items.length}.md`)
+    // 再用 3 字节的汉字路径补齐，让记录停在上限之下 100 到 102 字节。每个路径都要远在 MAX_RECORD_PATH_CHARS 之下，否则读的时候整项被丢掉：
+    // 剩余空间大于 3,000 字节时先补一项 500 个字的，剩下的用一项补完
+    for (;;) {
+      const room = MAX_RECORD_BYTES - 100 - sizeOf([...items, item(`f${items.length}.md`, 'p/.md')])
+      if (room <= 3000) {
+        add(`p/${'补'.repeat(Math.floor(room / 3))}.md`)
+        break
+      }
+      add(`p/${'补'.repeat(500)}.md`)
+    }
+    expect(sizeOf(items)).toBeLessThanOrEqual(MAX_RECORD_BYTES - 100)
+    expect(sizeOf(items)).toBeGreaterThan(MAX_RECORD_BYTES - 103)
+    await writeTree(root, { ...files, 'new.md': PROMPT })
+    await writeTrashRecord(trashDir, items)
+    // 比较摘要：4 MiB 的 Buffer 直接 toEqual 是逐字节的深比较，要好几秒
+    const record = sha256Of(await readFile(join(trashDir, RECORD_FILE)))
+    const trashBefore = await trashFiles(root)
+    await expect(makeService(root).delete('new.md')).rejects.toMatchObject({ code: 'promptx/trash/record-failed', detail: RECORD_FULL })
+    expect(await readText(root, 'new.md')).toBe(PROMPT)
+    expect(await trashFiles(root)).toEqual(trashBefore)
+    expect(sha256Of(await readFile(join(trashDir, RECORD_FILE)))).toBe(record)
+    const reread = await readTrashRecord(trashDir)
+    expect(reread.state).toBe('ok')
+    expect(reread.items.size).toBe(items.length)
+  })
+
   it('treats a record that is a named pipe or a symbolic link as unreadable without blocking or following it (POSIX)', async (ctx) => {
     if (process.platform === 'win32') ctx.skip()
     const root = await temp.make()
@@ -359,12 +432,41 @@ describe('trash record problems (design-spec 7.3, S02)', () => {
     expect(await readFile(join(outside, 'record.json'), 'utf8')).toBe(JSON.stringify({ version: 1, items: [] }))
   })
 
-  it('ignores record paths longer than 1,024 characters before validating them (review SEC-02)', async () => {
+  // 外部审查复核：读的时候丢掉超过上限的原路径，写的时候原来不查；上限原来是 1,024，Linux 上文件夹很深的文件删除后就成了「原位置未知」
+  it('reads back an original path longer than 1,024 characters that it wrote', async () => {
+    const root = await temp.make()
+    const trashDir = join(root, '_trash')
+    const deep = `${Array.from({ length: 6 }, (_, index) => `${'d'.repeat(180)}${index}`).join('/')}/note.md`
+    expect(deep.length).toBeGreaterThan(1024)
+    await writeTree(root, { '_trash/note.md': '# x\n' })
+    await writeTrashRecord(trashDir, [item('note.md', deep)])
+    expect((await readTrashRecord(trashDir)).items.get('note.md')?.originalPath).toBe(deep)
+  })
+
+  // 外部审查第二轮复核：Windows 上 Node 用 `\\?\` 长路径，插件能删的文件相对路径可以超过 4,096 个码元
+  it('reads back a Windows original path longer than 4,096 characters, and still drops one past 32,767', async () => {
+    const root = await temp.make()
+    const trashDir = join(root, '_trash')
+    const folders = (count: number): string => Array.from({ length: count }, (_, index) => `${'d'.repeat(250)}${index}`).join('/')
+    const deep = `${folders(17)}/note.md`
+    const tooDeep = `${folders(130)}/far.md`
+    expect(deep.length).toBeGreaterThan(MAX_RECORD_PATH_CHARS)
+    expect(tooDeep.length).toBeGreaterThan(WINDOWS_MAX_RECORD_PATH_CHARS)
+    await writeTree(root, { '_trash/note.md': '# x\n', '_trash/far.md': '# x\n' })
+    await writeTrashRecord(trashDir, [item('note.md', deep), item('far.md', tooDeep)])
+    const onWindows = await readTrashRecord(trashDir, 'win32')
+    expect(onWindows.items.get('note.md')?.originalPath).toBe(deep)
+    expect(onWindows.items.has('far.md')).toBe(false)
+    // macOS、Linux 上照旧按 4,096 算：本机打不开的外来路径恢复到库根目录
+    expect((await readTrashRecord(trashDir, 'linux')).items.has('note.md')).toBe(false)
+  })
+
+  it('ignores record paths longer than 4,096 characters before validating them (review SEC-02)', async () => {
     const root = await temp.make()
     const item = (file: string, originalPath: string): Record<string, unknown> =>
       ({ file, originalPath, deletedAt: '2026-11-01T00:00:00Z', sha256: sha256Of('# x\n'), size: 4 })
     // 除了长度，这个路径完全合格
-    const long = `${'a/'.repeat(600)}long.md`
+    const long = `${'a/'.repeat(2100)}long.md`
     expect(long.length).toBeGreaterThan(MAX_RECORD_PATH_CHARS)
     await writeTree(root, {
       [`_trash/${RECORD_FILE}`]: JSON.stringify({ version: 1, items: [item('long.md', long), item('fine.md', 'ok/fine.md')] }),

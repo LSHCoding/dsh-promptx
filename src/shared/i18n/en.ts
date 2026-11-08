@@ -280,6 +280,7 @@ export const en: Record<keyof typeof zh, string> = {
   'detail.library-dir-skills': 'the library cannot be inside a dsh skills folder, or its prompts would be read as skills',
   'detail.read-back-mismatch': 'the clipboard didn\'t keep the copied text; a clipboard tool may have changed it',
   'detail.lock-timeout': 'the trash record is locked; try again later',
+  'detail.trash-record-full': 'the trash holds too many files for its record; clean up the _trash folder in the library first',
   'detail.unsupported-url': 'the settings address from the plugin can\'t be opened by the system',
   'detail.draft.malformed-medium': 'the draft file is damaged',
   'detail.draft.version-mismatch': 'the draft file was written by an unsupported version',

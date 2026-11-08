@@ -95,6 +95,7 @@ export function errorMessage(locale: Locale, code: string): string {
  * - library-dir-*：库目录的位置限制（src/library/service.ts、src/web/config-update.ts），说法和配置页字段错误一致；
  * - read-back mismatch：剪贴板写完读回不一致（src/app/main/clipboard.ts）；
  * - lock-timeout：回收站记录的跨进程锁等不到（src/library/service.ts）；
+ * - trash-record-full：回收站记录再写一项就超过读取上限，这次删除已回滚（src/library/trash.ts）；
  * - unsupported url：插件给的配置页地址不能交给系统打开（src/app/main/settings.ts）；
  * - too-large、not-utf8、read-failed：文件无法打开的三种原因，和列表、预览里的说法相同。
  */
@@ -104,6 +105,7 @@ const DETAIL_KEYS: Readonly<Record<string, MessageKey>> = {
   'library-dir-skills': 'detail.library-dir-skills',
   'read-back mismatch': 'detail.read-back-mismatch',
   'lock-timeout': 'detail.lock-timeout',
+  'trash-record-full': 'detail.trash-record-full',
   'unsupported url': 'detail.unsupported-url',
   'too-large': 'library.unreadable.too-large',
   'not-utf8': 'library.unreadable.not-utf8',

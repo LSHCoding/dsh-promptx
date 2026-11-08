@@ -613,6 +613,8 @@ export class LibraryService implements LibraryApi {
         // 记录没写成（或者文件读不出来、算不了摘要）：把文件移回原处，库和回收站都回到删除前的样子。
         // 移不回去（原位置刚被占用）时文件留在回收站里，显示为「原位置未知」，仍然可以恢复，不会丢
         await moveNoClobber(movedAbs, dirname(located.abs), [name], this.#fsOptions()).catch(() => null)
+        // 业务错误（记录已满）原样传出，小窗按原因代码说明该怎么办
+        if (error instanceof PromptxError) throw error
         throw new PromptxError(writingRecord ? 'promptx/trash/record-failed' : 'promptx/library/move-failed', systemErrorDetail(error))
       }
       return moved
