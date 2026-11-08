@@ -247,6 +247,13 @@ export interface CompanionStatus {
   shortcut: ShortcutStatus | null
   tray: boolean
   visible: boolean
+  /**
+   * 小窗界面实际用的语言。dsh 没有语言偏好、也没有页面上报过时，小窗跟随系统语言，Host 看不到系统语言列表，
+   * 优化的默认指令和「未命名 Prompt」按这里的值取（需求 O-08，design-spec 4.7）。
+   */
+  locale: 'zh' | 'en'
+  /** 界面进程崩溃后正在重新加载时是 promptx/companion/renderer-gone（detail 是崩溃原因）；界面就绪后为 null（design-spec 5.4）。 */
+  rendererError: ErrorInfo | null
 }
 
 export type RuntimeState = 'unsupported' | 'missing' | 'downloading' | 'extracting' | 'ready' | 'failed'

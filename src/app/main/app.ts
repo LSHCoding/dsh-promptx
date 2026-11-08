@@ -155,6 +155,8 @@ export class CompanionApp {
   #requestedMinWidth = 0
   #pendingCommand: 'show' | 'hide' | 'toggle' | null = null
   #lastStatus: string | null = null
+  /** 界面进程崩溃后正在重新加载：随 status 报给 Host（design-spec 5.4，审查 CR-03）；界面重新就绪后清掉。 */
+  #rendererError: ErrorInfo | null = null
   #copyTiming: CopyTiming = { requestedAt: null, verifiedAt: null, hiddenAt: null }
   #visibilityEpoch = 0
   #hideTimer: ReturnType<typeof setTimeout> | null = null
@@ -441,6 +443,8 @@ export class CompanionApp {
     if (previous?.resolvedLocale !== next.resolvedLocale) {
       this.#shortcuts.refreshLocale()
       this.#scheduleTrayUpdate()
+      // Host 按小窗的语言选优化默认指令（审查 F5）。
+      this.#reportStatus()
     }
   }
 
@@ -461,13 +465,18 @@ export class CompanionApp {
     else controller.toggle('host')
   }
 
-  /** 状态有变化才通知 Host（快捷键、托盘、可见性），握手完成之前 Host 还不认这个连接。 */
+  /**
+   * 状态有变化才通知 Host（快捷键、托盘、可见性、语言、界面崩溃）。握手完成之前 Host 还不认这个连接；
+   * app ready 之前还没有托盘和快捷键，系统语言也不保证读得到，#boot 末尾会报第一次。
+   */
   #reportStatus(): void {
-    if (this.#handshakeState !== 'done' || this.#finalized) return
+    if (this.#handshakeState !== 'done' || !this.#booted || this.#finalized) return
     const status: CompanionStatus = {
       shortcut: this.#shortcuts.status(),
       tray: this.#tray !== null,
       visible: this.#window?.isVisible() ?? false,
+      locale: this.#locale(),
+      rendererError: this.#rendererError,
     }
     const key = JSON.stringify(status)
     if (key === this.#lastStatus) return
@@ -624,6 +633,10 @@ export class CompanionApp {
       if (decision !== 'reload') return
       // 重新加载期间界面没有草稿：flush 跳过，等界面重新报告就绪（草稿重新读回之前编辑区不可编辑，由界面保证）。
       this.#rendererReady = false
+      // 崩溃时开着的对话框随界面一起没了，界面不会再发 setModalOpen(false)：这里清掉，否则失焦隐藏一直不生效（审查 CR-02）。
+      this.#controller?.setModalOpen(false)
+      this.#rendererError = { code: 'promptx/companion/renderer-gone', detail: reason }
+      this.#reportStatus()
       this.#scheduleTrayUpdate()
       window.reload()
     })
@@ -707,6 +720,10 @@ export class CompanionApp {
     this.#rendererReady = true
     this.#readyInfo = info
     this.#health.recovered()
+    if (this.#rendererError !== null) {
+      this.#rendererError = null
+      this.#reportStatus()
+    }
     this.#logger.info('renderer.ready', {
       editorMounted: info.editorMounted,
       draftLoaded: info.draftLoaded,

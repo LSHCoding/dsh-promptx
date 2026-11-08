@@ -23,7 +23,8 @@ import type {
   TrashListResult,
 } from './types.ts'
 
-export const PROTOCOL_VERSION = 1
+// 2：status 加了 locale 和 rendererError（审查 F5、CR-03）。
+export const PROTOCOL_VERSION = 2
 
 type Empty = Record<string, never>
 
@@ -196,5 +197,8 @@ export const COMPANION_ENV = {
 
 /** 启动参数里的标记，便于在进程列表里认出小程序（`pkill -f -- '--promptx-companion='`）。Electron 和 Chromium 都忽略它。 */
 export const COMPANION_MARKER_ARG = '--promptx-companion'
+
+/** 小程序的退出码：界面进程 30 秒内第二次崩溃或卡死超过 10 秒。Host 据此报「小窗界面崩溃」（design-spec 5.4）。 */
+export const RENDERER_FATAL_EXIT_CODE = 3
 
 export type CompanionMode = 'normal' | 'smoke' | 'e2e'

@@ -18,8 +18,8 @@ export interface RendererHealthOptions {
 export const RENDERER_CRASH_WINDOW_MS = 30_000
 export const RENDERER_UNRESPONSIVE_LIMIT_MS = 10_000
 
-/** 退出码：渲染进程反复崩溃或卡死。Host 只看到「意外退出」，按重启策略处理。 */
-export const RENDERER_FATAL_EXIT_CODE = 3
+/** 退出码：渲染进程反复崩溃或卡死。Host 据此报「小窗界面崩溃」，再按重启策略处理。值在协议里定义，两端共用。 */
+export { RENDERER_FATAL_EXIT_CODE } from '../../shared/protocol.ts'
 
 export class RendererHealth {
   readonly #onFatal: (reason: FatalReason) => void

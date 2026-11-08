@@ -2,7 +2,7 @@
 // supervisor.spec.ts 用 process.execPath 启动它，用参数选择行为：
 //
 //   --mode=<模式>          见下面的 MODES
-//   --protocol=<n>         hello 里报的协议版本（默认 1）
+//   --protocol=<n>         hello 里报的协议版本（supervisor.spec.ts 默认传当前的 PROTOCOL_VERSION）
 //   --stderr-lines=<n>     启动时往 stderr 写 n 行
 //   --garbage              hello 之前先发几帧坏数据
 //   --notify-first         hello 之前先发一个 status 通知
@@ -81,7 +81,7 @@ async function onRequest(message) {
     case 'shutdown':
       if (mode === 'ignore-sigterm') return
       if (mode === 'draft-on-shutdown') {
-        notify('status', { shortcut: null, tray: false, visible: false })
+        notify('status', { shortcut: null, tray: false, visible: false, locale: 'en', rendererError: null })
         try {
           await request('draft.save', { text: 'draft written on shutdown', selection: null, binding: null })
         } catch {
@@ -142,7 +142,7 @@ async function main() {
     process.stdout.write('\n')
     process.stdout.write('{"jsonrpc":"2.0","method":\n')
   }
-  if (options.has('notify-first')) notify('status', { shortcut: null, tray: true, visible: false })
+  if (options.has('notify-first')) notify('status', { shortcut: null, tray: true, visible: false, locale: 'en', rendererError: null })
   if (mode === 'no-handshake') return
   if (mode === 'ignore-sigterm') process.on('SIGTERM', () => {})
   const protocol = mode === 'wrong-protocol' ? 999 : Number(options.get('protocol') ?? 1)

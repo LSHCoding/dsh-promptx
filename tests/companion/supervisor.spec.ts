@@ -7,6 +7,7 @@ import { pidAlive } from '../../src/companion/process-utils.ts'
 import { CompanionSupervisor, MAX_PENDING_WRITE_BYTES, STDERR_LINE_LIMIT } from '../../src/companion/supervisor.ts'
 import type { HostLogger, HostPeer, LaunchSpec, SupervisorOptions } from '../../src/services.ts'
 import { PromptxError } from '../../src/shared/errors.ts'
+import { PROTOCOL_VERSION } from '../../src/shared/protocol.ts'
 import type { CompanionConfig, CompanionState, ErrorInfo } from '../../src/shared/types.ts'
 import { failOnProcessProblems } from './process-traps.ts'
 
@@ -59,7 +60,9 @@ function childEnv(): Record<string, string> {
 }
 
 function mockSpec(args: string[]): LaunchSpec {
-  return { executable: process.execPath, args: [MOCK, ...args], env: childEnv() }
+  // 默认按当前协议版本握手；要模拟别的版本时测试自己传 --protocol。
+  const protocol = args.some(arg => arg.startsWith('--protocol=')) ? [] : [`--protocol=${PROTOCOL_VERSION}`]
+  return { executable: process.execPath, args: [MOCK, ...protocol, ...args], env: childEnv() }
 }
 
 function createHarness(args: string[], overrides: Partial<SupervisorOptions> = {}): Harness {
@@ -195,7 +198,7 @@ describe('CompanionSupervisor', () => {
     const h = createHarness(['--mode=wrong-protocol'])
     h.supervisor.start()
     await waitFor(() => h.supervisor.state() === 'failed', 'failed')
-    expect(h.supervisor.error()).toEqual({ code: 'promptx/companion/protocol-mismatch', detail: 'host 1, companion 999' })
+    expect(h.supervisor.error()).toEqual({ code: 'promptx/companion/protocol-mismatch', detail: `host ${PROTOCOL_VERSION}, companion 999` })
     expect(h.supervisor.restartsExhausted()).toBe(false)
     expect(h.ready).toHaveLength(0)
     // 小程序收到的错误码是 -32001，业务码是 protocol-mismatch。
@@ -488,7 +491,7 @@ describe('CompanionSupervisor', () => {
     h.supervisor.start()
     await waitFor(() => h.supervisor.state() === 'running', 'running')
     // 模拟小程序把收到的 hello 回复写到 stderr：协议版本由监管器补上，其余来自 helloResult()。
-    await waitFor(() => stderrLines(h).includes('hello ok: protocol=1 mode=normal host=0.1.0-test'), 'hello reply echo')
+    await waitFor(() => stderrLines(h).includes(`hello ok: protocol=${PROTOCOL_VERSION} mode=normal host=0.1.0-test`), 'hello reply echo')
     // hello 不经过 attach 注册的处理函数。
     expect(h.attached[0]!.handledMethods()).toEqual([])
   })

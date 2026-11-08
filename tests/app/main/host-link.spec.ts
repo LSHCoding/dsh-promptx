@@ -132,7 +132,7 @@ describe('HostLink', () => {
     const link = new HostLink({ input, output: slow, logger: new MemoryLogger(), onClose: () => {} })
     link.start()
     await link.whenWritten(10)
-    link.peer.notify('status', { shortcut: null, tray: true, visible: false })
+    link.peer.notify('status', { shortcut: null, tray: true, visible: false, locale: 'en', rendererError: null })
     let done = false
     const waiting = link.whenWritten(1000).then(() => {
       done = true
@@ -153,7 +153,7 @@ describe('HostLink', () => {
     })
     const link = new HostLink({ input: new PassThrough(), output: stuck, logger: new MemoryLogger(), onClose: () => {} })
     link.start()
-    link.peer.notify('status', { shortcut: null, tray: false, visible: false })
+    link.peer.notify('status', { shortcut: null, tray: false, visible: false, locale: 'en', rendererError: null })
     const started = Date.now()
     await link.whenWritten(30)
     expect(Date.now() - started).toBeGreaterThanOrEqual(25)

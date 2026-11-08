@@ -11,7 +11,7 @@ import { physicalShortcutKey, shortcutLockPath } from '../../../src/app/main/sho
 import type { ResolvedConfig } from '../../../src/shared/bridge.ts'
 import { PromptxError } from '../../../src/shared/errors.ts'
 import { initialWindowBounds } from '../../../src/shared/layout.ts'
-import { RPC_ERROR, type E2eResult, type HelloResult } from '../../../src/shared/protocol.ts'
+import { PROTOCOL_VERSION, RPC_ERROR, type E2eResult, type HelloResult } from '../../../src/shared/protocol.ts'
 import type { CompanionStatus } from '../../../src/shared/types.ts'
 import {
   BASE_CONFIG,
@@ -158,7 +158,7 @@ describe('startup order (design-spec 5.3, 5.4)', () => {
   it('sends hello right away, before app ready and before any window', async () => {
     const { host, platform, app } = start()
     await until(() => host.hello !== null, 2000, 'hello')
-    expect(host.hello).toEqual({ protocol: 1, appVersion: '0.1.0', electron: '44.10.2', platform: 'darwin', arch: 'arm64' })
+    expect(host.hello).toEqual({ protocol: PROTOCOL_VERSION, appVersion: '0.1.0', electron: '44.10.2', platform: 'darwin', arch: 'arm64' })
     expect(platform.windows).toHaveLength(0)
     expect(platform.calls).toEqual([])
     await until(() => app.mode !== null, 2000, 'hello reply')
@@ -175,7 +175,7 @@ describe('startup order (design-spec 5.3, 5.4)', () => {
     expect(platform.window.options).toEqual({ width: 980, height: 600, backgroundColor: '#ffffff' })
     expect([...platform.shortcuts.registered.keys()]).toEqual(['Control+P'])
     await until(() => statuses(host).some(status => status.shortcut?.registered === true), 2000, 'status')
-    expect(host.lastStatus()).toEqual({ shortcut: { accelerator: 'Control+P', registered: true }, tray: true, visible: false })
+    expect(host.lastStatus()).toEqual({ shortcut: { accelerator: 'Control+P', registered: true }, tray: true, visible: false, locale: 'en', rendererError: null })
     expect(platform.appearanceBeforeReady).toBe(false)
   })
 
@@ -198,7 +198,7 @@ describe('startup order (design-spec 5.3, 5.4)', () => {
   })
 
   it('exits with code 1 without a window when the Host speaks another protocol version', async () => {
-    const harness = start({ hello: { protocol: 2 } })
+    const harness = start({ hello: { protocol: PROTOCOL_VERSION + 1 } })
     await expect(harness.platform.exited).resolves.toBe(1)
     expect(harness.platform.windows).toHaveLength(0)
     expect(harness.logger.find('hello.failed')?.fields).toEqual({ error: 'promptx/companion/protocol-mismatch' })
@@ -669,6 +669,8 @@ describe('global shortcut coordination (TC-02, D22)', () => {
       },
       tray: true,
       visible: false,
+      locale: 'en',
+      rendererError: null,
     })
     expect(platform.shortcuts.registered.has('Command+Space')).toBe(true)
   })
