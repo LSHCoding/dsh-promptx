@@ -36,6 +36,16 @@ describe('library.read (L-05, L-07)', () => {
     expect(result.body).toBe('---\ntitle: never closed\n# Heading\n')
   })
 
+  it('returns the whole file when the front matter is closed but broken (L-01, L-05, review F1)', async () => {
+    const root = await temp.make()
+    const raw = '---\nYou are a helpful assistant.\n---\nUser: hi\n'
+    await writeTree(root, { 'chat.md': raw })
+    const result = await makeService(root).read('chat.md')
+    expect(result.body).toBe(raw)
+    expect(result.entry).toMatchObject({ status: 'invalid-meta', title: 'You are a helpful assistant.', hasFrontMatter: true, id: null, tags: [] })
+    expect(result.version).toEqual({ sha256: sha256Of(raw), size: Buffer.byteLength(raw) })
+  })
+
   it('reports missing files and a missing library as not-found', async () => {
     const root = await temp.make()
     await mkdir(join(root, 'dir.md'))

@@ -435,6 +435,19 @@ describe('trash list and preview', () => {
     await expect(service.trashRead(RECORD_FILE)).rejects.toMatchObject({ code: 'promptx/library/invalid-path' })
   })
 
+  it('previews a trashed file with a closed but broken front matter as a whole (review F1)', async () => {
+    const root = await temp.make()
+    const raw = '---\nYou are a helpful assistant.\n---\nUser: hi\n'
+    await writeTree(root, { 'chat.md': raw })
+    const service = makeService(root)
+    await service.delete('chat.md')
+    expect(await service.trashRead('chat.md')).toEqual({
+      entry: { file: 'chat.md', title: 'You are a helpful assistant.', deletedAt: Date.parse(NOW_STAMP), originalPath: 'chat.md' },
+      body: raw,
+    })
+    expect((await service.trashList('assistant')).entries.map(entry => entry.title)).toEqual(['You are a helpful assistant.'])
+  })
+
   it('returns an empty list when there is no trash yet', async () => {
     const root = await temp.make()
     expect(await makeService(root).trashList('')).toEqual({ recordState: 'missing', entries: [] })

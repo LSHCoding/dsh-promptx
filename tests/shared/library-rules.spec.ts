@@ -148,6 +148,14 @@ describe('displayTitle', () => {
     expect(displayTitle('', '  \n', '写作/评审/评审意见.MD')).toBe('评审意见')
     expect(displayTitle(undefined, '', 'README')).toBe('README')
   })
+
+  it('never shows a --- delimiter line as the title (review F1)', () => {
+    // front matter 写坏了时全文都是正文，第一行就是 `---`
+    expect(displayTitle(undefined, '---\nYou are a helpful assistant.\n---\nUser: hi\n', 'chat.md')).toBe('You are a helpful assistant.')
+    expect(displayTitle(undefined, '  ---\t\n\n---\nfirst', 'a.md')).toBe('first')
+    expect(displayTitle(undefined, '---\n---\n', 'only-dashes.md')).toBe('only-dashes')
+    expect(newPromptTitle('---\n---\n', '未命名 Prompt')).toBe('未命名 Prompt')
+  })
 })
 
 // 审查 SEC-01、SEC-02：标题、围栏、标签两端的处理原来是平方级回溯的正则，一行里几万个空白就要几秒，

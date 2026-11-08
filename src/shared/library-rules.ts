@@ -127,11 +127,14 @@ function firstHeading(lines: readonly string[]): string | null {
   return null
 }
 
-/** 第一行非空文字（去掉首尾空白）。只有 `#` 的空标题行跳过。 */
+/**
+ * 第一行非空文字（去掉首尾空白）。只有 `#` 的空标题行、只有 `---` 的分隔行跳过：front matter 写坏了时全文都是正文，
+ * 第一行就是 `---`，分隔行不会是有用的标题（审查 F1）。
+ */
 function firstTextLine(lines: readonly string[]): string | null {
   for (const line of lines) {
     const text = line.trim()
-    if (text !== '' && atxHeadingText(line) !== '') return text
+    if (text !== '' && text !== '---' && atxHeadingText(line) !== '') return text
   }
   return null
 }
