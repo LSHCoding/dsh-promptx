@@ -1,7 +1,15 @@
 // 各个界面逻辑模块共用的依赖：状态、预加载桥、编辑区，以及文案和异步任务的小工具。
 
 import type { PromptxBridge } from '../../../shared/bridge.ts'
-import { describeError, errorReason, translate, type Locale, type MessageKey, type MessageParams } from '../../../shared/i18n/index.ts'
+import {
+  describeError,
+  errorReason,
+  failureMessage,
+  translate,
+  type Locale,
+  type MessageKey,
+  type MessageParams,
+} from '../../../shared/i18n/index.ts'
 import type { ErrorInfo } from '../../../shared/types.ts'
 import type { EditorController } from '../editor/controller.ts'
 import type { AppState, DialogButton } from '../state/state.ts'
@@ -17,7 +25,10 @@ export function text(ctx: Context, key: MessageKey, params?: MessageParams): str
   return translate(ctx.store.getState().locale, key, params)
 }
 
-/** 放进「保存失败：{reason}」这类提示里的原因。 */
+/**
+ * 放进「保存失败：{reason}」这类提示里的原因。插件写在 detail 里的原因代码（例如「无法打开」的 too-large、not-utf8，
+ * 库目录的 library-dir-skills）由 errorReason 换成说法，不会原样出现在界面上（L-01、L-05，审查 CR-04）。
+ */
 export function reason(ctx: Context, error: ErrorInfo): string {
   return errorReason(ctx.store.getState().locale, error)
 }
@@ -26,22 +37,26 @@ export function describe(ctx: Context, error: ErrorInfo): string {
   return describeError(ctx.store.getState().locale, error)
 }
 
-const UNREADABLE_DETAILS = new Set(['too-large', 'not-utf8', 'read-failed'])
-
-/**
- * 读取库文件失败的原因。插件对「无法打开」的文件报 promptx/library/unreadable，detail 是 too-large、not-utf8
- * 或 read-failed 这样的机器写法，直接附在文案后面用户看不懂，换成列表里同样的说法（L-01、L-05）。
- */
-export function readFailure(locale: Locale, error: ErrorInfo): string {
-  const detail = error.detail ?? ''
-  if (error.code === 'promptx/library/unreadable' && UNREADABLE_DETAILS.has(detail)) {
-    return translate(locale, `library.unreadable.${detail as 'too-large' | 'not-utf8' | 'read-failed'}`)
-  }
-  return errorReason(locale, error)
+/** 前缀和错误码自己的文案是同一句话的整句提示（「无法打开插件配置：{原因}」），见 failureMessage。 */
+export function failure(ctx: Context, key: MessageKey, ownCode: string, error: ErrorInfo): string {
+  return failureMessage(ctx.store.getState().locale, key, ownCode, error)
 }
 
-export function readReason(ctx: Context, error: ErrorInfo): string {
-  return readFailure(ctx.store.getState().locale, error)
+const LIBRARY_UNAVAILABLE = 'promptx/library/unavailable'
+
+/** 库目录不可用的说明（L-01）：「库目录不可用：{原因}」；认不出原因时只显示错误本身，不把「库目录不可用」说两遍（审查 CR-04）。 */
+export function unavailableMessage(locale: Locale, error: ErrorInfo): string {
+  return failureMessage(locale, 'library.unavailable', LIBRARY_UNAVAILABLE, error)
+}
+
+/** 侧栏列表区显示的错误（库列表、回收站列表）：库目录不可用时同上，其余按完整说明。 */
+export function listErrorMessage(locale: Locale, error: ErrorInfo): string {
+  return error.code === LIBRARY_UNAVAILABLE ? unavailableMessage(locale, error) : describeError(locale, error)
+}
+
+/** 预览区显示的错误（库和回收站）：库目录不可用时同上，其余只说原因（「文件超过 2 MiB，无法打开」「没有权限」）。 */
+export function previewErrorMessage(locale: Locale, error: ErrorInfo): string {
+  return error.code === LIBRARY_UNAVAILABLE ? unavailableMessage(locale, error) : errorReason(locale, error)
 }
 
 export function dialogButton(ctx: Context, id: string, label: MessageKey, tone?: DialogButton['tone']): DialogButton {

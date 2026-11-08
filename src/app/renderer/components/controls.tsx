@@ -121,8 +121,8 @@ function MenuPopup({ anchor, items }: { anchor: MenuState['anchor']; items: Menu
 export interface DividerProps {
   orientation: 'vertical' | 'horizontal'
   label: string
-  /** 拖动开始时的尺寸。 */
-  value: number
+  /** 拖动开始时的尺寸。传函数时在按下的那一刻才算（例如预览区实际显示的高度）。 */
+  value: number | (() => number)
   /** 向左（向上）拖时尺寸变大：右边的会话栏、下方的预览区。 */
   invert?: boolean
   min?: number
@@ -145,7 +145,8 @@ export function Divider(props: DividerProps): ReactElement {
       onPointerDown={(event) => {
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
-        drag.current = { start: position(event), value: props.value, max: props.max?.() ?? Number.POSITIVE_INFINITY }
+        const value = typeof props.value === 'function' ? props.value() : props.value
+        drag.current = { start: position(event), value, max: props.max?.() ?? Number.POSITIVE_INFINITY }
       }}
       onPointerMove={(event) => {
         const state = drag.current

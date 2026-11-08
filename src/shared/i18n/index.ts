@@ -89,30 +89,87 @@ export function errorMessage(locale: Locale, code: string): string {
   return translate(locale, isMessageKey(key) ? key : 'error.promptx/internal')
 }
 
+/**
+ * 插件和小程序写在 detail 里的原因代码（不是系统错误名）→ 文案键（审查 CR-04）。这些机器写法原样附在文案后面用户看不懂，
+ * 还会出现「库目录不可用：库目录不可用（library-dir-skills）」这样的句子，换成一句说法。键是 detail 的原文：
+ * - library-dir-*：库目录的位置限制（src/library/service.ts、src/web/config-update.ts），说法和配置页字段错误一致；
+ * - read-back mismatch：剪贴板写完读回不一致（src/app/main/clipboard.ts）；
+ * - lock-timeout：回收站记录的跨进程锁等不到（src/library/service.ts）；
+ * - unsupported url：插件给的配置页地址不能交给系统打开（src/app/main/settings.ts）；
+ * - too-large、not-utf8、read-failed：文件无法打开的三种原因，和列表、预览里的说法相同。
+ */
+const DETAIL_KEYS: Readonly<Record<string, MessageKey>> = {
+  'library-dir-relative': 'detail.library-dir-relative',
+  'library-dir-reserved': 'detail.library-dir-reserved',
+  'library-dir-skills': 'detail.library-dir-skills',
+  'read-back mismatch': 'detail.read-back-mismatch',
+  'lock-timeout': 'detail.lock-timeout',
+  'unsupported url': 'detail.unsupported-url',
+  'too-large': 'library.unreadable.too-large',
+  'not-utf8': 'library.unreadable.not-utf8',
+  'read-failed': 'library.unreadable.read-failed',
+}
+
+/**
+ * 草稿错误（promptx/draft/*）的 detail → 文案键（审查 CR-04）。草稿服务（src/draft/service.ts）把 dsh 存储层的错误代码
+ * 原样放进 detail，读取失败、保存失败时出现在编辑区和底栏，例如「草稿读取失败：草稿记录无法读取（malformed-medium）」。
+ * 只换用户碰得到的几种：文件坏了、版本不认识、记录格式不对、上一次还没关完、写入结果不明、插件正在停止、还没读回。
+ * 存储没装好这类只有 dsh 本身出错才会有的代码（backend-not-found、facet-unsupported 等）照常附上原文，方便报告问题。
+ * 只对草稿错误生效：closed、invalid-record 这样的词太普通，别的错误码的 detail 里出现时意思不一定一样。
+ */
+const DRAFT_DETAIL_KEYS: Readonly<Record<string, MessageKey>> = {
+  'malformed-medium': 'detail.draft.malformed-medium',
+  'version-mismatch': 'detail.draft.version-mismatch',
+  'invalid-record': 'detail.draft.invalid-record',
+  'already-open': 'detail.draft.already-open',
+  'unknown-state': 'detail.draft.unknown-state',
+  'closed': 'detail.draft.closed',
+  'not-loaded': 'detail.draft.not-loaded',
+  // src/host-handlers.ts：这条连接上还没读回草稿就要保存。
+  'draft not loaded on this connection': 'detail.draft.not-loaded',
+}
+
+function lookup(table: Readonly<Record<string, MessageKey>>, detail: string): MessageKey | undefined {
+  return Object.hasOwn(table, detail) ? table[detail] : undefined
+}
+
+/** detail 能说成一句原因时返回那句话（认识的原因代码，或者认识的系统错误）；没有 detail 或都不认识时返回 null。 */
+export function detailReason(locale: Locale, info: ErrorInfo): string | null {
+  const detail = info.detail?.trim() ?? ''
+  if (detail === '') return null
+  const key = lookup(DETAIL_KEYS, detail) ?? (info.code.startsWith('promptx/draft/') ? lookup(DRAFT_DETAIL_KEYS, detail) : undefined)
+  return key === undefined ? errnoMessage(locale, detail) : translate(locale, key)
+}
+
 function withDetail(locale: Locale, message: string, detail: string): string {
   return locale === 'zh' ? `${message}（${detail}）` : `${message} (${detail})`
 }
 
 /**
- * 完整的错误说明：错误码的文案，后面附上系统错误信息。detail 是认识的系统错误时换成对应的说法，
+ * 完整的错误说明：错误码的文案，后面附上原因。detail 是认识的原因代码或系统错误时换成对应的说法，
  * 否则原样附上（例如模型服务返回的英文错误）。
  */
 export function describeError(locale: Locale, info: ErrorInfo): string {
   const message = errorMessage(locale, info.code)
   const detail = info.detail?.trim() ?? ''
   if (detail === '') return message
-  return withDetail(locale, message, errnoMessage(locale, detail) ?? detail)
+  return withDetail(locale, message, detailReason(locale, info) ?? detail)
 }
 
 /**
- * 放进「保存失败：{原因}」这类提示里的原因。认识的系统错误直接说原因本身（「保存失败：没有权限」），
+ * 放进「保存失败：{原因}」这类提示里的原因。认得出原因（原因代码、系统错误）时直接说原因本身（「保存失败：没有权限」），
  * 不再重复「写入文件失败」这种和外层提示意思相同的话；其余情况同 describeError。
  */
 export function errorReason(locale: Locale, info: ErrorInfo): string {
-  const detail = info.detail?.trim() ?? ''
-  if (detail !== '') {
-    const errno = errnoMessage(locale, detail)
-    if (errno !== null) return errno
-  }
-  return describeError(locale, info)
+  return detailReason(locale, info) ?? describeError(locale, info)
+}
+
+/**
+ * 「{前缀}：{原因}」这类整句（key），而前缀就是错误码 ownCode 自己的文案时（「库目录不可用：{原因}」「无法打开插件配置：{原因}」）：
+ * 认得出原因就只填原因；认不出时整句换成错误的完整说明，不把同一句话说两遍（审查 CR-04）。别的错误码照常按 errorReason 填原因。
+ */
+export function failureMessage(locale: Locale, key: MessageKey, ownCode: string, info: ErrorInfo): string {
+  if (info.code !== ownCode) return translate(locale, key, { reason: errorReason(locale, info) })
+  const reason = detailReason(locale, info)
+  return reason === null ? describeError(locale, info) : translate(locale, key, { reason })
 }

@@ -142,6 +142,15 @@ describe('底栏接上状态', () => {
     expect(message(container)).toBe('复制失败：写入剪贴板失败')
   })
 
+  it('草稿保存失败的原因是存储层的错误代码时说成原因，不露出代码（审查 CR-04）', async () => {
+    const { controller, container } = await mount(new FakeBridge())
+    act(() => {
+      controller.store.update(state => ({ ...state, draft: { ...state.draft, saveError: { code: 'promptx/draft/write-failed', detail: 'unknown-state' } } }))
+    })
+    // 修复前：「草稿保存失败：草稿写入失败（unknown-state）」。
+    expect(message(container)).toBe('草稿保存失败：草稿存储处于未知状态')
+  })
+
   it('显示绑定的标题和保存状态；macOS 上快捷键是 ⌘↩，Windows 上是 Ctrl+Enter', async () => {
     const bridge = new FakeBridge('win32')
     bridge.handle('draft.load', () => ok({ record: draftRecord('正文', { binding: binding('a.md', '正文', { title: '代码审查' }) }) }))

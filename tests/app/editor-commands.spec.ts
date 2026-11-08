@@ -102,10 +102,19 @@ describe('continueList（E-05）', () => {
     expect(run(continueList, '-   |')).toBe('|')
   })
 
-  it('只有符号、后面没有空格的也是空项', () => {
-    expect(run(continueList, '-|')).toBe('|')
-    expect(run(continueList, '  *|')).toBe('|')
-    expect(run(continueList, '2.|')).toBe('|')
+  it('只有符号、后面没有空格的不是列表项：返回 null，由调用方普通换行（E-05「加空格开头」，审查 CR-05）', () => {
+    expect(run(continueList, '-|')).toBeNull()
+    expect(run(continueList, '  *|')).toBeNull()
+    expect(run(continueList, '+|')).toBeNull()
+    expect(run(continueList, '2.|')).toBeNull()
+    expect(run(continueList, '3)|')).toBeNull()
+    expect(run(continueList, '2024.|')).toBeNull()
+    expect(run(continueList, '前言\n-|\n后文')).toBeNull()
+  })
+
+  it('符号后面是制表符的空项也结束列表', () => {
+    expect(run(continueList, '-\t|')).toBe('|')
+    expect(run(continueList, '2.\t|')).toBe('|')
   })
 
   it('空项在文档中间时只清空那一行', () => {
@@ -154,6 +163,13 @@ describe('indent（E-06）', () => {
     expect(run(indent, '|')).toBe('    |')
     expect(run(indent, '普通|')).toBe('普通    |')
     expect(run(indent, '-项|')).toBe('-项    |')
+  })
+
+  it('只有符号、后面没有空格的行不是列表项：在光标处插入 4 个空格，不缩进整行（审查 CR-05）', () => {
+    expect(run(indent, '-|')).toBe('-    |')
+    expect(run(indent, '  *|')).toBe('  *    |')
+    expect(run(indent, '2.|')).toBe('2.    |')
+    expect(run(indent, '2024.|')).toBe('2024.    |')
   })
 
   it('单行内的非空选区用 4 个空格替换', () => {

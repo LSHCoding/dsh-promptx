@@ -8,7 +8,7 @@ import type { MessageKey } from '../../../shared/i18n/index.ts'
 import type { Binding, LibraryReadResult, SaveConflict, SaveMode } from '../../../shared/types.ts'
 import { isBlank } from '../../../shared/text-metrics.ts'
 import type { DialogButton, DialogSpec } from '../state/state.ts'
-import { dialogButton, randomId, readReason, reason, text, type Context } from './context.ts'
+import { dialogButton, randomId, reason, text, type Context } from './context.ts'
 import type { Dialogs } from './dialogs.ts'
 import type { Draft } from './draft.ts'
 import type { Toasts } from './toasts.ts'
@@ -214,7 +214,7 @@ export class LibrarySave {
     if (binding === null) return
     const read = await this.ctx.bridge.call('library.read', { relPath: binding.relPath })
     if (!read.ok) {
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, read.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, read.error) }))
       return
     }
     if (this.draft.binding?.relPath !== binding.relPath) return

@@ -5,6 +5,7 @@ import {
   errnoMessage,
   errorMessage,
   errorReason,
+  failureMessage,
   format,
   isMessageKey,
   MESSAGE_KEYS,
@@ -208,5 +209,81 @@ describe('系统错误', () => {
       .toBe('保存失败：磁盘空间不足')
     expect(errorReason('zh', { code: 'promptx/clipboard/write-failed' })).toBe('写入剪贴板失败')
     expect(errorReason('zh', { code: 'promptx/optimize/failed', detail: 'boom' })).toBe('优化失败（boom）')
+  })
+})
+
+describe('插件写在 detail 里的原因代码（审查 CR-04）', () => {
+  it('库目录的位置限制说成可读的原因，和配置页的字段错误一致，不露出 library-dir-* 代码', () => {
+    const skills = { code: 'promptx/library/unavailable', detail: 'library-dir-skills' }
+    expect(errorReason('zh', skills)).toBe('库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取')
+    expect(errorReason('zh', { code: 'promptx/library/unavailable', detail: 'library-dir-relative' })).toBe('库目录要写绝对路径，或以 ~ 开头')
+    expect(errorReason('zh', { code: 'promptx/library/unavailable', detail: 'library-dir-reserved' }))
+      .toBe('库目录不能放在 dsh 的数据目录里（默认的 promptx/library 除外）')
+    expect(errorReason('en', skills)).toBe('the library cannot be inside a dsh skills folder, or its prompts would be read as skills')
+    // 保存、删除时整个操作因库目录不可用失败：外层提示后面直接是原因。
+    expect(translate('zh', 'toast.saveFailed', { reason: errorReason('zh', skills) }))
+      .toBe('保存失败：库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取')
+    expect(describeError('zh', skills)).toBe('库目录不可用（库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取）')
+  })
+
+  it('「库目录不可用：{原因}」只说一遍前缀；认不出原因时整句就是错误本身', () => {
+    const unavailable = 'promptx/library/unavailable'
+    expect(failureMessage('zh', 'library.unavailable', unavailable, { code: unavailable, detail: 'library-dir-skills' }))
+      .toBe('库目录不可用：库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取')
+    expect(failureMessage('zh', 'library.unavailable', unavailable, { code: unavailable, detail: 'EACCES: permission denied' }))
+      .toBe('库目录不可用：没有权限')
+    expect(failureMessage('zh', 'library.unavailable', unavailable, { code: unavailable })).toBe('库目录不可用')
+    expect(failureMessage('zh', 'library.unavailable', unavailable, { code: unavailable, detail: 'something odd' }))
+      .toBe('库目录不可用（something odd）')
+    expect(failureMessage('en', 'library.unavailable', unavailable, { code: unavailable })).toBe('The library folder is unavailable')
+    // 别的错误码照常填进原因。
+    expect(failureMessage('zh', 'library.unavailable', unavailable, { code: 'promptx/channel/closed' }))
+      .toBe('库目录不可用：与插件的连接已断开')
+  })
+
+  it('剪贴板读回不一致有自己的原因', () => {
+    const mismatch = { code: 'promptx/clipboard/write-failed', detail: 'read-back mismatch' }
+    expect(translate('zh', 'toast.copyFailed', { reason: errorReason('zh', mismatch) }))
+      .toBe('复制失败：剪贴板里读回的内容和要复制的不一致，可能被剪贴板工具改写了')
+    expect(errorReason('en', mismatch)).toBe('the clipboard didn\'t keep the copied text; a clipboard tool may have changed it')
+  })
+
+  it('回收站锁、配置页地址、文件无法打开的原因代码，以及文件过大的系统错误', () => {
+    expect(errorReason('zh', { code: 'promptx/trash/record-failed', detail: 'lock-timeout' })).toBe('回收站记录被锁住了，请稍后再试')
+    expect(errorReason('zh', { code: 'promptx/settings/unavailable', detail: 'unsupported url' })).toBe('插件给出的配置页地址无法交给系统打开')
+    expect(errorReason('zh', { code: 'promptx/library/unreadable', detail: 'too-large' })).toBe('文件超过 2 MiB，无法打开')
+    expect(errorReason('zh', { code: 'promptx/library/unreadable', detail: 'not-utf8' })).toBe('文件不是 UTF-8 编码，无法打开')
+    expect(errorReason('zh', { code: 'promptx/library/unreadable', detail: 'read-failed' })).toBe('文件读取失败')
+    expect(errorReason('zh', { code: 'promptx/library/write-failed', detail: 'EFBIG: file too large' })).toBe('文件太大')
+  })
+
+  it('草稿错误里的存储层代码说成原因（编辑区「草稿读取失败」、底栏「草稿保存失败」）', () => {
+    expect(translate('zh', 'editor.loadFailed', { reason: errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'malformed-medium' }) }))
+      .toBe('草稿读取失败：草稿文件已损坏')
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'version-mismatch' })).toBe('草稿文件由不支持的版本写入')
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'invalid-record' })).toBe('草稿记录的格式不对')
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'already-open' })).toBe('草稿存储还被占用着，请稍后重试')
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'closed' })).toBe('插件正在停止')
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'not-loaded' })).toBe('草稿还没有读回')
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'draft not loaded on this connection' })).toBe('草稿还没有读回')
+    expect(translate('zh', 'status.draftSaveFailed', { reason: errorReason('zh', { code: 'promptx/draft/write-failed', detail: 'unknown-state' }) }))
+      .toBe('草稿保存失败：草稿存储处于未知状态')
+    expect(errorReason('en', { code: 'promptx/draft/unreadable', detail: 'malformed-medium' })).toBe('the draft file is damaged')
+    // 存储层透传的系统错误照常按系统错误说。
+    expect(errorReason('zh', { code: 'promptx/draft/write-failed', detail: 'ENOSPC' })).toBe('磁盘空间不足')
+    // dsh 存储本身没装好时的代码照常附上原文，方便报告问题。
+    expect(errorReason('zh', { code: 'promptx/draft/unreadable', detail: 'backend-not-found' })).toBe('草稿记录无法读取（backend-not-found）')
+  })
+
+  it('草稿的存储层代码只对草稿错误生效，别的错误码里同样的词原样附上', () => {
+    expect(errorReason('zh', { code: 'promptx/optimize/failed', detail: 'closed' })).toBe('优化失败（closed）')
+    expect(describeError('zh', { code: 'promptx/library/write-failed', detail: 'invalid-record' })).toBe('写入文件失败（invalid-record）')
+  })
+
+  it('每个原因代码的中英文文案都不带结尾的句号（放在「…：{原因}」里）', () => {
+    for (const key of MESSAGE_KEYS.filter(name => name.startsWith('detail.'))) {
+      expect(zh[key], key).not.toMatch(/[。.]$/)
+      expect(en[key], key).not.toMatch(/[。.]$/)
+    }
   })
 })

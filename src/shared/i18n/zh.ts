@@ -270,4 +270,22 @@ export const zh = {
   'errno.ENAMETOOLONG': '文件名太长',
   'errno.EMFILE': '打开的文件太多',
   'errno.EIO': '磁盘读写出错',
+  'errno.EFBIG': '文件太大',
+
+  // ───────── 原因代码（detail 是插件、小程序自己写的这些代码时显示的原因，审查 CR-04） ─────────
+  // 库目录位置限制的三条和配置页的字段错误（src/client/locale.ts 的 fieldLibraryDir*）说法一致，去掉句号，放进「库目录不可用：{原因}」。
+  'detail.library-dir-relative': '库目录要写绝对路径，或以 ~ 开头',
+  'detail.library-dir-reserved': '库目录不能放在 dsh 的数据目录里（默认的 promptx/library 除外）',
+  'detail.library-dir-skills': '库目录不能放在 dsh 的技能目录里，否则里面的 Prompt 会被当成技能读取',
+  'detail.read-back-mismatch': '剪贴板里读回的内容和要复制的不一致，可能被剪贴板工具改写了',
+  'detail.lock-timeout': '回收站记录被锁住了，请稍后再试',
+  'detail.unsupported-url': '插件给出的配置页地址无法交给系统打开',
+  // 草稿错误的 detail（dsh 存储层的错误代码），放进「草稿读取失败：{原因}」「草稿保存失败：{原因}」。
+  'detail.draft.malformed-medium': '草稿文件已损坏',
+  'detail.draft.version-mismatch': '草稿文件由不支持的版本写入',
+  'detail.draft.invalid-record': '草稿记录的格式不对',
+  'detail.draft.already-open': '草稿存储还被占用着，请稍后重试',
+  'detail.draft.unknown-state': '草稿存储处于未知状态',
+  'detail.draft.closed': '插件正在停止',
+  'detail.draft.not-loaded': '草稿还没有读回',
 } as const

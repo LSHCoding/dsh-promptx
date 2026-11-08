@@ -29,10 +29,12 @@ export interface SelectionRange {
 export const INDENT = '    '
 
 /**
- * 列表行：缩进、列表符号（`-` `*` `+`，或 `1.` `1)`），然后是空白和内容；只有符号（后面可以有空白）的是空项。
+ * 列表行：缩进、列表符号（`-` `*` `+`，或 `1.` `1)`），然后至少一个空格或制表符，再是内容；符号加空白、没有内容的是空项。
+ * 符号后面必须有空白（E-05「加空格开头」，审查 CR-05）：只有 `-`、`2.`、`2024.` 的行不是列表项，
+ * 否则 Enter 会把这一行清掉而不换行，Tab 会缩进整行，和 E-01「Enter 只换行」相违背。
  * 编号最多 9 位，和 CommonMark 一致，更长的数字后面跟点不算列表。
  */
-const LIST_LINE = /^([ \t]*)([-*+]|(\d{1,9})([.)]))(?:([ \t]+)(.*))?$/
+const LIST_LINE = /^([ \t]*)([-*+]|(\d{1,9})([.)]))([ \t]+)(.*)$/
 
 interface ListItem {
   indent: string
@@ -40,7 +42,7 @@ interface ListItem {
   marker: string
   /** 有序列表的编号和分隔符；无序列表时为 undefined。 */
   ordered: { number: string; delimiter: string } | undefined
-  /** 符号后面的空白，续行时原样带上；空项可能没有。 */
+  /** 符号后面的空白（至少一个空格或制表符），续行时原样带上。 */
   spacing: string
   content: string
 }
@@ -102,8 +104,8 @@ function touchedLineStarts(doc: string, from: number, to: number): number[] {
 /**
  * Enter 的列表续行（E-05）。只在空选区、光标在列表行的行尾时生效：
  * - 有内容的项：换行，新行带上同样的缩进和列表符号（有序列表编号加 1，分隔符不变）。
- * - 空项（只有列表符号）：去掉这一行的缩进和符号，结束列表，不换行。
- * 光标在列表项中间、有选区或不是列表行时返回 null，由调用方做普通换行。
+ * - 空项（列表符号加空白，没有内容）：去掉这一行的缩进和符号，结束列表，不换行。
+ * 光标在列表项中间、有选区或不是列表行（包括符号后面没有空白的 `-`、`2.`）时返回 null，由调用方做普通换行。
  */
 export function continueList(doc: string, sel: SelectionRange): EditResult | null {
   const { from, to } = normalize(doc, sel)

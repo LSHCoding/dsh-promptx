@@ -8,7 +8,7 @@ import type { EntryMeta, FolderSel, LibraryListResult, LibraryScope, MetaPatch, 
 import { insertSnippet } from '../editor/commands.ts'
 import { focusWithin, nothingFocused } from '../focus.ts'
 import type { LibrarySlice } from '../state/state.ts'
-import { dialogButton, readReason, reason, runTask, text, type Context } from './context.ts'
+import { dialogButton, reason, runTask, text, type Context } from './context.ts'
 import type { Dialogs } from './dialogs.ts'
 import type { Draft } from './draft.ts'
 import type { PaneLayout } from './layout.ts'
@@ -37,6 +37,8 @@ export class Library {
     private readonly dialogs: Dialogs,
     private readonly saver: LibrarySave,
     private readonly layout: PaneLayout,
+    /** 把焦点交给搜索框（和 ⌘L 同一个焦点请求）。 */
+    private readonly focusSearch: () => void,
   ) {}
 
   get state(): LibrarySlice {
@@ -61,9 +63,20 @@ export class Library {
     if (hadFocus || nothingFocused()) this.ctx.editor.focus()
   }
 
+  /**
+   * 工具栏「库」。展开时和 ⌘L 一样把焦点放进搜索框（需求 4.3 第 1 步「侧栏展开，焦点在搜索框」，审查 CR-06）：
+   * 按钮带 keepFocus，点下去焦点留在编辑区，不交出去的话用户接着打的搜索词会打进草稿。侧栏一出现就交，不等列表重读完。
+   * 收起时焦点照旧由 close() 交回编辑区。
+   */
   async toggle(): Promise<void> {
     this.toasts.beginAction()
-    await (this.state.open ? this.close() : this.open())
+    if (this.state.open) {
+      await this.close()
+      return
+    }
+    await this.layout.open('library')
+    this.focusSearch()
+    await this.reload()
   }
 
   /** 列表或回收站，按当前视图刷新并重读磁盘。 */
@@ -208,7 +221,7 @@ export class Library {
     // 读取期间换了选中项、收起了侧栏（包括为会话栏腾地方被收起）或隐藏了小窗：这次插入作废（L-06）。
     if (token !== this.insertToken || !this.state.open || this.state.selected !== relPath) return
     if (!result.ok) {
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, result.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     const title = result.value.entry.title
@@ -268,7 +281,7 @@ export class Library {
     if (token !== this.openToken) return
     if (!result.ok) {
       // 读取失败：提示原因，草稿和绑定都不变（L-07）。
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, result.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     // 整篇替换并清空撤销记录（E-01），进入绑定状态。
@@ -382,7 +395,7 @@ export class Library {
     this.toasts.beginAction()
     const result = await this.ctx.bridge.call('library.read', { relPath })
     if (!result.ok) {
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: readReason(this.ctx, result.error) }))
+      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
       return
     }
     // 只写剪贴板，小窗不隐藏，草稿不变。

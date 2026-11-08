@@ -2,11 +2,11 @@
 // 选中「回收站」时列表栏显示回收站，分段筛选和标签下拉隐藏，搜索框照常可用。
 
 import { useRef, type ReactElement } from 'react'
-import { describeError, errorReason, relativeTime } from '../../../shared/i18n/index.ts'
+import { relativeTime } from '../../../shared/i18n/index.ts'
 import { folderOf } from '../../../shared/library-rules.ts'
 import { PANE_LIMITS } from '../../../shared/layout.ts'
 import type { EntryMeta, FolderSel, LibraryScope, TrashEntry } from '../../../shared/types.ts'
-import { readFailure } from '../controller/context.ts'
+import { listErrorMessage, previewErrorMessage, unavailableMessage } from '../controller/context.ts'
 import type { FolderChoice } from '../controller/library.ts'
 import { Divider, IconButton, MenuButton, run, type MenuItem } from './controls.tsx'
 import { Icon, Star, type IconName } from './icons.tsx'
@@ -123,6 +123,13 @@ function ListColumn({ width, previewHeight }: { width: number; previewHeight: nu
   const t = useT()
   const view = useAppState(state => state.library.view)
   const column = useRef<HTMLElement>(null)
+  const preview = useRef<HTMLDivElement>(null)
+  // 预览区实际显示的高度。窗口矮时 CSS 把预览区压得比记下的高度矮（最矮 128，审查 CR-07），拖动要从显示的高度算起，
+  // 否则往下拖的头几十像素没有反应；往上拖的上限也按它算。没有排版（offsetHeight 为 0）时按记下的高度。
+  const shownPreviewHeight = (): number => {
+    const shown = preview.current?.offsetHeight ?? 0
+    return shown > 0 ? shown : previewHeight
+  }
   return (
     <section className="px-list-column" style={{ width }} ref={column}>
       <SearchBox />
@@ -133,14 +140,14 @@ function ListColumn({ width, previewHeight }: { width: number; previewHeight: nu
       <Divider
         orientation="horizontal"
         label={t('library.resizePreview')}
-        value={previewHeight}
+        value={shownPreviewHeight}
         invert
         min={PANE_LIMITS.preview.min}
         // 预览拖高时列表部分至少留 96（需求 5.7）。
         max={() => {
           const area = column.current?.querySelector('.px-list-area')
           const listHeight = area instanceof HTMLElement ? area.clientHeight : 0
-          return previewHeight + Math.max(0, listHeight - PANE_LIMITS.listPart.min)
+          return shownPreviewHeight() + Math.max(0, listHeight - PANE_LIMITS.listPart.min)
         }}
         onResize={(height) => {
           controller.resizePanes({ previewHeight: height })
@@ -149,7 +156,7 @@ function ListColumn({ width, previewHeight }: { width: number; previewHeight: nu
           controller.commitPaneSizes()
         }}
       />
-      <div className="px-preview-area" style={{ height: previewHeight }}>
+      <div className="px-preview-area" style={{ height: previewHeight }} ref={preview}>
         {view === 'library' ? <Preview /> : <TrashPreview />}
       </div>
     </section>
@@ -227,13 +234,13 @@ function EntryList(): ReactElement {
   const selected = useAppState(state => state.library.selected)
   const locale = useAppState(state => state.locale)
 
-  if (listError !== null) return <p className="px-empty">{describeError(locale, listError)}</p>
+  if (listError !== null) return <p className="px-empty">{listErrorMessage(locale, listError)}</p>
   if (list === null) return <div className="px-empty" />
   if (list.state === 'unavailable') {
     // 库目录不可用：侧栏说明原因，编辑、复制、优化照常可用（L-01）。
     return (
       <div className="px-empty px-unavailable" role="alert">
-        <p>{t('library.unavailable', { reason: errorReason(locale, list.error ?? { code: 'promptx/library/unavailable' }) })}</p>
+        <p>{unavailableMessage(locale, list.error ?? { code: 'promptx/library/unavailable' })}</p>
         <button
           type="button"
           className="px-button"
@@ -357,7 +364,7 @@ function Preview(): ReactElement {
         {preview.status === 'error'
           ? (
             <p className="px-preview-error" role="alert">
-              {readFailure(locale, preview.error ?? { code: 'promptx/library/unreadable', detail: entry.unreadableReason ?? 'read-failed' })}
+              {previewErrorMessage(locale, preview.error ?? { code: 'promptx/library/unreadable', detail: entry.unreadableReason ?? 'read-failed' })}
             </p>
           )
           : null}
@@ -398,7 +405,7 @@ function TrashList(): ReactElement {
   const selected = useAppState(state => state.library.trashSelected)
   const query = useAppState(state => state.library.query)
   const locale = useAppState(state => state.locale)
-  if (trashError !== null) return <p className="px-empty">{describeError(locale, trashError)}</p>
+  if (trashError !== null) return <p className="px-empty">{listErrorMessage(locale, trashError)}</p>
   if (trash === null) return <div className="px-empty" />
   const now = Date.now()
   return (
@@ -462,7 +469,7 @@ function TrashPreview(): ReactElement {
       <div className="px-preview-body">
         {preview.status === 'ready' ? <pre className="px-preview-text">{preview.body}</pre> : null}
         {preview.status === 'error' && preview.error !== null
-          ? <p className="px-preview-error" role="alert">{describeError(locale, preview.error)}</p>
+          ? <p className="px-preview-error" role="alert">{previewErrorMessage(locale, preview.error)}</p>
           : null}
       </div>
       <div className="px-preview-actions">
