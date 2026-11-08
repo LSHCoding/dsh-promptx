@@ -4,7 +4,7 @@ PromptX includes or adapts material from the projects below. Each is used under 
 
 ## DeepSeek Harness
 
-- Used for: the theme variables in `src/app/renderer/styles/dsh-theme.css` (extracted from `@deepseek-ai/dsh-client-ui-theme`), the Client module wrapper format, and lint configuration copied from the official repository.
+- Used for: the theme variables in `src/app/renderer/styles/dsh-theme.css` (extracted from `@deepseek-ai/dsh-client-ui-theme`), the Client module wrapper format, lint configuration copied from the official repository, and the config page's controls and styles (`src/client/controls.tsx`, `src/client/styles.ts`), adapted from the settings form, Switch, Button and StateDot in `packages/client/ui-primitives` of DeepSeek Harness 0.2.2-rc.1.
 - Source: <https://github.com/deepseek-ai/deepseek-harness>
 - License: MIT
 
