@@ -553,6 +553,8 @@ export class LibraryService implements LibraryApi {
     // 正文一个字节都不能变
     if (check === null || check.body !== baseParsed.body) return metaConflict('unsupportedLayout')
     const bytes = Buffer.from(patched.text, 'utf8')
+    // 补 front matter、加一行 favorite 都会让文件变大；贴着上限的文件改完就超过上限，之后插件再也打不开它（外部审查第 5 条）
+    assertWritableSize(bytes)
     // 写入那一刻文件又变了：不写入，返回 modified（L-09「刷新后可以重新操作」）
     const outcome = await replaceFile(located.abs, bytes, { ...this.#fsOptions(), expected: before, mode: modeToKeep(file.stats) })
     if (outcome.kind !== 'replaced') return metaConflict(outcome.kind)

@@ -1,6 +1,7 @@
-import { rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { MAX_PROMPT_BYTES } from '../../src/library/fs-safe.ts'
 import type { LibraryService } from '../../src/library/service.ts'
 import type { MetaResult } from '../../src/shared/types.ts'
 import { NOW_STAMP, bindingFor, installCrashTraps, listAll, makeService, readText, sha256Of, useTempDirs, writeTree } from './helpers.ts'
@@ -207,6 +208,47 @@ describe('metadata conflicts', () => {
     const text = await readText(root, 'a.md')
     expect(text).toContain('newer body')
     expect(text).toContain('title: 新   # 注释')
+  })
+})
+
+// 外部审查第 5 条：保存会检查单个文件 2 MiB 的上限，改元数据原来不查。贴着上限的文件补上 front matter 或加一行 favorite
+// 之后超过上限，插件之后读它报 too-large，再也打不开、也改不回来。
+describe('file size limit for metadata changes (external review 5)', () => {
+  const HEAD = ['---', 'id: prompt_20261101_000000_abcdef01', 'title: 大文件', '---', ''].join('\n')
+
+  it('refuses to add front matter that would push a file past 2 MiB and leaves it byte for byte', async () => {
+    const root = await temp.make()
+    const body = 'x'.repeat(MAX_PROMPT_BYTES)
+    await writeTree(root, { 'big.md': body })
+    const service = makeService(root)
+    expect(await service.updateMeta({ relPath: 'big.md', patch: { favorite: true }, addFrontMatter: false })).toEqual({ kind: 'conflict', conflict: 'noFrontMatter' })
+    await expect(service.updateMeta({ relPath: 'big.md', patch: { favorite: true }, addFrontMatter: true }))
+      .rejects.toMatchObject({ code: 'promptx/library/write-failed', detail: 'EFBIG: file too large' })
+    expect(sha256Of(await readFile(join(root, 'big.md')))).toBe(sha256Of(body))
+  })
+
+  it('refuses a favorite or rename that would push a file with front matter past the limit', async () => {
+    const root = await temp.make()
+    const text = HEAD + 'x'.repeat(MAX_PROMPT_BYTES - Buffer.byteLength(HEAD))
+    await writeTree(root, { 'big.md': text })
+    const service = makeService(root)
+    await expect(service.updateMeta({ relPath: 'big.md', patch: { favorite: true }, addFrontMatter: false }))
+      .rejects.toMatchObject({ code: 'promptx/library/write-failed', detail: 'EFBIG: file too large' })
+    await expect(service.updateMeta({ relPath: 'big.md', patch: { title: '更长的标题' }, addFrontMatter: false }))
+      .rejects.toMatchObject({ code: 'promptx/library/write-failed', detail: 'EFBIG: file too large' })
+    expect(sha256Of(await readFile(join(root, 'big.md')))).toBe(sha256Of(text))
+    expect((await service.read('big.md')).entry.favorite).toBe(false)
+  })
+
+  it('still writes a change that stays within the limit', async () => {
+    const root = await temp.make()
+    const text = HEAD + 'x'.repeat(MAX_PROMPT_BYTES - Buffer.byteLength(HEAD) - 100)
+    await writeTree(root, { 'big.md': text })
+    const service = makeService(root)
+    savedMeta(await service.updateMeta({ relPath: 'big.md', patch: { favorite: true }, addFrontMatter: false }))
+    const after = await readFile(join(root, 'big.md'))
+    expect(after.length).toBeLessThanOrEqual(MAX_PROMPT_BYTES)
+    expect((await service.read('big.md')).entry.favorite).toBe(true)
   })
 })
 
