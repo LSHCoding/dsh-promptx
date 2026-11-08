@@ -1,13 +1,23 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { crc32 } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { pidAlive } from '../../src/companion/process-utils.ts'
-import { defaultExtractor, executableSegments, RuntimeManager, runTool, type RuntimeManagerTestOptions } from '../../src/companion/runtime.ts'
+import {
+  defaultExtractor,
+  executableSegments,
+  requiredRuntimeFiles,
+  RuntimeManager,
+  runTool,
+  type RuntimeManagerTestOptions,
+  type ToolRunner,
+} from '../../src/companion/runtime.ts'
 import { ELECTRON_VERSION } from '../../src/companion/electron-release.ts'
 import type { HostLogger, RuntimeManagerOptions } from '../../src/services.ts'
 import { PromptxError } from '../../src/shared/errors.ts'
@@ -180,11 +190,82 @@ function captureLogs(): Logged {
   return { lines, logger: { debug: push('debug'), info: push('info'), warn: push('warn'), error: push('error') } }
 }
 
-/** 假的解压：核对压缩包内容，然后在目标目录里放一个可执行文件。 */
+/** Linux、Windows 发布包解压后除可执行文件外必须在的文件（审查 SEC-04 的清单）。 */
+const LAYOUT_FILES = ['resources/default_app.asar', 'locales/en-US.pak', 'icudtl.dat', 'v8_context_snapshot.bin']
+
+/** 按相对路径（`/` 分隔）在 dir 里放上文件，缺的目录一并建好。 */
+async function writeFiles(dir: string, files: readonly string[]): Promise<void> {
+  for (const file of files) {
+    const path = join(dir, ...file.split('/'))
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, 'x')
+  }
+}
+
+/** 假的解压：核对压缩包内容，然后在目标目录里放上可执行文件和清单里的文件。 */
 async function fakeExtract(zip: string, dest: string): Promise<void> {
   const bytes = await readFile(zip)
   if (sha256(bytes) !== SHA256) throw new Error('not the expected archive')
   await writeFile(join(dest, 'electron'), '#!/bin/sh\n', { mode: 0o755 })
+  await writeFiles(dest, LAYOUT_FILES)
+}
+
+/** 假的 macOS 解压：可执行文件、default_app.asar 和框架。links 为 false 时框架里的符号链接没有保留下来。 */
+async function writeMacLayout(dest: string, links: boolean): Promise<void> {
+  const contents = join(dest, 'Electron.app', 'Contents')
+  await mkdir(join(contents, 'MacOS'), { recursive: true })
+  await writeFile(join(contents, 'MacOS', 'Electron'), '#!/bin/sh\n', { mode: 0o755 })
+  await writeFiles(contents, ['Resources/default_app.asar'])
+  const framework = join(contents, 'Frameworks', 'Electron Framework.framework')
+  await writeFiles(framework, ['Versions/A/Electron Framework', 'Versions/A/Resources/icudtl.dat'])
+  if (!links) return
+  await symlink('A', join(framework, 'Versions', 'Current'))
+  await symlink('Versions/Current/Electron Framework', join(framework, 'Electron Framework'))
+  await symlink('Versions/Current/Resources', join(framework, 'Resources'))
+}
+
+/** 只有存储（不压缩）条目的 zip，给真实的 unzip 解。条目名用 `/` 分隔，只用 ASCII。 */
+function storedZip(files: Record<string, string>): Buffer {
+  const records: Buffer[] = []
+  const directory: Buffer[] = []
+  let offset = 0
+  const names = Object.keys(files)
+  for (const name of names) {
+    const data = Buffer.from(files[name]!)
+    const nameBytes = Buffer.from(name)
+    const crc = crc32(data)
+    // 本地文件头：版本 2.0、不压缩、时间取 1980-01-01。
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0x21, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(nameBytes.length, 26)
+    // 中央目录项：同样的字段，再加本地文件头的位置。
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0x21, 14)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(nameBytes.length, 28)
+    central.writeUInt32LE(offset, 42)
+    records.push(local, nameBytes, data)
+    directory.push(central, nameBytes)
+    offset += local.length + nameBytes.length + data.length
+  }
+  const centralBytes = Buffer.concat(directory)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(names.length, 8)
+  end.writeUInt16LE(names.length, 10)
+  end.writeUInt32LE(centralBytes.length, 12)
+  end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...records, centralBytes, end])
 }
 
 type ManagerOptions = Partial<RuntimeManagerOptions & RuntimeManagerTestOptions>
@@ -595,7 +676,8 @@ describe('RuntimeManager installation state', () => {
     const server = await startServer({ mirror: serve() })
     const manager = createManager(root, server)
     await manager.ensure()
-    expect((await readdir(join(root, INSTALL))).sort()).toEqual(['.ready', 'electron'])
+    // 只剩新解压的内容（假解压放的可执行文件和清单里的文件），崩溃留下的 half-extracted 不在了。
+    expect((await readdir(join(root, INSTALL))).sort()).toEqual(['.ready', 'electron', 'icudtl.dat', 'locales', 'resources', 'v8_context_snapshot.bin'])
     expect((await readdir(root)).filter(name => name.startsWith('trash-') || name.startsWith('staging-'))).toEqual([])
   })
 
@@ -645,6 +727,75 @@ describe('RuntimeManager installation state', () => {
     const server = await startServer({ mirror: serve() })
     const manager = createManager(root, server, { extract: async () => {} })
     await expect(manager.ensure()).rejects.toMatchObject({ code: 'promptx/runtime/extract-failed', detail: 'the archive has no Electron executable' })
+  })
+
+  // 审查 SEC-04：解压工具被环境变量改了行为（unzip 读到 UNZIP=-j 把目录拍平、UNZIP=-LL 把文件名改成小写）时，
+  // 可执行文件还在。只核对它会把坏掉的目录标成就绪，而运行时目录是所有 profile 共用的。
+  it('rejects a flattened extraction even though the executable is there, and never marks it ready', async () => {
+    const root = await newRoot()
+    const server = await startServer({ mirror: serve() })
+    const manager = createManager(root, server, {
+      extract: async (_zip, dest) => {
+        await writeFile(join(dest, 'electron'), '#!/bin/sh\n', { mode: 0o755 })
+        await writeFiles(dest, LAYOUT_FILES.map(file => file.split('/').at(-1)!))
+      },
+    })
+    const failure = { code: 'promptx/runtime/extract-failed', detail: 'missing resources/default_app.asar' }
+    await expect(manager.ensure()).rejects.toMatchObject(failure)
+    expect(manager.status()).toMatchObject({ state: 'failed', error: failure })
+    expect(await exists(join(root, INSTALL))).toBe(false)
+    expect(await exists(join(root, `staging-${process.pid}`))).toBe(false)
+    // 压缩包本身通过了校验，留着：环境修好后重试不用再下载。
+    expect(await exists(join(root, 'downloads', `${FILE}.part`))).toBe(true)
+  })
+
+  it.each(LAYOUT_FILES)('rejects an extraction that lacks %s', async (missing) => {
+    const root = await newRoot()
+    const server = await startServer({ mirror: serve() })
+    const manager = createManager(root, server, {
+      extract: async (_zip, dest) => {
+        await writeFile(join(dest, 'electron'), '#!/bin/sh\n', { mode: 0o755 })
+        await writeFiles(dest, LAYOUT_FILES.filter(file => file !== missing))
+      },
+    })
+    await expect(manager.ensure()).rejects.toMatchObject({ code: 'promptx/runtime/extract-failed', detail: `missing ${missing}` })
+    expect(await exists(join(root, INSTALL, '.ready'))).toBe(false)
+    expect(await exists(join(root, `staging-${process.pid}`))).toBe(false)
+  })
+
+  // Windows 上建符号链接要额外权限，这条只在 macOS、Linux 上跑。
+  it.runIf(process.platform !== 'win32')('follows the framework symlinks when checking a macOS extraction', async () => {
+    const root = await newRoot()
+    const server = await startServer({ mirror: serve() })
+    let links = false
+    const manager = createManager(root, server, {
+      platform: 'darwin',
+      arch: 'arm64',
+      extract: async (_zip, dest) => {
+        await writeMacLayout(dest, links)
+      },
+    })
+    // 不保留符号链接的解压方式：框架本体只在 Versions/A 里，Electron 按框架的顶层路径找不到它。
+    await expect(manager.ensure()).rejects.toMatchObject({
+      code: 'promptx/runtime/extract-failed',
+      detail: 'missing Electron.app/Contents/Frameworks/Electron Framework.framework/Electron Framework',
+    })
+    links = true
+    const dir = join(root, `${VERSION}-darwin-arm64`)
+    await expect(manager.ensure()).resolves.toEqual({ executable: join(dir, 'Electron.app', 'Contents', 'MacOS', 'Electron'), dir })
+    expect(await exists(join(dir, '.ready'))).toBe(true)
+    // 第二次直接用留下的压缩包，不再下载。
+    expect(server.hits).toHaveLength(1)
+  })
+
+  it('lists the files each platform\'s archive must contain besides the executable', () => {
+    expect(requiredRuntimeFiles('linux')).toEqual(LAYOUT_FILES)
+    expect(requiredRuntimeFiles('win32')).toEqual(LAYOUT_FILES)
+    expect(requiredRuntimeFiles('darwin')).toEqual([
+      'Electron.app/Contents/Resources/default_app.asar',
+      'Electron.app/Contents/Frameworks/Electron Framework.framework/Electron Framework',
+      'Electron.app/Contents/Frameworks/Electron Framework.framework/Resources/icudtl.dat',
+    ])
   })
 })
 
@@ -993,6 +1144,107 @@ describe('runtime extraction tools', () => {
     const root = await newRoot()
     const extract = defaultExtractor('linux', { PATH: join(root, 'empty-bin') })
     await expect(extract(join(root, 'a.zip'), root)).rejects.toMatchObject({ code: 'promptx/runtime/unzip-missing' })
+  })
+
+  interface ToolCall {
+    command: string
+    args: readonly string[]
+    env: NodeJS.ProcessEnv | undefined
+  }
+
+  /** 用假的 runTool 跑一次默认解压，记下工具收到的命令、参数和环境变量。 */
+  async function extractWith(platform: string, env: NodeJS.ProcessEnv): Promise<ToolCall[]> {
+    const calls: ToolCall[] = []
+    const run: ToolRunner = async (command, args, options) => {
+      calls.push({ command, args, env: options?.env })
+    }
+    await defaultExtractor(platform, env, run)('/runtime/electron.zip', '/runtime/staging-1')
+    return calls
+  }
+
+  // 审查 SEC-04：dsh 命令行把启动目录 .env 合进 process.env 之后，Host 的环境里可能有这些。
+  const hostEnv: NodeJS.ProcessEnv = {
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    HOME: '/home/someone',
+    LANG: 'zh_CN.UTF-8',
+    LC_ALL: 'zh_CN.UTF-8',
+    LC_CTYPE: 'zh_CN.UTF-8',
+    UNZIP: '-LL',
+    UNZIPOPT: '-j',
+    ZIPINFO: '-v',
+    ZIPINFOOPT: '-v',
+    TAR_READER_OPTIONS: 'zip:hdrcharset=CP932',
+    DITTOABORT: '1',
+    NODE_OPTIONS: '--require ./evil.cjs',
+  }
+
+  it.each([
+    { platform: 'darwin', command: '/usr/bin/ditto', args: ['-x', '-k', '--noqtn', '/runtime/electron.zip', '/runtime/staging-1'] },
+    { platform: 'linux', command: 'unzip', args: ['-q', '/runtime/electron.zip', '-d', '/runtime/staging-1'] },
+  ])('passes only PATH and the C locale to the $platform extraction tool', async ({ platform, command, args }) => {
+    expect(await extractWith(platform, hostEnv)).toEqual([{ command, args, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } }])
+  })
+
+  it('passes only the variables Windows needs to tar.exe, whatever their case', async () => {
+    const env = await extractWith('win32', {
+      Path: 'C:\\Windows\\system32;C:\\Windows',
+      SYSTEMROOT: 'D:\\Windows',
+      windir: 'D:\\Windows',
+      TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp',
+      TMP: 'C:\\Users\\me\\AppData\\Local\\Temp',
+      PATHEXT: '.COM;.EXE;.BAT',
+      USERPROFILE: 'C:\\Users\\me',
+      UNZIP: '-LL',
+      TAR_READER_OPTIONS: 'zip:hdrcharset=CP932',
+      LANG: 'zh_CN.UTF-8',
+    })
+    expect(env).toEqual([{
+      command: 'D:\\Windows\\System32\\tar.exe',
+      args: ['-xf', '/runtime/electron.zip', '-C', '/runtime/staging-1'],
+      env: {
+        PATH: 'C:\\Windows\\system32;C:\\Windows',
+        SystemRoot: 'D:\\Windows',
+        windir: 'D:\\Windows',
+        TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp',
+        TMP: 'C:\\Users\\me\\AppData\\Local\\Temp',
+        PATHEXT: '.COM;.EXE;.BAT',
+        LANG: 'C',
+        LC_ALL: 'C',
+      },
+    }])
+  })
+
+  it('starts a tool without the Host environment unless told otherwise', async () => {
+    const saved = { unzip: process.env.UNZIP, probe: process.env.PROMPTX_TOOL_ENV_PROBE }
+    process.env.UNZIP = '-LL'
+    process.env.PROMPTX_TOOL_ENV_PROBE = 'inherited'
+    // 子进程自己检查环境变量：漏进来了就以非 0 退出，原因写在 stderr 里，runTool 的错误信息会带上。
+    const probe = [
+      'const leaked = ["UNZIP", "PROMPTX_TOOL_ENV_PROBE"].filter(name => process.env[name] !== undefined)',
+      'if (leaked.length > 0) { process.stderr.write("leaked " + leaked.join(" ")); process.exit(3) }',
+      'if (process.env.LANG !== "C" || process.env.LC_ALL !== "C") { process.stderr.write("locale not C"); process.exit(4) }',
+    ].join('\n')
+    try {
+      await expect(runTool(process.execPath, ['-e', probe])).resolves.toBeUndefined()
+    } finally {
+      if (saved.unzip === undefined) delete process.env.UNZIP
+      else process.env.UNZIP = saved.unzip
+      if (saved.probe === undefined) delete process.env.PROMPTX_TOOL_ENV_PROBE
+      else process.env.PROMPTX_TOOL_ENV_PROBE = saved.probe
+    }
+  })
+
+  // 真实的 Info-ZIP unzip（macOS 自带，Linux 一般装着）会读 UNZIP 里的默认选项：-j 把目录拍平。
+  it.runIf(process.platform !== 'win32' && existsSync('/usr/bin/unzip'))('keeps UNZIP options in the Host environment away from unzip', async () => {
+    const root = await newRoot()
+    const zip = join(root, 'electron.zip')
+    await writeFile(zip, storedZip({ electron: '#!/bin/sh\n', 'locales/en-US.pak': 'pak', 'resources/default_app.asar': 'asar' }))
+    const dest = join(root, 'dest')
+    await mkdir(dest)
+    await defaultExtractor('linux', { PATH: '/usr/bin:/bin', UNZIP: '-j', UNZIPOPT: '-j' })(zip, dest)
+    expect(await readFile(join(dest, 'locales', 'en-US.pak'), 'utf8')).toBe('pak')
+    expect(await readFile(join(dest, 'resources', 'default_app.asar'), 'utf8')).toBe('asar')
+    expect(await exists(join(dest, 'en-US.pak'))).toBe(false)
   })
 
   it('reports a failing tool with its exit status and never throws synchronously', async () => {
