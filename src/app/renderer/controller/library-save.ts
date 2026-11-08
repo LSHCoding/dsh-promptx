@@ -212,12 +212,19 @@ export class LibrarySave {
   async reload(): Promise<void> {
     const binding = this.draft.binding
     if (binding === null) return
+    // 用户选「重新载入」时编辑区里的这份可以替换。读取期间编辑区又有了改动就不替换：整篇替换会清空撤销记录，
+    // 这些改动没有提示就丢了（红线 1；和「在编辑器中打开」同样处理，外部审查第 1 条）。
+    const replaceable = this.ctx.editor.getText()
     const read = await this.ctx.bridge.call('library.read', { relPath: binding.relPath })
     if (!read.ok) {
       this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, read.error) }))
       return
     }
     if (this.draft.binding?.relPath !== binding.relPath) return
+    if (this.ctx.editor.getText() !== replaceable) {
+      this.toasts.error(text(this.ctx, 'toast.editedWhileLoading'))
+      return
+    }
     this.ctx.editor.load(read.value.body, this.ctx.editor.getSelection())
     this.draft.setBinding(bindingFromRead(binding.libraryDir, read.value), true)
     this.draft.flushSoon()

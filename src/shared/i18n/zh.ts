@@ -53,6 +53,8 @@ export const zh = {
   'toast.saveFailed': '保存失败：{reason}',
   'toast.saveTimedOut': '保存超时，已重新核对文件，可以再保存一次。',
   'toast.reloaded': '已载入磁盘上的版本。',
+  'toast.editedWhileLoading': '载入期间编辑器的内容有改动，没有替换。',
+  'toast.unsavedNotOpened': '编辑器里还有没存进文件的改动，没有打开。',
   'toast.editing': '正在编辑库中 Prompt：{title}',
   'toast.inserted': '已插入：{title}',
   'toast.nothingToInsert': '《{title}》没有正文可插入。',

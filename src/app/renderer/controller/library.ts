@@ -256,6 +256,10 @@ export class Library {
       this.toasts.success(text(this.ctx, 'toast.editing', { title: binding.title }))
       return
     }
+    // 读回后允许整篇替换掉的内容：没有未保存内容时是现在的全文，「放弃」时是用户确认放弃的那份，「保存」时是实际存进文件的那份。
+    // 读取（和保存）要等插件回复，这期间编辑区仍可输入；整篇替换会清空撤销记录，替换掉这期间的新内容就再也找不回来，
+    // 所以读回时编辑区和这份不一样就不替换（红线 1，外部审查第 1 条）。
+    let replaceable: string | null = this.ctx.editor.getText()
     if (this.draft.currentStatus() === 'unsaved') {
       const title = entry?.title ?? relPath
       const choice = await this.dialogs.open({
@@ -272,7 +276,16 @@ export class Library {
       if (choice.button === 'save') {
         // 保存失败（含冲突后没有存成）就停下，什么都不替换。
         if (await this.saver.save() !== 'saved') return
-      } else if (choice.button !== 'discard') {
+        // 存进文件的只是确认保存那一刻的内容（新建超时后重试时，是插件记下的上一次结果）。编辑区里还有没存进去的改动，
+        // 就不再读取、不替换，提示原因，用户再保存一次就能打开（外部审查第 1 条复核）
+        replaceable = this.draft.binding?.savedBody ?? null
+        if (this.ctx.editor.getText() !== replaceable) {
+          this.toasts.error(text(this.ctx, 'toast.unsavedNotOpened'))
+          return
+        }
+      } else if (choice.button === 'discard') {
+        replaceable = this.ctx.editor.getText()
+      } else {
         return
       }
     }
@@ -282,6 +295,10 @@ export class Library {
     if (!result.ok) {
       // 读取失败：提示原因，草稿和绑定都不变（L-07）。
       this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
+      return
+    }
+    if (this.ctx.editor.getText() !== replaceable) {
+      this.toasts.error(text(this.ctx, 'toast.editedWhileLoading'))
       return
     }
     // 整篇替换并清空撤销记录（E-01），进入绑定状态。

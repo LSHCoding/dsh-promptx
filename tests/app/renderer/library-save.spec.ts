@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { undo } from '@codemirror/commands'
 import type { BridgeResult } from '../../../src/shared/bridge.ts'
-import type { SaveResult } from '../../../src/shared/types.ts'
+import type { LibraryReadResult, SaveResult } from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import {
   binding,
@@ -204,6 +204,26 @@ describe('已绑定时写回原文件（L-08、L-12）', () => {
     expect(controller.editor.runCommand(undo)).toBe(false)
     expect(controller.store.getState().draft.binding).toMatchObject({ sha256: 'disk-sha', savedBody: '磁盘上的新内容' })
     expect(toastText(controller)).toBe('已载入磁盘上的版本。')
+  })
+
+  it('外部修改 → 重新载入，读取期间又有输入：不替换，提示原因，绑定不动（红线 1，外部审查第 1 条同类问题）', async () => {
+    const bridge = boundBridge()
+    bridge.handle('library.save', () => ok({ kind: 'conflict', conflict: 'modified' }))
+    const read: Deferred<BridgeResult<LibraryReadResult>> = deferred()
+    bridge.handle('library.read', () => read.promise)
+    const controller = await start(bridge)
+    type(controller, '改')
+    const saving = controller.save()
+    await settle()
+    chooseDialog(controller, 'reload')
+    await settle()
+    type(controller, '又改')
+    read.resolve(ok(readResult(entry('代码审查.md', { title: '代码审查' }), '磁盘上的新内容', 'disk-sha')))
+    await saving
+    expect(controller.editor.getText()).toBe('库里的正文改又改')
+    expect(controller.store.getState().draft.binding?.sha256).toBe('sha-代码审查.md')
+    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '载入期间编辑器的内容有改动，没有替换。' })
+    expect(controller.editor.runCommand(undo)).toBe(true)
   })
 
   it('外部修改 → 另存为新 Prompt：新建到库根目录，编辑区绑定到新文件', async () => {

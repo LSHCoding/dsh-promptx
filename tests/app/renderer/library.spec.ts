@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { undo } from '@codemirror/commands'
 import { DEFAULT_PREFS, type BridgeResult } from '../../../src/shared/bridge.ts'
-import type { LibraryListResult, LibraryReadResult, MetaResult } from '../../../src/shared/types.ts'
+import type { LibraryListResult, LibraryReadResult, MetaResult, SaveResult } from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import {
   binding,
@@ -360,6 +360,77 @@ describe('在编辑器中打开（L-07）', () => {
     await controller.library.openEntry(REVIEW.relPath)
     expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '读取失败：找不到这个文件' })
     expect(controller.store.getState().draft.binding).toBeNull()
+  })
+
+  it('读取期间编辑区又有输入：不替换，提示原因，新输入和撤销记录都还在（红线 1，外部审查第 1 条）', async () => {
+    const bridge = libraryBridge()
+    const read: Deferred<BridgeResult<LibraryReadResult>> = deferred()
+    bridge.handle('library.read', () => read.promise)
+    const controller = await start(bridge)
+    const opening = controller.library.openEntry(REVIEW.relPath)
+    await settle()
+    type(controller, '读取期间打的字')
+    read.resolve(ok(readResult(REVIEW, '检查边界条件。')))
+    await opening
+    expect(controller.editor.getText()).toBe('读取期间打的字')
+    expect(controller.store.getState().draft.binding).toBeNull()
+    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '载入期间编辑器的内容有改动，没有替换。' })
+    expect(controller.editor.runCommand(undo)).toBe(true)
+    expect(controller.editor.getText()).toBe('')
+  })
+
+  it('选「保存」后、保存期间又有输入：存进库里的是确认时的内容，不再读取、不替换，后来的输入留在编辑区', async () => {
+    const bridge = libraryBridge()
+    const save: Deferred<BridgeResult<SaveResult>> = deferred()
+    bridge.handle('library.save', () => save.promise)
+    const controller = await start(bridge)
+    type(controller, '旧草稿')
+    const opening = controller.library.openEntry(REVIEW.relPath)
+    await settle()
+    chooseDialog(controller, 'save')
+    await settle()
+    type(controller, '，保存期间新打的字')
+    const sent = bridge.callsTo('library.save')[0]?.text ?? ''
+    save.resolve(ok({ kind: 'saved', binding: binding('草稿.md', sent), entry: entry('草稿.md'), created: true }))
+    await opening
+    expect(sent).toBe('旧草稿')
+    expect(controller.editor.getText()).toBe('旧草稿，保存期间新打的字')
+    expect(controller.store.getState().draft.binding?.relPath).toBe('草稿.md')
+    expect(bridge.callsTo('library.read')).toEqual([])
+    expect(toastText(controller)).toBe('编辑器里还有没存进文件的改动，没有打开。')
+  })
+
+  it('选「保存」后插件返回的是记下的上一次新建结果（超时后重试）：存进去的不是编辑区现在的内容，不打开（审查复核 c1）', async () => {
+    const bridge = libraryBridge()
+    // 第一次新建超时、插件其实建好了「A」；重试沿用 requestId，插件原样返回记下的结果
+    bridge.handle('library.save', () => ok({ kind: 'saved', binding: binding('A.md', 'A'), entry: entry('A.md'), created: true }))
+    const controller = await start(bridge)
+    type(controller, 'AB')
+    const opening = controller.library.openEntry(REVIEW.relPath)
+    await settle()
+    chooseDialog(controller, 'save')
+    await opening
+    expect(controller.editor.getText()).toBe('AB')
+    expect(bridge.callsTo('library.read')).toEqual([])
+    expect(toastText(controller)).toBe('编辑器里还有没存进文件的改动，没有打开。')
+  })
+
+  it('选「放弃」后、读取期间又有输入：不替换', async () => {
+    const bridge = libraryBridge()
+    const read: Deferred<BridgeResult<LibraryReadResult>> = deferred()
+    bridge.handle('library.read', () => read.promise)
+    const controller = await start(bridge)
+    type(controller, '要放弃的草稿')
+    const opening = controller.library.openEntry(REVIEW.relPath)
+    await settle()
+    chooseDialog(controller, 'discard')
+    await settle()
+    type(controller, '又打的字')
+    read.resolve(ok(readResult(REVIEW, '检查边界条件。')))
+    await opening
+    expect(controller.editor.getText()).toBe('要放弃的草稿又打的字')
+    expect(controller.store.getState().draft.binding).toBeNull()
+    expect(toastText(controller)).toBe('载入期间编辑器的内容有改动，没有替换。')
   })
 })
 
