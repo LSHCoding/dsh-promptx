@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import { PANE_LIMITS } from '../../../src/shared/layout.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { clampPaneSizes } from '../../../src/app/renderer/controller/app.ts'
 import { libraryWidth, minimumWindowWidth, sessionWidth } from '../../../src/app/renderer/controller/layout.ts'
@@ -133,5 +135,31 @@ describe('打开和关闭可选栏时的窗口宽度（5.7 规则 1–4）', () 
     // 一次失败不卡住后面的开合。
     await controller.layout.close('library')
     expect(controller.store.getState().library.open).toBe(false)
+  })
+})
+
+/** app.css 里某条规则的声明（jsdom 不排版，栏高的分配只能核对样式本身）。 */
+function cssDeclarations(selector: string): Map<string, string> {
+  const css = readFileSync(new URL('../../../src/app/renderer/styles/app.css', import.meta.url), 'utf8')
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const block = new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[1]
+  if (block === undefined) throw new Error(`no rule for ${selector}`)
+  const declarations = new Map<string, string>()
+  for (const line of block.split(';')) {
+    const colon = line.indexOf(':')
+    if (colon !== -1) declarations.set(line.slice(0, colon).trim(), line.slice(colon + 1).trim())
+  }
+  return declarations
+}
+
+describe('列表栏的高度分配（5.7，审查 CR-07）', () => {
+  it('窗口矮时预览区以拖动的高度为基准往下缩，最矮 128；列表区不缩，最少 96', () => {
+    const preview = cssDeclarations('.px-preview-area')
+    // flex: none 时预览区固定在拖动的高度（默认 232），窗口矮于约 450 就把「插入到光标」挤出列表栏。
+    expect(preview.get('flex')).toBe('0 1 auto')
+    expect(preview.get('min-height')).toBe(`${PANE_LIMITS.preview.min}px`)
+    const list = cssDeclarations('.px-list-area')
+    expect(list.get('flex')).toBe('1')
+    expect(list.get('min-height')).toBe(`${PANE_LIMITS.listPart.min}px`)
   })
 })

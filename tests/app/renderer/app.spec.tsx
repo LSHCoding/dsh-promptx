@@ -454,6 +454,36 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(controller.editor.getText()).toBe('# 写作助手\n\n要求')
   })
 
+  it('窗口矮、预览区被压矮时，拖分隔线从实际显示的高度算起，往上拖不超过列表区的余量（审查 CR-07）', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.list', () => ok(listResult([entry('a.md')])))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    expect(controller.store.getState().panes.previewHeight).toBe(232)
+    // jsdom 不排版：假装窗口很矮，CSS 把预览区压到 150，列表区已经是最小的 96。
+    const previewArea = document.querySelector('.px-preview-area')
+    const listArea = document.querySelector('.px-list-area')
+    if (!(previewArea instanceof HTMLElement) || !(listArea instanceof HTMLElement)) throw new Error('no list column')
+    Object.defineProperty(previewArea, 'offsetHeight', { configurable: true, value: 150 })
+    Object.defineProperty(listArea, 'clientHeight', { configurable: true, value: 96 })
+    const divider = screen.getByRole('separator', { name: '调整预览高度' })
+    // jsdom 没有指针捕获。
+    divider.setPointerCapture = () => {}
+    divider.releasePointerCapture = () => {}
+    fireEvent.pointerDown(divider, { pointerId: 1, clientY: 300 })
+    // 往下拖 10：从显示的 150 变成 140。从记下的 232 算起会是 222，比显示的还高，界面上没有任何变化。
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 310 })
+    expect(controller.store.getState().panes.previewHeight).toBe(140)
+    // 往上拖：列表区已经是最小，没有余量，停在显示的 150。
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 250 })
+    expect(controller.store.getState().panes.previewHeight).toBe(150)
+    fireEvent.pointerUp(divider, { pointerId: 1, clientY: 250 })
+    // 松开时记进偏好。
+    expect(bridge.storedPrefs.panes.previewHeight).toBe(150)
+  })
+
   it('预览读取失败：文件过大说成原因；库目录变得不可用时说明位置限制，前缀只说一遍（审查 CR-04）', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.list', () => ok(listResult([entry('a.md'), entry('b.md')])))

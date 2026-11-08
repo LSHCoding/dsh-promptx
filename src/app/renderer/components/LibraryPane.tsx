@@ -123,6 +123,13 @@ function ListColumn({ width, previewHeight }: { width: number; previewHeight: nu
   const t = useT()
   const view = useAppState(state => state.library.view)
   const column = useRef<HTMLElement>(null)
+  const preview = useRef<HTMLDivElement>(null)
+  // 预览区实际显示的高度。窗口矮时 CSS 把预览区压得比记下的高度矮（最矮 128，审查 CR-07），拖动要从显示的高度算起，
+  // 否则往下拖的头几十像素没有反应；往上拖的上限也按它算。没有排版（offsetHeight 为 0）时按记下的高度。
+  const shownPreviewHeight = (): number => {
+    const shown = preview.current?.offsetHeight ?? 0
+    return shown > 0 ? shown : previewHeight
+  }
   return (
     <section className="px-list-column" style={{ width }} ref={column}>
       <SearchBox />
@@ -133,14 +140,14 @@ function ListColumn({ width, previewHeight }: { width: number; previewHeight: nu
       <Divider
         orientation="horizontal"
         label={t('library.resizePreview')}
-        value={previewHeight}
+        value={shownPreviewHeight}
         invert
         min={PANE_LIMITS.preview.min}
         // 预览拖高时列表部分至少留 96（需求 5.7）。
         max={() => {
           const area = column.current?.querySelector('.px-list-area')
           const listHeight = area instanceof HTMLElement ? area.clientHeight : 0
-          return previewHeight + Math.max(0, listHeight - PANE_LIMITS.listPart.min)
+          return shownPreviewHeight() + Math.max(0, listHeight - PANE_LIMITS.listPart.min)
         }}
         onResize={(height) => {
           controller.resizePanes({ previewHeight: height })
@@ -149,7 +156,7 @@ function ListColumn({ width, previewHeight }: { width: number; previewHeight: nu
           controller.commitPaneSizes()
         }}
       />
-      <div className="px-preview-area" style={{ height: previewHeight }}>
+      <div className="px-preview-area" style={{ height: previewHeight }} ref={preview}>
         {view === 'library' ? <Preview /> : <TrashPreview />}
       </div>
     </section>

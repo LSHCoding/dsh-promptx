@@ -780,9 +780,14 @@ textarea.px-input {
   color: var(--dsw-alias-state-error-primary);
 }
 
+/*
+ * 预览区的高度（行内 style 的 height，默认 232，可拖动）只作为弹性基准，列表栏放不下时预览区先缩，最矮 128（需求 5.7）。
+ * 不能用 flex: none：窗口矮于约 450 时，列表的最小 96 加上固定的预览高度超出列表栏，「插入到光标」和预览的 ⋯ 菜单被截掉
+ * （审查 CR-07）。列表区是 flex: 1（基准 0）且最少 96，不参与收缩，所以缺的高度全部由预览区让出。
+ */
 .px-preview-area {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
   flex-direction: column;
   min-height: 128px;
   overflow: hidden;
