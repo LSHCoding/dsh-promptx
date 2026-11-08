@@ -200,7 +200,8 @@ interface FileTask {
 
 /**
  * 递归扫描库目录（L-01、design-spec 7.2）：只认扩展名为 `.md`（不区分大小写）的普通文件。
- * 跳过名字以 `.` 开头的文件和目录、库根目录下的 `_trash/`、符号链接、其他特殊文件，以及 realpath 在跳过名单里的目录。
+ * 跳过名字以 `.` 开头的文件和目录、库根目录下的 `_trash/`、符号链接、其他特殊文件，以及 realpath 在跳过名单里的目录；
+ * macOS、Linux 上还跳过名字含反斜杠的文件和目录。
  * 根目录读不出来时抛错（调用方报「库目录不可用」）；子目录读不出来只跳过那一个。顺带清理超过 1 小时的临时文件。
  */
 export async function scanLibrary(options: ScanOptions): Promise<ScanResult> {
@@ -226,6 +227,9 @@ export async function scanLibrary(options: ScanOptions): Promise<ScanResult> {
         if (dirent.isFile() && isPromptxTempName(name)) staleTemps.push(abs)
         continue
       }
+      // macOS、Linux 上名字里可以有反斜杠，但小窗传来的路径里含反斜杠的一律拒绝（rel-path.ts，审查 H6）：
+      // 列出来也打不开、删不掉，换成 `/` 去操作又会落到另一个文件上。这样的文件和文件夹整个跳过
+      if (platform !== 'win32' && name.includes('\\')) continue
       // 不跟随符号链接：链接可能指向库目录之外，也可能绕回来造成循环
       if (dirent.isSymbolicLink()) continue
       if (dirent.isDirectory()) {

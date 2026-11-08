@@ -333,6 +333,30 @@ describe('saving a bound prompt (L-08, L-12)', () => {
     expect(await readText(root, 'a.md')).toBe(content)
   })
 
+  // 审查 F1：写坏了的文件载入编辑区的是全文。原样或改过之后保存都不能写回去（既不改写，也不会在原来的分隔行后面再接一份全文），
+  // 另存为新 Prompt 时全文都是新文件的正文
+  it('never writes the whole-text body back into a closed but broken front matter, and saves it as a new prompt', async () => {
+    const root = await temp.make()
+    const content = '---\nYou are a helpful assistant.\n---\nUser: hi\n'
+    await writeTree(root, { 'chat.md': content })
+    const service = makeService(root)
+    const binding = await bindingFor(service, root, 'chat.md')
+    expect(binding.savedBody).toBe(content)
+    for (const text of [binding.savedBody, `${binding.savedBody}User: more\n`]) {
+      for (const mode of ['normal', 'addFrontMatter'] as const) {
+        expect(await service.save({ text, binding, folder: null, mode, requestId: '' })).toEqual({ kind: 'conflict', conflict: 'invalidFrontMatter' })
+      }
+    }
+    expect(await readText(root, 'chat.md')).toBe(content)
+    const copy = saved(await service.save({ text: binding.savedBody, binding, folder: null, mode: 'saveAsNew', requestId: '' }))
+    expect(copy.binding.relPath).not.toBe('chat.md')
+    expect(copy.entry.title).toBe('You are a helpful assistant.')
+    const parsed = parsePromptFile(await readText(root, copy.binding.relPath))
+    expect(parsed.frontMatter?.state).toBe('ok')
+    expect(parsed.body).toBe(content)
+    expect(await readText(root, 'chat.md')).toBe(content)
+  })
+
   it('reports write failures with the errno only, leaves the file and no temp file behind (N-02)', async (ctx) => {
     if (!canTestPermissions) ctx.skip()
     const root = await temp.make()

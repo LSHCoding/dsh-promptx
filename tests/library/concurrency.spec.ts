@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { IndexCache, deriveIndex } from '../../src/library/index-cache.ts'
 import { KeyedQueue } from '../../src/library/queue.ts'
 import { indexedFromText } from '../../src/library/scan.ts'
-import { RECORD_FILE } from '../../src/library/trash.ts'
-import { bindingFor, installCrashTraps, listAll, makeService, promptFile, readText, useTempDirs, writeTree } from './helpers.ts'
+import { RECORD_FILE, recordLockTarget } from '../../src/library/trash.ts'
+import { bindingFor, installCrashTraps, listAll, makeService, promptFile, readText, testLockDir, useTempDirs, writeTree } from './helpers.ts'
 
 installCrashTraps()
 const temp = useTempDirs()
@@ -137,8 +137,13 @@ describe('serialized mutations (S05)', () => {
     const dead = spawnSync(process.execPath, ['-e', '']).pid
     expect(typeof dead).toBe('number')
     await mkdir(join(root, '_trash'))
-    await writeFile(join(root, '_trash', `${RECORD_FILE}.lock`), `${String(dead)}\n`)
+    // 锁在 lockDir 里、按回收站目录的 realpath 命名，不在库里（审查 SEC-03）
+    const lockDir = testLockDir()
+    await mkdir(lockDir, { recursive: true })
+    const lockFile = `${recordLockTarget(lockDir, await realpath(join(root, '_trash')))}.lock`
+    await writeFile(lockFile, `${String(dead)}\n`)
     expect(await makeService(root).delete('a.md')).toEqual({ trashFile: 'a.md' })
+    expect(await readdir(lockDir)).toEqual([])
   })
 })
 

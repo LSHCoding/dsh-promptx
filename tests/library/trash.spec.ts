@@ -1,7 +1,8 @@
-import { chmod, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { chmod, lstat, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { RECORD_FILE } from '../../src/library/trash.ts'
+import { MAX_RECORD_BYTES, MAX_RECORD_PATH_CHARS, RECORD_FILE, readTrashRecord } from '../../src/library/trash.ts'
 import {
   NOW_STAMP,
   canTestPermissions,
@@ -324,6 +325,79 @@ describe('trash record problems (design-spec 7.3, S02)', () => {
     expect(await exists(join(root, 'escape.md'))).toBe(true)
     expect(await readdir(outside)).toEqual([])
   })
+
+  // 审查 SEC-02：记录来自库目录，可能是共享仓库或同步工具带来的。超过上限的记录不读进内存解析，按读不出来处理，
+  // 下一次删除时照常改名留着
+  it('treats a record over 4 MiB as unreadable without parsing it, and sets it aside on the next delete (review SEC-02)', async () => {
+    const root = await temp.make()
+    const huge = JSON.stringify({ version: 1, items: [], padding: 'x'.repeat(MAX_RECORD_BYTES) })
+    await writeTree(root, { 'b.md': '# B\n', '_trash/a.md': '# A\n', [`_trash/${RECORD_FILE}`]: huge })
+    const service = makeService(root)
+    expect(await service.trashList('')).toEqual({ recordState: 'unreadable', entries: [{ file: 'a.md', title: 'A', deletedAt: null, originalPath: null }] })
+    await service.delete('b.md')
+    expect(await readText(root, '_trash/.promptx-trash.broken-20261108T120000Z.json')).toBe(huge)
+    expect((await readRecord(root)).items.map(item => item.originalPath)).toEqual(['b.md'])
+  })
+
+  it('treats a record that is a named pipe or a symbolic link as unreadable without blocking or following it (POSIX)', async (ctx) => {
+    if (process.platform === 'win32') ctx.skip()
+    const root = await temp.make()
+    const outside = await temp.make()
+    await writeTree(root, { 'b.md': '# B\n', 'c.md': '# C\n', '_trash/a.md': '# A\n' })
+    await writeTree(outside, { 'record.json': JSON.stringify({ version: 1, items: [] }) })
+    execFileSync('mkfifo', [join(root, '_trash', RECORD_FILE)])
+    const service = makeService(root)
+    expect((await service.trashList('')).recordState).toBe('unreadable')
+    await service.delete('b.md')
+    expect((await lstat(join(root, '_trash', '.promptx-trash.broken-20261108T120000Z.json'))).isFIFO()).toBe(true)
+    expect((await readRecord(root)).items.map(item => item.originalPath)).toEqual(['b.md'])
+    await rm(join(root, '_trash', RECORD_FILE))
+    await symlink(join(outside, 'record.json'), join(root, '_trash', RECORD_FILE))
+    expect((await service.trashList('')).recordState).toBe('unreadable')
+    await service.delete('c.md')
+    expect((await lstat(join(root, '_trash', '.promptx-trash.broken-20261108T120000Z-2.json'))).isSymbolicLink()).toBe(true)
+    expect(await readFile(join(outside, 'record.json'), 'utf8')).toBe(JSON.stringify({ version: 1, items: [] }))
+  })
+
+  it('ignores record paths longer than 1,024 characters before validating them (review SEC-02)', async () => {
+    const root = await temp.make()
+    const item = (file: string, originalPath: string): Record<string, unknown> =>
+      ({ file, originalPath, deletedAt: '2026-11-01T00:00:00Z', sha256: sha256Of('# x\n'), size: 4 })
+    // 除了长度，这个路径完全合格
+    const long = `${'a/'.repeat(600)}long.md`
+    expect(long.length).toBeGreaterThan(MAX_RECORD_PATH_CHARS)
+    await writeTree(root, {
+      [`_trash/${RECORD_FILE}`]: JSON.stringify({ version: 1, items: [item('long.md', long), item('fine.md', 'ok/fine.md')] }),
+      '_trash/long.md': '# x\n',
+      '_trash/fine.md': '# x\n',
+    })
+    const entries = new Map((await makeService(root).trashList('')).entries.map(entry => [entry.file, entry.originalPath]))
+    expect(entries.get('long.md')).toBeNull()
+    expect(entries.get('fine.md')).toBe('ok/fine.md')
+  })
+
+  // 原来在 Windows 上，40 KB 的记录就要 2.3 秒（设备名检查里的 `/ +$/` 是平方级回溯）。约 20 万个字符的对抗输入，
+  // 阈值按 CI 机器放宽到 200 ms，实测时间打印出来
+  it('reads a record full of adversarial Windows paths in linear time (review SEC-02)', async () => {
+    const root = await temp.make()
+    const spaces = ' '.repeat(200_000)
+    const item = (file: string, originalPath: string): Record<string, unknown> =>
+      ({ file, originalPath, deletedAt: '2026-11-01T00:00:00Z', sha256: sha256Of('# x\n'), size: 4 })
+    await writeTree(root, {
+      [`_trash/${RECORD_FILE}`]: JSON.stringify({
+        version: 1,
+        items: [item(`a${spaces}b.md`, 'ok/a.md'), item('b.md', `x${spaces}y.md`), item('fine.md', `dir${' '.repeat(1000)}x/fine.md`)],
+      }),
+      '_trash/b.md': '# x\n',
+      '_trash/fine.md': '# x\n',
+    })
+    const started = performance.now()
+    const record = await readTrashRecord(join(root, '_trash'), 'win32')
+    const ms = performance.now() - started
+    console.log(`[SEC-02] trash record with 200k-space paths on win32: ${ms.toFixed(1)} ms`)
+    expect(ms).toBeLessThan(200)
+    expect([...record.items.values()].map(value => [value.file, value.originalPath])).toEqual([['fine.md', `dir${' '.repeat(1000)}x/fine.md`]])
+  })
 })
 
 describe('trash list and preview', () => {
@@ -359,6 +433,19 @@ describe('trash list and preview', () => {
     await expect(service.trashRead('none.md')).rejects.toMatchObject({ code: 'promptx/trash/not-found' })
     await expect(service.trashRead('../a.md')).rejects.toMatchObject({ code: 'promptx/library/invalid-path' })
     await expect(service.trashRead(RECORD_FILE)).rejects.toMatchObject({ code: 'promptx/library/invalid-path' })
+  })
+
+  it('previews a trashed file with a closed but broken front matter as a whole (review F1)', async () => {
+    const root = await temp.make()
+    const raw = '---\nYou are a helpful assistant.\n---\nUser: hi\n'
+    await writeTree(root, { 'chat.md': raw })
+    const service = makeService(root)
+    await service.delete('chat.md')
+    expect(await service.trashRead('chat.md')).toEqual({
+      entry: { file: 'chat.md', title: 'You are a helpful assistant.', deletedAt: Date.parse(NOW_STAMP), originalPath: 'chat.md' },
+      body: raw,
+    })
+    expect((await service.trashList('assistant')).entries.map(entry => entry.title)).toEqual(['You are a helpful assistant.'])
   })
 
   it('returns an empty list when there is no trash yet', async () => {

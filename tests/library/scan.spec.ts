@@ -105,6 +105,16 @@ describe('library scan (L-01, L-03, design-spec 7.2)', () => {
     expect(entries.get('unterminated.md')).toMatchObject({ status: 'invalid-meta', title: 'Heading' })
   })
 
+  it('treats a closed but broken front matter as content: title from the whole text, searchable (review F1)', async () => {
+    const root = await temp.make()
+    await writeTree(root, { 'chat.md': '---\nYou are a helpful assistant.\n---\nUser: hi\n', 'other.md': '# Other\n' })
+    const service = makeService(root)
+    const entries = byPath((await listAll(service)).entries)
+    expect(entries.get('chat.md')).toMatchObject({ status: 'invalid-meta', title: 'You are a helpful assistant.', hasFrontMatter: true, tags: [] })
+    // 两个 `---` 之间的文字是正文的一部分，搜得到
+    expect((await listAll(service, { query: 'assistant', refresh: false })).entries.map(entry => entry.relPath)).toEqual(['chat.md'])
+  })
+
   it('shows both files when two share an id', async () => {
     const root = await temp.make()
     const id = 'prompt_20261107_120000_aaaaaaaa'

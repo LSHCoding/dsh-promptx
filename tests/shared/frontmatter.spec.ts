@@ -142,6 +142,28 @@ describe('parsePromptFile: locating the front matter', () => {
     expect(parsePromptFile('\ufeff---\nx').body).toBe('---\nx')
   })
 
+  // 审查 F1：结尾行找到了、但中间写坏了时，原来只把结尾行之后的部分当正文，两个 `---` 之间的文字在预览、插入、
+  // 复制正文、在编辑器中打开里都看不到。按 L-01 应当当成没有 front matter，全文都是正文
+  it('marks a closed but broken front matter invalid and keeps the whole text as the body', () => {
+    const text = lines('---', 'You are a helpful assistant.', '---', 'User: hi', '')
+    expect(parsePromptFile(text)).toEqual({
+      bom: false,
+      eol: 'lf',
+      frontMatter: { state: 'invalid', fields: {}, tagsLayout: 'absent' },
+      body: text,
+    })
+    const crlf = '\ufeff---\r\ntitle: a\r\ntitle: b\r\n...\r\nbody\r\n'
+    expect(parsePromptFile(crlf)).toMatchObject({ bom: true, eol: 'crlf', frontMatter: { state: 'invalid' }, body: crlf.slice(1) })
+    expect(editorBody(parsePromptFile(crlf))).toBe('---\ntitle: a\ntitle: b\n...\nbody\n')
+  })
+
+  it('refuses to patch or prepend to a closed but broken front matter (writes stay refused)', () => {
+    const text = lines('---', 'You are a helpful assistant.', '---', 'User: hi', '')
+    expect(patchFrontMatter(text, { favorite: true })).toEqual({ ok: false, reason: 'invalid' })
+    expect(patchFrontMatter(text, { updated: '2026-11-08T12:00:00Z' })).toEqual({ ok: false, reason: 'invalid' })
+    expect(() => addFrontMatter(text, { id: 'prompt_20261107_120000_1a2b3c4d', title: 'T', created: 'x', updated: 'x' })).toThrow()
+  })
+
   it('keeps the original line endings in the body', () => {
     const parsed = parsePromptFile('---\r\nid: a\r\n---\r\nline 1\r\nline 2\r\n')
     expect(parsed.body).toBe('line 1\r\nline 2\r\n')
@@ -771,8 +793,12 @@ describe('replaceBody', () => {
     expect(replaceBody('---\nid: a\n---', '')).toBe('---\nid: a\n---')
   })
 
-  it('keeps a broken front matter as it is', () => {
-    expect(replaceBody('---\nfavorite: maybe\n---\nold', 'new')).toBe('---\nfavorite: maybe\n---\nnew')
+  // 审查 F1：写坏了的 front matter 读出来的正文是全文，替换正文的范围也要是全文；否则把编辑区里的全文写回去，
+  // 分隔行之间的内容会出现两遍。库服务对这类文件一律拒绝写入，这里只保证两边对「正文」的理解一致
+  it('treats a closed but broken front matter as part of the body, like parsePromptFile', () => {
+    const broken = '\ufeff---\r\nfavorite: maybe\r\n---\r\nold\r\n'
+    expect(replaceBody(broken, 'new')).toBe('\ufeffnew')
+    expect(replaceBody(broken, editorBody(parsePromptFile(broken)))).toBe(broken)
   })
 })
 

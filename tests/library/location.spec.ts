@@ -1,9 +1,9 @@
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { isAbsolute, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { checkLibraryDir, resolveLibraryDir } from '../../src/config.ts'
 import { RECORD_FILE } from '../../src/library/trash.ts'
-import { installCrashTraps, listAll, makeService, promptFile, readText, sha256Of, snapshotTree, useTempDirs, writeTree } from './helpers.ts'
+import { exists, installCrashTraps, listAll, makeService, promptFile, readText, sha256Of, snapshotTree, useTempDirs, writeTree } from './helpers.ts'
 
 installCrashTraps()
 const temp = useTempDirs()
@@ -24,6 +24,38 @@ describe('library location rules', () => {
   it('refuses relative paths', () => {
     expect(checkLibraryDir('prompts', ctx)).toBe('library-dir-relative')
     expect(checkLibraryDir('./prompts', ctx)).toBe('library-dir-relative')
+  })
+
+  // 审查 H5：手改补丁文件写进去的相对路径原来按 dsh 进程的当前目录解析成绝对路径，库服务的相对路径检查从来不会触发，
+  // 库就建在启动 dsh 的目录里（项目仓库里；桌面版的当前目录是 `/`，直接 EACCES）。现在原样交给库服务
+  it('leaves a value that is neither absolute nor ~-prefixed unresolved (review H5)', () => {
+    expect(resolveLibraryDir('Documents/Prompts', ctx)).toBe('Documents/Prompts')
+    expect(resolveLibraryDir('  ./prompts ', ctx)).toBe('./prompts')
+    expect(resolveLibraryDir('~user/prompts', ctx)).toBe('~user/prompts')
+    expect(isAbsolute(resolveLibraryDir('../prompts', ctx))).toBe(false)
+    expect(resolveLibraryDir('~', ctx)).toBe(home)
+    expect(resolveLibraryDir(` ${join(home, 'p')} `, ctx)).toBe(join(home, 'p'))
+  })
+
+  it('never scans or creates a hand-edited relative library under the working directory (review H5)', async () => {
+    const name = `promptx-h5-probe-${process.pid}`
+    const configured = resolveLibraryDir(name, ctx)
+    try {
+      const service = makeService(configured)
+      expect(await listAll(service)).toMatchObject({
+        state: 'unavailable',
+        root: name,
+        entries: [],
+        error: { code: 'promptx/library/unavailable', detail: 'library-dir-relative' },
+      })
+      await expect(service.save({ text: '# New\n', binding: null, folder: null, mode: 'normal', requestId: '' }))
+        .rejects.toMatchObject({ code: 'promptx/library/unavailable', detail: 'library-dir-relative' })
+      await expect(service.read('a.md')).rejects.toMatchObject({ code: 'promptx/library/unavailable', detail: 'library-dir-relative' })
+      expect(await exists(resolve(name))).toBe(false)
+    } finally {
+      // 修复前这里会在当前目录建出库目录，测试结束时清掉
+      await rm(resolve(name), { recursive: true, force: true })
+    }
   })
 
   it('expands ~ to the home directory', () => {

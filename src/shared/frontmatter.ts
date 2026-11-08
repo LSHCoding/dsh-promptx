@@ -27,7 +27,7 @@ export interface FrontMatterFields {
 export type TagsLayout = 'block' | 'flow' | 'empty' | 'absent' | 'unsupported'
 
 export interface ParsedFrontMatter {
-  /** invalid：写坏了或找不到结尾。按没有 front matter 显示，插件不改写这个文件（L-01）。 */
+  /** invalid：写坏了或找不到结尾。按没有 front matter 显示（全文都是正文），插件不改写这个文件（L-01）。 */
   state: 'ok' | 'invalid'
   /** state 为 invalid 时是空对象。 */
   fields: FrontMatterFields
@@ -41,8 +41,8 @@ export interface ParsedPromptFile {
   /** null：文件没有 front matter。 */
   frontMatter: ParsedFrontMatter | null
   /**
-   * 结尾分隔行之后的原文，换行不转换。没有 front matter、或 front matter 找不到结尾时，
-   * 是去掉 BOM 后的全文（编辑区要能看到全部内容）。
+   * 结尾分隔行之后的原文，换行不转换。没有 front matter、或 front matter 写坏了（包括找不到结尾）时，
+   * 是去掉 BOM 后的全文（编辑区、预览、插入都要看到全部内容）。
    */
   body: string
 }
@@ -633,12 +633,13 @@ export function parsePromptFile(text: string): ParsedPromptFile {
   const { bom, eol, contentStart, frontMatter } = scanFile(text)
   if (frontMatter === null) return { bom, eol, frontMatter: null, body: text.slice(contentStart) }
   const { close, info } = frontMatter
-  const invalid: ParsedFrontMatter = { state: 'invalid', fields: {}, tagsLayout: 'absent' }
-  // 找不到结尾时无法确定 front matter 到哪里结束，正文取全文，让用户在编辑区看到全部内容
-  if (close === null) return { bom, eol, frontMatter: invalid, body: text.slice(contentStart) }
-  const body = text.slice(close.next)
-  if (info === null) return { bom, eol, frontMatter: invalid, body }
-  return { bom, eol, frontMatter: { state: 'ok', fields: info.fields, tagsLayout: info.tags.layout }, body }
+  // 写坏了（包括找不到结尾）：按没有 front matter 处理，全文都是正文（L-01）。只取结尾行之后的部分时，
+  // 两个 `---` 之间的文字在预览、插入到光标、复制正文、在编辑器中打开里都会悄悄消失（审查 F1）。
+  // 写入不受影响：state 是 invalid，保存、改元数据一律拒绝
+  if (close === null || info === null) {
+    return { bom, eol, frontMatter: { state: 'invalid', fields: {}, tagsLayout: 'absent' }, body: text.slice(contentStart) }
+  }
+  return { bom, eol, frontMatter: { state: 'ok', fields: info.fields, tagsLayout: info.tags.layout }, body: text.slice(close.next) }
 }
 
 /** 读进编辑区的正文：CRLF、CR 统一成 LF。 */
@@ -874,12 +875,14 @@ export function patchFrontMatter(text: string, patch: FrontMatterPatch): PatchRe
 
 /**
  * 替换正文：BOM 和 front matter（到结尾分隔行的换行符为止）逐字节保留，正文里的 LF 按文件原来的换行风格写。
- * 没有 front matter、或 front matter 找不到结尾时，BOM 之后的全部内容都是正文。
+ * 正文的范围和 parsePromptFile 的 body 一致：没有 front matter、或 front matter 写坏了（包括找不到结尾）时，
+ * BOM 之后的全部内容都是正文。库服务对写坏了的文件一律拒绝写入，不会走到这里；万一传进来的是编辑区里的全文，
+ * 也不会在原来的分隔行后面再接一份（审查 F1）。
  */
 export function replaceBody(text: string, bodyLF: string): string {
   const { eol, contentStart, frontMatter } = scanFile(text)
   const body = fromLf(bodyLF, eol)
-  const close = frontMatter?.close ?? null
+  const close = frontMatter !== null && frontMatter.info !== null ? frontMatter.close : null
   if (close === null) return text.slice(0, contentStart) + body
   const head = text.slice(0, close.next)
   // 结尾分隔行是文件最后一行、后面没有换行符时，要先补一个换行，否则正文会接在 `---` 后面

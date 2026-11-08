@@ -58,10 +58,21 @@ export interface LibraryLocationContext {
   platform?: string
 }
 
-/** 配置值 → 库目录的绝对路径。空串用默认目录。 */
+/** 绝对路径，或以 `~`、`~/`、`~\` 开头（配置页和 Host 认同一条规则）。 */
+function isAbsoluteOrHome(trimmed: string): boolean {
+  return trimmed === '~' || trimmed.startsWith('~/') || trimmed.startsWith('~\\') || isAbsolute(trimmed)
+}
+
+/**
+ * 配置值 → 库目录的绝对路径。空串用默认目录。
+ * 既不是绝对路径、也不以 `~` 开头的值（只能是手改补丁文件写进去的）原样返回、不解析：按 dsh 进程的当前目录解析，
+ * 库服务就看不出它是相对路径，会在启动 dsh 的那个目录（项目仓库里，或桌面版的 `/`）扫描、建库。
+ * 原样交给库服务，由它报 library-dir-relative（审查 H5）。
+ */
 export function resolveLibraryDir(value: string, ctx: LibraryLocationContext): string {
   const trimmed = value.trim()
   if (trimmed === '') return ctx.defaultLibrary
+  if (!isAbsoluteOrHome(trimmed)) return trimmed
   return resolve(expandHome(trimmed, ctx.home ?? homedir()))
 }
 
@@ -74,7 +85,7 @@ export function resolveLibraryDir(value: string, ctx: LibraryLocationContext): s
 export function checkLibraryDir(value: string, ctx: LibraryLocationContext): ConfigFieldError | null {
   const trimmed = value.trim()
   if (trimmed === '') return null
-  if (!(trimmed === '~' || trimmed.startsWith('~/') || trimmed.startsWith('~\\') || isAbsolute(trimmed))) return 'library-dir-relative'
+  if (!isAbsoluteOrHome(trimmed)) return 'library-dir-relative'
   const target = resolveLibraryDir(trimmed, ctx)
   const platform = ctx.platform ?? process.platform
   // macOS、Windows 默认的文件系统不区分大小写，比较时统一小写。

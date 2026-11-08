@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DISPLAY_TITLE_MAX_CHARS,
   displayTitle,
   extractTitle,
   FILE_STEM_MAX_CHARS,
@@ -130,14 +131,73 @@ describe('displayTitle', () => {
     expect(displayTitle('  My Title ', '# Other', 'a.md')).toBe('My Title')
   })
 
-  it.each([undefined, null, '', '   '])('extracts from the body without a length limit when the title is %j', (title) => {
+  it.each([undefined, null, '', '   '])('extracts from the body beyond the 40-character limit for new prompts when the title is %j', (title) => {
     expect(displayTitle(title, `# ${'x'.repeat(60)}`, 'a.md')).toBe('x'.repeat(60))
+  })
+
+  it('caps a title taken from the body at 200 characters but keeps a front matter title whole (review SEC-01)', () => {
+    expect(DISPLAY_TITLE_MAX_CHARS).toBe(200)
+    // 第一行就有 2 MiB 的文件不会变成 2 MiB 的列表标题
+    expect(displayTitle(undefined, 'x'.repeat(2 * 1024 * 1024), 'a.md')).toBe('x'.repeat(200))
+    expect(displayTitle(null, `# ${'标'.repeat(300)}\n`, 'a.md')).toBe('标'.repeat(200))
+    expect(displayTitle('y'.repeat(300), '', 'a.md')).toBe('y'.repeat(300))
   })
 
   it('falls back to the file name without .md', () => {
     expect(displayTitle(undefined, '', 'notes.md')).toBe('notes')
     expect(displayTitle('', '  \n', '写作/评审/评审意见.MD')).toBe('评审意见')
     expect(displayTitle(undefined, '', 'README')).toBe('README')
+  })
+
+  it('never shows a --- delimiter line as the title (review F1)', () => {
+    // front matter 写坏了时全文都是正文，第一行就是 `---`
+    expect(displayTitle(undefined, '---\nYou are a helpful assistant.\n---\nUser: hi\n', 'chat.md')).toBe('You are a helpful assistant.')
+    expect(displayTitle(undefined, '  ---\t\n\n---\nfirst', 'a.md')).toBe('first')
+    expect(displayTitle(undefined, '---\n---\n', 'only-dashes.md')).toBe('only-dashes')
+    expect(newPromptTitle('---\n---\n', '未命名 Prompt')).toBe('未命名 Prompt')
+  })
+})
+
+// 审查 SEC-01、SEC-02：标题、围栏、标签两端的处理原来是平方级回溯的正则，一行里几万个空白就要几秒，
+// 而它们在 Host 主线程上同步运行。这里用约 20 万个字符的对抗输入，阈值按 CI 机器放宽到 200 ms，实测时间打印出来。
+describe('adversarial lines finish in linear time (review SEC-01, SEC-02)', () => {
+  const N = 200_000
+
+  function timed<T>(label: string, run: () => T): T {
+    const started = performance.now()
+    const result = run()
+    const ms = performance.now() - started
+    console.log(`[SEC-01/02] ${label}: ${ms.toFixed(1)} ms`)
+    expect(ms).toBeLessThan(200)
+    return result
+  }
+
+  it('a long run of blanks inside a heading', () => {
+    expect(timed('heading with spaces', () => extractTitle(`# a${' '.repeat(N)}b`))).toBe('a')
+    expect(timed('heading with spaces, no limit', () => extractTitle(`## a${' \t'.repeat(N / 2)}b`, Infinity))).toBe(`a${' \t'.repeat(N / 2)}b`)
+    expect(timed('blank line then text', () => extractTitle(`${' '.repeat(N)}x`))).toBe('x')
+  })
+
+  it('closing # sequences after a long run of blanks', () => {
+    expect(timed('closing hashes', () => extractTitle(`# a${' '.repeat(N)}###`))).toBe('a')
+    expect(timed('hashes that do not close', () => extractTitle(`# a${' '.repeat(N)}#b`, Infinity))).toBe(`a${' '.repeat(N)}#b`)
+    expect(timed('a heading of hashes only', () => extractTitle(`# ${'#'.repeat(N)}\n# Real`))).toBe('Real')
+    expect(timed('a long # run inside the text', () => extractTitle(`# a${'#'.repeat(N)} b`, Infinity))).toBe(`a${'#'.repeat(N)} b`)
+  })
+
+  it('long fence-like lines', () => {
+    // 含 U+2028、U+2029 的行原来不算围栏（`.` 不匹配它们），后面的标题照常认出来
+    expect(timed('backticks then a line separator', () => extractTitle(`${'`'.repeat(N)}\u2028\n# Real`))).toBe('Real')
+    expect(timed('tildes then a paragraph separator', () => extractTitle(`${'~'.repeat(N)}\u2029x\n# Real`))).toBe('Real')
+    expect(timed('a long fence that is closed', () => extractTitle(`${'`'.repeat(N)}\n# inside\n${'`'.repeat(N)}\n# Real`))).toBe('Real')
+    // 不是标题行，退回第一行文字，截到 40 个字符后去掉末尾空白
+    expect(timed('a heading with a line separator', () => extractTitle(`# a${' '.repeat(N)}\u2028b`))).toBe('# a')
+  })
+
+  it('a long # run inside a tag', () => {
+    const middle = `a${'#'.repeat(N)}b`
+    expect(timed('tag with hashes inside', () => normalizeTags(middle))).toEqual([middle])
+    expect(timed('tag with hash edges', () => normalizeTags([`${'＃'.repeat(N)}tag${'#'.repeat(N)}`]))).toEqual(['tag'])
   })
 })
 

@@ -325,6 +325,19 @@ describe('Windows device names', () => {
     }
   })
 
+  // 审查 SEC-02：原来用 `/ +$/` 去掉结尾的空格，一长串空格后面跟别的字符时是平方级回溯；Windows 上回收站记录里的
+  // 每个路径都逐段经过这里。约 20 万个字符的对抗输入，阈值按 CI 机器放宽到 200 ms，实测时间打印出来
+  it('handles a long run of spaces in linear time (review SEC-02)', () => {
+    const spaces = ' '.repeat(200_000)
+    const started = performance.now()
+    expect(isWindowsDeviceName(`a${spaces}b.md`)).toBe(false)
+    expect(isWindowsDeviceName(`con${spaces}.md`)).toBe(true)
+    expect(isWindowsDeviceName(`con${spaces}x.md`)).toBe(false)
+    const ms = performance.now() - started
+    console.log(`[SEC-02] device name check with 200k spaces: ${ms.toFixed(1)} ms`)
+    expect(ms).toBeLessThan(200)
+  })
+
   it('never creates a device name on Windows and takes the next candidate instead', async () => {
     const dir = await temp.make()
     const { name } = await createNoClobber(dir, ['CON.md', 'CON-01020304.md'], Buffer.from('x'), { platform: 'win32' })

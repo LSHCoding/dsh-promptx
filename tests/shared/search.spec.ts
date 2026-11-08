@@ -116,6 +116,23 @@ describe('filterEntries: folder, scope and tag', () => {
 
   it('treats the empty folder path as the whole library', () => {
     expect(search(docs, { folder: { kind: 'folder', path: '' } })).toHaveLength(4)
+    expect(search(docs, { folder: { kind: 'folder', path: '///' } })).toHaveLength(4)
+  })
+
+  // 审查 SEC-02：文件夹路径来自小窗的请求参数，原来用 `/\/+$/` 去掉结尾的 `/`，一长串 `/` 后面跟别的字符时是平方级回溯。
+  // 约 20 万个字符的对抗输入，阈值按 CI 机器放宽到 200 ms，实测时间打印出来
+  it('trims trailing slashes of a long folder path in linear time (review SEC-02)', () => {
+    const slashes = '/'.repeat(200_000)
+    let started = performance.now()
+    expect(search(docs, { folder: { kind: 'folder', path: `写作${slashes}x` } })).toEqual([])
+    let ms = performance.now() - started
+    console.log(`[SEC-02] folder path with 200k slashes inside: ${ms.toFixed(1)} ms`)
+    expect(ms).toBeLessThan(200)
+    started = performance.now()
+    expect(search(docs, { folder: { kind: 'folder', path: `写作${slashes}` } })).toEqual(['写作/a.md', '写作/评审/b.md'])
+    ms = performance.now() - started
+    console.log(`[SEC-02] folder path with 200k trailing slashes: ${ms.toFixed(1)} ms`)
+    expect(ms).toBeLessThan(200)
   })
 
   it('keeps entries updated within the last 30 days for recent', () => {

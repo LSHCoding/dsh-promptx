@@ -28,12 +28,22 @@ describe('library.read (L-05, L-07)', () => {
     expect(result.entry).toMatchObject({ relPath: '写作/a.md', folder: '写作', title: '标题', id: 'prompt_20261107_120000_1a2b3c4d', status: 'ok' })
   })
 
-  it('accepts backslashes from Windows paths and returns the full text of files with broken front matter', async () => {
+  it('accepts backslashes from Windows paths on Windows and returns the full text of files with broken front matter', async () => {
     const root = await temp.make()
     await writeTree(root, { 'a/b.md': '---\ntitle: never closed\n# Heading\n' })
-    const result = await makeService(root).read('a\\b.md')
+    const result = await makeService(root, {}, { platform: 'win32' }).read('a\\b.md')
     expect(result.entry.status).toBe('invalid-meta')
     expect(result.body).toBe('---\ntitle: never closed\n# Heading\n')
+  })
+
+  it('returns the whole file when the front matter is closed but broken (L-01, L-05, review F1)', async () => {
+    const root = await temp.make()
+    const raw = '---\nYou are a helpful assistant.\n---\nUser: hi\n'
+    await writeTree(root, { 'chat.md': raw })
+    const result = await makeService(root).read('chat.md')
+    expect(result.body).toBe(raw)
+    expect(result.entry).toMatchObject({ status: 'invalid-meta', title: 'You are a helpful assistant.', hasFrontMatter: true, id: null, tags: [] })
+    expect(result.version).toEqual({ sha256: sha256Of(raw), size: Buffer.byteLength(raw) })
   })
 
   it('reports missing files and a missing library as not-found', async () => {

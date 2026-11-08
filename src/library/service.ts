@@ -82,7 +82,7 @@ import { KeyedQueue } from './queue.ts'
 import { TRASH_DIR, folderRelPath, isTrashFileName, promptRelPath } from './rel-path.ts'
 import { READ_CONCURRENCY, STALE_TEMP_MS, decodeUtf8, entryFromText, foldPath, indexFile, indexedFromText, mapPool } from './scan.ts'
 import type { IndexedFile } from './scan.ts'
-import { RECORD_FILE, numberedNames, readTrashRecord, setAsideBrokenRecord, trashNameCandidates, writeTrashRecord } from './trash.ts'
+import { numberedNames, readTrashRecord, recordLockTarget, setAsideBrokenRecord, trashNameCandidates, writeTrashRecord } from './trash.ts'
 import type { TrashItem } from './trash.ts'
 
 /** 新建文件的 requestId 在 Host 进程里记住最近多少个（design-spec 6.1）。 */
@@ -103,11 +103,12 @@ export interface LibraryHooks extends FsHooks {
   beforeRecordWrite?: () => Promise<void>
 }
 
-/** 只给测试用的内部选项：替换底层文件操作、插入竞争、模拟平台。 */
+/** 只给测试用的内部选项：替换底层文件操作、插入竞争、模拟平台、缩短等锁的时间。 */
 export interface LibraryInternals {
   ops?: Partial<FsOps>
   hooks?: LibraryHooks
   platform?: NodeJS.Platform
+  recordLockWaitMs?: number
 }
 
 interface OkRoot {
@@ -283,6 +284,7 @@ export class LibraryService implements LibraryApi {
   readonly #ops: Partial<FsOps> | undefined
   readonly #hooks: LibraryHooks
   readonly #platform: NodeJS.Platform
+  readonly #recordLockWaitMs: number
   readonly #queue = new KeyedQueue()
   readonly #cache = new IndexCache()
   /** 新建文件的 requestId → 结果，最近 100 个。 */
@@ -295,6 +297,7 @@ export class LibraryService implements LibraryApi {
     this.#ops = internals.ops
     this.#hooks = internals.hooks ?? {}
     this.#platform = internals.platform ?? process.platform
+    this.#recordLockWaitMs = internals.recordLockWaitMs ?? RECORD_LOCK_WAIT_MS
   }
 
   // ───────────── 读 ─────────────
@@ -782,14 +785,21 @@ export class LibraryService implements LibraryApi {
     throw new PromptxError('promptx/library/move-failed', 'EEXIST: no free alternative name')
   }
 
-  /** 持回收站记录的跨进程锁执行（默认库目录被所有 profile 共用，D24）。锁没拿到时什么都还没动。 */
+  /**
+   * 持回收站记录的跨进程锁执行（默认库目录被所有 profile 共用，D24）。锁没拿到时什么都还没动。
+   * 锁文件在 lockDir 里、按回收站目录的 realpath 命名，不在库里（审查 SEC-03，见 recordLockTarget）；
+   * 库里残留的旧锁 `_trash/.promptx-trash.json.lock` 不再读、不再删，原样留给用户。
+   */
   async #withRecordLock<T>(trashDir: string, operation: () => Promise<T>): Promise<T> {
     const progress = { started: false }
     try {
-      return await withFileLock(join(trashDir, RECORD_FILE), async () => {
+      const lockDir = this.#options.lockDir
+      await mkdir(lockDir, { recursive: true })
+      const target = recordLockTarget(lockDir, await realpath(trashDir))
+      return await withFileLock(target, async () => {
         progress.started = true
         return await operation()
-      }, { waitMs: RECORD_LOCK_WAIT_MS })
+      }, { waitMs: this.#recordLockWaitMs })
     } catch (error) {
       if (!progress.started) throw new PromptxError('promptx/trash/record-failed', errnoCode(error) === undefined ? 'lock-timeout' : systemErrorDetail(error))
       throw error

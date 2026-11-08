@@ -1,6 +1,6 @@
 // 库和草稿测试共用的工具：未处理异常陷阱、临时目录、写文件、目录快照、服务工厂。
 
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -59,6 +59,18 @@ async function restoreModes(path: string): Promise<void> {
   }
 }
 
+let lockDir: string | undefined
+
+/**
+ * makeService 默认用的锁目录（LibraryServiceOptions.lockDir）。回收站记录锁不在库里（审查 SEC-03），
+ * 测试里放在系统临时目录下、库目录之外；同一个测试文件里的服务共用它，跨进程锁的测试才能互相协调。
+ * 服务用到时才建，useTempDirs 在每个测试之后删掉。
+ */
+export function testLockDir(): string {
+  lockDir ??= join(tmpdir(), `promptx-locks-${process.pid}-${randomBytes(4).toString('hex')}`)
+  return lockDir
+}
+
 /** 每个测试用新的临时目录，测试后删除。删除前恢复权限：chmod 000 的目录和文件删不掉。 */
 export function useTempDirs(): { make: (prefix?: string) => Promise<string> } {
   const dirs: string[] = []
@@ -67,6 +79,7 @@ export function useTempDirs(): { make: (prefix?: string) => Promise<string> } {
       if (process.platform !== 'win32') await restoreModes(dir)
       await rm(dir, { recursive: true, force: true })
     }
+    if (lockDir !== undefined) await rm(lockDir, { recursive: true, force: true })
   })
   return {
     async make(prefix = 'promptx-lib-') {
@@ -160,6 +173,7 @@ export function makeService(
   return new LibraryService({
     getRoot: () => root,
     untitledTitle: () => '未命名 Prompt',
+    lockDir: testLockDir(),
     now: () => NOW,
     // 每次给不同的字节，同一秒里新建的多个文件 id 也不同
     randomBytes: (size: number) => {

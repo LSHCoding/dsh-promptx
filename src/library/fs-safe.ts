@@ -96,7 +96,12 @@ export function nameKey(name: string): string {
 const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])$/i
 
 export function isWindowsDeviceName(name: string): boolean {
-  return WINDOWS_DEVICE_NAME.test((name.split('.', 1)[0] ?? '').replace(/ +$/, ''))
+  const stem = name.split('.', 1)[0] ?? ''
+  // 结尾的空格用循环去掉，不用 `/ +$/`：它遇到一长串空格后面跟别的字符时是平方级回溯。回收站记录里的每个路径
+  // 在 Windows 上都要逐段经过这里，记录可能来自共享仓库或同步工具（审查 SEC-02）
+  let end = stem.length
+  while (end > 0 && stem.charCodeAt(end - 1) === 0x20) end--
+  return WINDOWS_DEVICE_NAME.test(stem.slice(0, end))
 }
 
 // 临时文件名 = `.` + 原文件名 + `.promptx-` + 12 位十六进制 + `.tmp`。文件名上限 255 字节，
