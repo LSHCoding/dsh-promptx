@@ -4,15 +4,27 @@
 // 读改写由调用方在库的修改队列里、持 withFileLock 跨进程锁完成，这里只管格式。
 
 import type { Stats } from 'node:fs'
-import { lstat, readFile, rename } from 'node:fs/promises'
+import { lstat, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { formatIsoUtc } from '../shared/library-rules.ts'
-import { errnoCode, moveNoClobber, nameKey, replaceFile } from './fs-safe.ts'
-import type { FsOptions } from './fs-safe.ts'
+import { errnoCode, moveNoClobber, nameKey, readRegularFile, replaceFile } from './fs-safe.ts'
+import type { FileRead, FsOptions } from './fs-safe.ts'
 import { isTrashFileName, promptRelPath } from './rel-path.ts'
 
 export const RECORD_FILE = '.promptx-trash.json'
 export const RECORD_VERSION = 1
+
+/**
+ * 记录文件的大小上限。每项约 300 字节，4 MiB 能记一万多项；更大的按读不出来处理，
+ * 不把整个文件读进内存再在 Host 主线程上解析（审查 SEC-02）。
+ */
+export const MAX_RECORD_BYTES = 4 * 1024 * 1024
+
+/**
+ * 记录项里 file、originalPath 的长度上限（UTF-16 码元）。文件名最多 255 字节，正常的路径到不了这个长度；
+ * 超长的值在任何校验之前就丢掉，校验的代价不随攻击者写进记录的长度增长（审查 SEC-02）。
+ */
+export const MAX_RECORD_PATH_CHARS = 1024
 
 export interface TrashItem {
   /** `_trash/` 下的文件名。 */
@@ -52,6 +64,8 @@ const SHA256_HEX = /^[0-9a-f]{64}$/
 function parseItem(value: unknown, platform: NodeJS.Platform): TrashItem | null {
   if (!isObject(value)) return null
   const { file, originalPath, deletedAt, sha256, size } = value
+  if (typeof file !== 'string' || typeof originalPath !== 'string') return null
+  if (file.length > MAX_RECORD_PATH_CHARS || originalPath.length > MAX_RECORD_PATH_CHARS) return null
   if (!isTrashFileName(file, platform)) return null
   // 原路径和小程序传来的路径同样校验：`../` 之类的值不能把恢复的文件带到库目录之外
   const original = promptRelPath(originalPath, platform)
@@ -73,16 +87,22 @@ async function isRegularFile(path: string): Promise<boolean> {
 /** 读回收站记录并逐项校验（design-spec 7.3「记录项校验」）。 */
 export async function readTrashRecord(trashDir: string, platform: NodeJS.Platform = process.platform): Promise<TrashRecord> {
   const path = join(trashDir, RECORD_FILE)
-  let stats: Stats
+  let read: FileRead
   try {
-    stats = await lstat(path)
+    // 先 lstat：Windows 上 open 没有 O_NOFOLLOW，记录位置上的符号链接只能在这里挡住
+    const stats = await lstat(path)
+    if (!stats.isFile()) return emptyRecord('unreadable')
+    // 再和读 Prompt 文件一样用 readRegularFile：POSIX 上不跟随 lstat 之后换上的符号链接，换成命名管道也不会卡住，
+    // 超过上限不读（审查 SEC-02）。符号链接、目录、管道和超大的记录都按读不出来处理，下一次删除时由 setAsideBrokenRecord 改名留着
+    read = await readRegularFile(path, MAX_RECORD_BYTES)
   } catch (error) {
     return emptyRecord(errnoCode(error) === 'ENOENT' ? 'missing' : 'unreadable')
   }
-  if (!stats.isFile()) return emptyRecord('unreadable')
+  if (read.kind === 'missing') return emptyRecord('missing')
+  if (read.kind !== 'ok') return emptyRecord('unreadable')
   let raw: unknown
   try {
-    raw = JSON.parse(await readFile(path, 'utf8'))
+    raw = JSON.parse(read.bytes.toString('utf8'))
   } catch {
     return emptyRecord('unreadable')
   }
