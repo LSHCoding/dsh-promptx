@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { redo, undo } from '@codemirror/commands'
-import type { ErrorInfo, OptimizeRound, OptimizeSession } from '../../../src/shared/types.ts'
-import type { AppController } from '../../../src/app/renderer/controller/app.ts'
+import type { BridgeResult } from '../../../src/shared/bridge.ts'
+import type { DraftRecord, ErrorInfo, OptimizeRound, OptimizeSession } from '../../../src/shared/types.ts'
+import { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { mergeSession } from '../../../src/app/renderer/controller/optimize.ts'
 import {
   chooseDialog,
+  deferred,
+  draftRecord,
   FakeBridge,
   fail,
   ok,
@@ -16,6 +19,7 @@ import {
   toastText,
   trapUnhandled,
   type,
+  type Deferred,
 } from './helpers.ts'
 
 let checkUnhandled: () => void
@@ -363,6 +367,62 @@ describe('应用候选与草稿快照（O-04，技术方案 5.5，审查 COV-08�
     expect(openDialog(controller).title).toBe('草稿在优化期间已经修改')
     controller.escapeDialog()
     await applying
+  })
+})
+
+describe('草稿读回之前不能应用候选（F-01、技术方案 4.5，审查 CR-01）', () => {
+  /** 小程序重启后从插件恢复的会话：第一轮已经完成，带候选。 */
+  function withRestoredSession(bridge: FakeBridge): FakeBridge {
+    bridge.handle('optimize.state', () => ok({
+      session: session('s1', [round('r1', { input: '原始草稿', status: 'done', reply: '改写稿', candidate: '改写稿' })]),
+    }))
+    return bridge
+  }
+
+  /** 修复前这里会弹「草稿在优化期间已经修改」：照用户的做法选「仍然应用」，看候选会不会写进编辑区。 */
+  async function applyAnyway(controller: AppController, roundId: string): Promise<void> {
+    const applying = controller.optimize.apply(roundId)
+    await settle()
+    if (controller.store.getState().dialog !== null) chooseDialog(controller, 'apply')
+    await applying
+  }
+
+  it('载入中：不替换、不提示「已应用优化。」；读回的是草稿本身，之后照常可以应用', async () => {
+    const bridge = withRestoredSession(new FakeBridge())
+    const load: Deferred<BridgeResult<{ record: DraftRecord | null }>> = deferred()
+    bridge.handle('draft.load', () => load.promise)
+    const controller = new AppController({ bridge, locale: 'zh' })
+    controllers.push(controller)
+    const started = controller.start()
+    await settle()
+    expect(controller.store.getState().draft.load).toBe('loading')
+    expect(controller.store.getState().optimize.session?.id).toBe('s1')
+
+    await applyAnyway(controller, 'r1')
+    expect(controller.editor.getText()).toBe('')
+    expect(toastText(controller)).not.toBe('已应用优化。')
+
+    load.resolve(ok({ record: draftRecord('原始草稿') }))
+    await started
+    expect(controller.editor.getText()).toBe('原始草稿')
+    await controller.optimize.apply('r1')
+    expect(controller.store.getState().dialog).toBeNull()
+    expect(controller.editor.getText()).toBe('改写稿')
+    expect(toastText(controller)).toBe('已应用优化。')
+  })
+
+  it('读取失败：只读的编辑区里不出现候选，⌘↩ 也不会把候选复制走', async () => {
+    const bridge = withRestoredSession(new FakeBridge())
+    bridge.handle('draft.load', () => fail('promptx/draft/unreadable'))
+    const controller = await start(bridge)
+    expect(controller.store.getState().draft.load).toBe('error')
+
+    await applyAnyway(controller, 'r1')
+    expect(controller.editor.getText()).toBe('')
+    expect(toastText(controller)).not.toBe('已应用优化。')
+    expect(await controller.copyAndHide()).toEqual({ ok: false })
+    expect(bridge.window.copyAndHide).not.toHaveBeenCalled()
+    expect(toastText(controller)).toBe('没有可复制的内容。')
   })
 })
 

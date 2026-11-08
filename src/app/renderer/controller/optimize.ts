@@ -154,6 +154,10 @@ export class Optimize {
 
   async apply(roundId: string): Promise<void> {
     this.toasts.beginAction()
+    // 草稿读回之前编辑区不可编辑（F-01，技术方案 4.5），这一条对「应用」同样成立（审查 CR-01）：CodeMirror 的 readOnly
+    // 只挡用户输入，挡不住程序派发的整篇替换。载入中应用的候选会被随后读回的草稿悄悄盖掉，读取失败时只读的编辑区里
+    // 却显示着候选、⌘↩ 能把它复制走。和插入到光标、在编辑器中打开、清空一样，不提示，什么都不做。
+    if (this.ctx.store.getState().draft.load !== 'ready') return
     const round = this.currentRound(roundId)
     if (round?.status !== 'done' || round.candidate === null) {
       // 会话已经清空或换成新会话后，旧的「应用」不再生效。
