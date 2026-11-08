@@ -100,6 +100,14 @@ describe('Enter（E-01、E-05）', () => {
     expect(marked(plain.editor)).toBe('    缩进的文字\n|')
   })
 
+  it('只有列表符号、后面没有空格的行按 Enter 只换行，不清掉这一行（E-01、E-05，审查 CR-05）', () => {
+    for (const line of ['-', '  *', '2.', '2024.']) {
+      const { editor, view } = editorWith(`${line}|`)
+      expect(press(view, { key: 'Enter' })).toBe(true)
+      expect(marked(editor)).toBe(`${line}\n|`)
+    }
+  })
+
   it('Shift+Enter 普通换行，不续行', () => {
     const { editor, view } = editorWith('- 第一项|')
     expect(press(view, { key: 'Enter', shiftKey: true })).toBe(true)
@@ -131,6 +139,12 @@ describe('Tab 与 Shift+Tab（E-06）', () => {
     const { editor, view } = editorWith('ab|c')
     press(view, { key: 'Tab' })
     expect(marked(editor)).toBe('ab    |c')
+  })
+
+  it('只有列表符号、后面没有空格的行按 Tab 在光标处插入空格，不缩进整行（审查 CR-05）', () => {
+    const { editor, view } = editorWith('2024.|')
+    press(view, { key: 'Tab' })
+    expect(marked(editor)).toBe('2024.    |')
   })
 
   it('选中三行按 Tab：每行多 4 个空格且仍然选中，一次撤销整步', () => {
