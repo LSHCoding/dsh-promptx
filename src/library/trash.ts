@@ -7,7 +7,7 @@ import type { Stats } from 'node:fs'
 import { lstat, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PromptxError } from '../shared/errors.ts'
-import { formatIsoUtc } from '../shared/library-rules.ts'
+import { formatIsoUtc, truncateUtf8 } from '../shared/library-rules.ts'
 import { errnoCode, moveNoClobber, nameKey, readRegularFile, replaceFile, sha256Hex } from './fs-safe.ts'
 import type { FileRead, FsOptions } from './fs-safe.ts'
 import { isTrashFileName, promptRelPath } from './rel-path.ts'
@@ -38,6 +38,12 @@ export const WINDOWS_MAX_RECORD_PATH_CHARS = 32_767
 
 /** 记录再写就超过 MAX_RECORD_BYTES 时报的原因代码（promptx/trash/record-failed 的 detail）。 */
 export const RECORD_FULL = 'trash-record-full'
+
+/**
+ * 单个文件名的长度上限。Linux（ext4 等）按 UTF-8 字节算 255；macOS、Windows 按 UTF-16 码元算 255。
+ * 同一个名字的 UTF-8 字节数不会少于 UTF-16 码元数，按字节算在三个平台上都放得下。
+ */
+const NAME_MAX_BYTES = 255
 
 /**
  * 回收站记录锁的目标路径（withFileLock 会再加上 `.lock`）：`<lockDir>/trash-<回收站目录 realpath 的 SHA-256 前 16 位>`。
@@ -222,9 +228,16 @@ export function* trashNameCandidates(name: string): Generator<string, void, unkn
   yield* numberedNames(name)
 }
 
-/** 原路径被占用时的替代名字（L-11）：原文件名后加 `-2`、`-3`……，不含原名本身。 */
+/**
+ * 原路径被占用时的替代名字（L-11）：原文件名后加 `-2`、`-3`……，不含原名本身。
+ * 加上序号会超过 NAME_MAX_BYTES 时先截短原名的主体（按字素簇切）：用户在别处建的接近上限的长文件名，
+ * 直接加序号会让占用检查和移动报 ENAMETOOLONG，恢复时给不出替代路径，回收站里有同名文件时也删不掉（外部审查第 6 条）。
+ */
 export function* numberedNames(name: string): Generator<string, never, unknown> {
   const stem = name.slice(0, -3)
   const extension = name.slice(-3)
-  for (let n = 2; ; n++) yield `${stem}-${n}${extension}`
+  for (let n = 2; ; n++) {
+    const suffix = `-${n}${extension}`
+    yield `${truncateUtf8(stem, NAME_MAX_BYTES - Buffer.byteLength(suffix, 'utf8'))}${suffix}`
+  }
 }

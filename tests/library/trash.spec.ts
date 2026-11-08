@@ -7,7 +7,9 @@ import {
   MAX_RECORD_PATH_CHARS,
   RECORD_FILE,
   RECORD_FULL,
+  numberedNames,
   readTrashRecord,
+  trashNameCandidates,
   writeTrashRecord,
   WINDOWS_MAX_RECORD_PATH_CHARS,
   type TrashItem,
@@ -556,5 +558,70 @@ describe('trash list and preview', () => {
     expect(await makeService(join(root, 'none')).trashList('')).toEqual({ recordState: 'missing', entries: [] })
     await mkdir(join(root, '_trash'))
     expect(await makeService(root).trashList('x')).toEqual({ recordState: 'missing', entries: [] })
+  })
+})
+
+// 外部审查第 6 条：替代名字和回收站里的重名名字原来直接在主体后面加 `-2`。用户在别处建的接近 255 字节的长文件名
+// 加上序号就超过文件名上限，占用检查和移动报 ENAMETOOLONG：恢复时给不出替代路径，回收站里有同名文件时也删不掉。
+describe('numbered names stay within 255 bytes (external review 6)', () => {
+  function first(names: Iterable<string>, count: number): string[] {
+    const result: string[] = []
+    for (const name of names) {
+      result.push(name)
+      if (result.length === count) break
+    }
+    return result
+  }
+
+  const FAMILY = '\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}'
+  const LONG = `${'a'.repeat(252)}.md`
+
+  it('adds the number as before when there is room, keeping the extension case', () => {
+    expect(first(numberedNames('x.md'), 3)).toEqual(['x-2.md', 'x-3.md', 'x-4.md'])
+    expect(first(numberedNames('写作模板.MD'), 1)).toEqual(['写作模板-2.MD'])
+    expect(first(trashNameCandidates('x.md'), 2)).toEqual(['x.md', 'x-2.md'])
+  })
+
+  it('shortens a name close to the limit so that the numbered name fits', () => {
+    const names = first(numberedNames(LONG), 9)
+    expect(names[0]).toBe(`${'a'.repeat(250)}-2.md`)
+    expect(names[8]).toBe(`${'a'.repeat(249)}-10.md`)
+    for (const name of names) expect(Buffer.byteLength(name)).toBeLessThanOrEqual(255)
+    expect(new Set(names).size).toBe(names.length)
+    // Linux 按字节算上限：84 个汉字的名字正好 255 字节，同样要截短（macOS、Windows 按码元算，本来放得下，截短也无妨）
+    expect(first(numberedNames(`${'长'.repeat(84)}.md`), 1)).toEqual([`${'长'.repeat(83)}-2.md`])
+  })
+
+  it('cuts whole graphemes and never leaves half an emoji behind', () => {
+    const name = `${'a'.repeat(227)}${FAMILY}.md`
+    expect(Buffer.byteLength(name)).toBe(255)
+    expect(first(trashNameCandidates(name), 2)).toEqual([name, `${'a'.repeat(227)}-2.md`])
+  })
+
+  // Windows 上临时目录的路径加上 255 个字符的文件名会超过 MAX_PATH，这两条只在 POSIX 上跑；名字的生成规则由上面几条覆盖
+  it.skipIf(process.platform === 'win32')('offers an alternative that can be restored when a 255-byte original name is taken', async () => {
+    const root = await temp.make()
+    await writeTree(root, { [LONG]: PROMPT })
+    const service = makeService(root)
+    const { trashFile } = await service.delete(LONG)
+    await writeTree(root, { [LONG]: '# 占位\n' })
+    const alternative = `${'a'.repeat(250)}-2.md`
+    expect(await service.trashRestore({ file: trashFile, target: 'original', alternative: null, acceptModified: false }))
+      .toEqual({ kind: 'occupied', alternative })
+    expect(await service.trashRestore({ file: trashFile, target: 'alternative', alternative, acceptModified: false }))
+      .toEqual({ kind: 'restored', relPath: alternative })
+    expect(await readText(root, alternative)).toBe(PROMPT)
+    expect(await readText(root, LONG)).toBe('# 占位\n')
+  })
+
+  it.skipIf(process.platform === 'win32')('trashes a second file of the same 255-byte name under a shortened numbered name', async () => {
+    const root = await temp.make()
+    await writeTree(root, { [LONG]: '# v1\n' })
+    const service = makeService(root)
+    await service.delete(LONG)
+    await writeTree(root, { [LONG]: '# v2\n' })
+    expect(await service.delete(LONG)).toEqual({ trashFile: `${'a'.repeat(250)}-2.md` })
+    expect(await exists(join(root, LONG))).toBe(false)
+    expect((await readRecord(root)).items.map(entry => [entry.file, entry.originalPath])).toEqual([[LONG, LONG], [`${'a'.repeat(250)}-2.md`, LONG]])
   })
 })

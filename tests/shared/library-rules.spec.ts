@@ -18,6 +18,7 @@ import {
   splitRelPath,
   tagKey,
   TITLE_MAX_CHARS,
+  truncateUtf8,
 } from '../../src/shared/library-rules.ts'
 
 /** 用户看到的字符数。 */
@@ -258,6 +259,31 @@ describe('makeFileStem', () => {
       expect(stem).not.toMatch(/[/\\:*?"<>|\n\r\t]/)
       expect(stem.trim()).toBe(stem)
     }
+  })
+})
+
+describe('truncateUtf8', () => {
+  it('returns text that already fits unchanged', () => {
+    expect(truncateUtf8('', 0)).toBe('')
+    expect(truncateUtf8('abc', 3)).toBe('abc')
+    expect(truncateUtf8('长', 3)).toBe('长')
+    expect(truncateUtf8(FAMILY, 25)).toBe(FAMILY)
+  })
+
+  it('cuts by UTF-8 bytes without splitting a character', () => {
+    expect(truncateUtf8('长长长', 8)).toBe('长长')
+    expect(truncateUtf8('ab长', 4)).toBe('ab')
+    expect(utf8Bytes(truncateUtf8('长'.repeat(100), 250))).toBe(249)
+  })
+
+  it('keeps or drops whole graphemes: emoji sequences and letters with combining marks', () => {
+    expect(truncateUtf8(`a${FAMILY}`, 25)).toBe('a')
+    expect(truncateUtf8('éé', 5)).toBe('é')
+  })
+
+  it('falls back to code points when even the first grapheme is too long, instead of returning nothing', () => {
+    const stacked = `a${'́'.repeat(200)}`
+    expect(truncateUtf8(stacked, 11)).toBe(`a${'́'.repeat(5)}`)
   })
 })
 

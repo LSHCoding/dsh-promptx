@@ -187,6 +187,33 @@ function utf8Length(text: string): number {
 }
 
 /**
+ * 截到不超过 maxBytes 个 UTF-8 字节，按字素簇切，emoji 和带附加符号的字母不会被截成两半。
+ * 第一个字素簇本身就放不下时（一个字母上叠了几百个附加符号）退回按码点切，不把整段截成空串。
+ */
+export function truncateUtf8(text: string, maxBytes: number): string {
+  // 一个 UTF-16 码元最多编码成 3 个字节：码元数乘 3 不超过上限时一定放得下，省掉切分
+  if (text.length * 3 <= maxBytes) return text
+  let end = 0
+  let bytes = 0
+  for (const { segment, index } of graphemes(text)) {
+    const size = utf8Length(segment)
+    if (bytes + size > maxBytes) break
+    bytes += size
+    end = index + segment.length
+  }
+  if (end > 0) return text.slice(0, end)
+  let result = ''
+  bytes = 0
+  for (const ch of text) {
+    const size = utf8Length(ch)
+    if (bytes + size > maxBytes) break
+    bytes += size
+    result += ch
+  }
+  return result
+}
+
+/**
  * 由标题生成文件名主体（不含 `.md`，6.2）：`/ \ : * ? " < > |`、换行、制表符等控制字符换成 `-`，
  * 去掉首尾空白和开头的 `.`（否则文件会被当成隐藏文件跳过），最长 60 个字符，结果为空时用 `prompt`。
  */
