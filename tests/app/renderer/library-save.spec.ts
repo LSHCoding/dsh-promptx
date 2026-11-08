@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { undo } from '@codemirror/commands'
 import type { BridgeResult } from '../../../src/shared/bridge.ts'
-import type { LibraryReadResult, SaveResult } from '../../../src/shared/types.ts'
+import type { LibraryListResult, LibraryReadResult, SaveResult } from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import {
   binding,
@@ -99,6 +99,29 @@ describe('未绑定时新建文件（L-08）', () => {
     await controller.library.close()
     await saveOnce()
     expect(folders).toEqual(['写作', null, null, null])
+  })
+
+  // 外部审查第二轮复核：换库后记下的文件夹是旧库的，文件夹栏里没有高亮，照它保存的话插件会在新库里把它建出来。
+  it('换库后新库的列表还没回来、或者新库不存在：新建存库根目录，记下的文件夹不动', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.list', () => ok(listResult([], { folders: ['写作'] })))
+    bridge.handle('library.save', params => created(`${params.folder ?? ''}/x.md`, params.text))
+    const controller = await start(bridge)
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
+    const pending: Deferred<BridgeResult<LibraryListResult>> = deferred()
+    bridge.handle('library.list', () => pending.promise)
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    type(controller, '内容')
+    await controller.save()
+    pending.resolve(ok(listResult([], { state: 'missing', folders: [] })))
+    await settle()
+    controller.clear()
+    type(controller, '又一条')
+    await controller.save()
+    expect(bridge.callsTo('library.save').map(params => params.folder)).toEqual([null, null])
+    expect(controller.store.getState().library.folder).toEqual({ kind: 'folder', path: '写作' })
   })
 
   it('草稿为空或只有空白：提示「没有可保存的内容。」，不发请求', async () => {
@@ -371,6 +394,43 @@ describe('超时与 requestId（技术方案 5.5，审查 S05）', () => {
     expect(await controller.save()).toBe('saved')
     const [first, second] = bridge.callsTo('library.save')
     expect(second?.requestId).toBe(first?.requestId)
+  })
+
+  // 审查复核 c5：草稿没有绑定时，换库原来不换代。超时后沿用的 requestId 让插件返回旧库里建好的文件，草稿被绑定到旧库，
+  // 提示「已保存」，新库的列表里却没有它。
+  it('新建超时后换了库目录：重试换一个 requestId，在新库里新建并绑定', async () => {
+    const bridge = new FakeBridge()
+    let attempt = 0
+    bridge.handle('library.save', (params) => {
+      attempt++
+      if (attempt === 1) return fail('promptx/channel/timeout', 'library.save')
+      return ok({ kind: 'saved', binding: binding('a.md', params.text, { libraryDir: '/library-B' }), entry: entry('a.md'), created: true })
+    })
+    const controller = await start(bridge)
+    type(controller, '内容')
+    expect(await controller.save()).toBe('failed')
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    expect(await controller.save()).toBe('saved')
+    const [first, second] = bridge.callsTo('library.save')
+    expect(second?.requestId).not.toBe(first?.requestId)
+    expect(controller.store.getState().draft.binding?.libraryDir).toBe('/library-B')
+  })
+
+  it('新建请求在途时换了库目录：结果回来后只提示已保存，不绑定到旧库', async () => {
+    const bridge = new FakeBridge()
+    const save: Deferred<BridgeResult<SaveResult>> = deferred()
+    bridge.handle('library.save', () => save.promise)
+    const controller = await start(bridge)
+    type(controller, '内容')
+    const saving = controller.save()
+    await settle()
+    bridge.emit('library.changed', { libraryDir: '/library-B' })
+    await settle()
+    save.resolve(created('a.md', '内容'))
+    expect(await saving).toBe('saved')
+    expect(controller.store.getState().draft.binding).toBeNull()
+    expect(toastText(controller)).toBe('Prompt 已保存。')
   })
 
   it('建好之后，下一次新建换一个 requestId；不是超时的失败也换', async () => {

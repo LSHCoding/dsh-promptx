@@ -204,6 +204,16 @@ export class Draft {
     this.saver.markDirty()
   }
 
+  /**
+   * 插件推来 library.changed（库目录真的变了）：绑定的是旧库就解除（L-01）。没有绑定时也换一代：
+   * 在途的、或者超时后等着沿用 requestId 重试的新建，结果是旧库里的文件，回来后不能再绑定到草稿上（外部审查复核）。
+   * 换代不放进 checkLibraryDir：它在每次 config 推送和读回草稿时都会运行，库目录没变时换代会让正常的保存丢掉绑定。
+   */
+  onLibraryChanged(libraryDir: string): void {
+    if (this.binding === null) this.generationValue++
+    else this.checkLibraryDir(libraryDir)
+  }
+
   /** 绑定的库目录和当前库目录不同（配置改了）：解除绑定，正文不动（L-01，技术方案 6.2）。 */
   checkLibraryDir(libraryDir: string | undefined = this.ctx.store.getState().config?.libraryDir): void {
     const binding = this.binding

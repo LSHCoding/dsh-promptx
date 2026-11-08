@@ -604,7 +604,7 @@ export class Library {
    */
   async onLibraryChanged(libraryDir: string): Promise<void> {
     this.libraryGeneration++
-    this.draft.checkLibraryDir(libraryDir)
+    this.draft.onLibraryChanged(libraryDir)
     this.cancelInsert()
     // 旧库的列表、回收站列表、选中和预览当场清掉，还在途的旧结果也作废，和代次加一在同一步完成：
     // 列表里的相对路径到了插件那边按新库解释，旧行还能点的话，删除、重命名、收藏会落到新库里同路径的文件上。

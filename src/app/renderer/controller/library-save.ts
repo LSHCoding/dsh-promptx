@@ -105,10 +105,15 @@ export class LibrarySave {
     return this.resolveConflict(result.value.conflict, generation)
   }
 
-  /** 新建文件的位置：库侧栏展开且选中了一个真实文件夹时存进那个文件夹，其他情况存库根目录（L-08）。 */
+  /**
+   * 新建文件的位置：库侧栏展开且选中了当前库里一个真实文件夹时存进那个文件夹，其他情况存库根目录（L-08）。
+   * 「真实」以当前列表为准：换库后新库的列表还没回来、或者新库还不存在时，记下的文件夹是旧库的，文件夹栏里也没有高亮，
+   * 照它保存的话插件会在新库里把这个文件夹建出来（外部审查第二轮复核）。记下的选择本身不动，换回旧库照常生效。
+   */
   private targetFolder(): string | null {
-    const library = this.ctx.store.getState().library
-    return library.open && library.view === 'library' && library.folder.kind === 'folder' ? library.folder.path : null
+    const { open, view, folder, list } = this.ctx.store.getState().library
+    if (!open || view !== 'library' || folder.kind !== 'folder') return null
+    return list?.folders.includes(folder.path) === true ? folder.path : null
   }
 
   private createRequestId(generation: number): string {
