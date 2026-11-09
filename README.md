@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin with a small companion window. Press a global shortcut in any app and a prompt editor floats above it. Write a prompt, reuse one from your Markdown prompt library, or let the model configured in dsh rewrite it. Press ⌘↩ to copy the whole prompt; the window hides and focus returns to the app you were using, ready to paste.
 
-> Status: under development (V0.1.0). macOS is the supported platform. Windows and Linux are previews: they build and pass automated tests but have not been tested by hand.
+> Version: v0.1.0. macOS is the supported platform. Windows and Linux are previews; cross-platform CI verification and manual testing on those platforms are pending.
 
 ## What it does
 

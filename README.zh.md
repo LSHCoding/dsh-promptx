@@ -4,7 +4,7 @@
 
 PromptX 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的插件，带一个配套的桌面小窗。在任何应用里按全局快捷键，Prompt 编辑小窗浮在当前应用上方；写 Prompt、从自己的 Markdown Prompt 库里取模板，或者让 dsh 里配置的模型帮忙改写。按 ⌘↩ 复制全文，小窗隐藏，焦点回到刚才的应用，直接粘贴。
 
-> 状态：开发中（V0.1.0）。macOS 正式支持；Windows、Linux 为预览：能构建并通过自动化测试，但没有经过实机验收。
+> 版本：v0.1.0。macOS 正式支持；Windows、Linux 为预览，三平台 CI 验证及 Windows、Linux 实机验收待完成。
 
 ## 功能
 
