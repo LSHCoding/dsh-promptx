@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { undo } from '@codemirror/commands'
 import type { BridgeResult } from '../../../src/shared/bridge.ts'
 import type { DraftRecord } from '../../../src/shared/types.ts'
 import { AppController } from '../../../src/app/renderer/controller/app.ts'
@@ -452,6 +453,93 @@ describe('库侧栏（L-02 至 L-11）', () => {
       await settle()
     })
     expect(controller.editor.getText()).toBe('# 写作助手\n\n要求')
+  })
+
+  it.each([
+    { selection: { anchor: 2, head: 2 }, expected: '前文\n\n模板\n\n后文' },
+    { selection: { anchor: 2, head: 4 }, expected: '前文\n\n模板' },
+  ])('双击条目在失焦前的选区 $selection 插入一次，焦点回编辑器且一步可撤销', async ({ selection, expected }) => {
+    const bridge = new FakeBridge()
+    const meta = entry('a.md')
+    bridge.handle('draft.load', () => ok({ record: draftRecord('前文后文', { selection }) }))
+    bridge.handle('library.list', () => ok(listResult([meta])))
+    bridge.handle('library.read', () => ok(readResult(meta, '模板')))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    const row = rows()[0] as HTMLElement
+    await act(async () => {
+      row.focus()
+      fireEvent.click(row, { detail: 1 })
+      fireEvent.click(row, { detail: 2 })
+      fireEvent.doubleClick(row)
+      await settle()
+    })
+    expect(controller.editor.getText()).toBe(expected)
+    expect(controller.editor.hasFocus()).toBe(true)
+    expect(controller.store.getState().draft.binding).toBeNull()
+    act(() => {
+      controller.editor.runCommand(undo)
+    })
+    expect(controller.editor.getText()).toBe('前文后文')
+  })
+
+  it('双击不等待预览，读取期间换条目时旧插入作废', async () => {
+    const bridge = new FakeBridge()
+    const first = entry('a.md')
+    const second = entry('b.md')
+    const pending = deferred<BridgeResult<ReturnType<typeof readResult>>>()
+    bridge.handle('draft.load', () => ok({ record: draftRecord('原文') }))
+    bridge.handle('library.list', () => ok(listResult([first, second])))
+    bridge.handle('library.read', ({ relPath }) => relPath === first.relPath ? pending.promise : ok(readResult(second, '其他模板')))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    await act(async () => {
+      fireEvent.click(rows()[0] as HTMLElement)
+      fireEvent.doubleClick(rows()[0] as HTMLElement)
+      await settle()
+    })
+    expect(bridge.calls.filter(call => call.method === 'library.read')).toHaveLength(2)
+    await act(async () => {
+      fireEvent.click(rows()[1] as HTMLElement)
+      pending.resolve(ok(readResult(first, '旧模板')))
+      await settle()
+    })
+    expect(controller.editor.getText()).toBe('原文')
+  })
+
+  it('双击行内操作或不可读条目不会插入正文', async () => {
+    const bridge = new FakeBridge()
+    const meta = entry('a.md')
+    bridge.handle('draft.load', () => ok({ record: draftRecord('原文') }))
+    bridge.handle('library.list', () => ok(listResult([
+      meta,
+      entry('bad.md', { status: 'unreadable', unreadableReason: 'not-utf8' }),
+    ])))
+    bridge.handle('library.read', () => ok(readResult(meta, '模板')))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    await act(async () => {
+      fireEvent.click(rows()[0] as HTMLElement)
+      await settle()
+    })
+    const readCount = bridge.calls.filter(call => call.method === 'library.read').length
+    await act(async () => {
+      const row = within(rows()[0] as HTMLElement)
+      for (const name of ['在编辑器中打开', '删除', '更多']) {
+        fireEvent.doubleClick(row.getByRole('button', { name }))
+      }
+      fireEvent.click(rows()[1] as HTMLElement)
+      fireEvent.doubleClick(rows()[1] as HTMLElement)
+      await settle()
+    })
+    expect(bridge.calls.filter(call => call.method === 'library.read')).toHaveLength(readCount)
+    expect(controller.editor.getText()).toBe('原文')
   })
 
   it('窗口矮、预览区被压矮时，拖分隔线从实际显示的高度算起，往上拖不超过列表区的余量（审查 CR-07）', async () => {

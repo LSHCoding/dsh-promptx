@@ -216,7 +216,7 @@ describe('清空（E-04）', () => {
     controller.clear()
     expect(controller.editor.getText()).toBe('')
     expect(controller.store.getState().draft.binding).toBeNull()
-    expect(toastText(controller)).toBe('已清空编辑器，库中《代码审查》未改动。')
+    expect(toastText(controller)).toBe('已清空编辑器。')
     expect(bridge.callsTo('library.save')).toEqual([])
 
     expect(controller.editor.runCommand(undo)).toBe(true)
@@ -252,7 +252,7 @@ describe('清空（E-04）', () => {
     const [params] = bridge.callsTo('library.save')
     expect(params?.binding).toBeNull()
     expect(params?.text).toBe('新内容')
-    expect(controller.store.getState().draft.binding?.relPath).toBe('new.md')
+    expect(controller.store.getState().draft.binding).toBeNull()
   })
 })
 
@@ -423,6 +423,7 @@ describe('读取失败的原因', () => {
     bridge.handle('library.read', () => fail('promptx/library/unreadable', 'too-large'))
     const controller = await start(bridge)
     await controller.library.open()
+    bridge.entryEditor.open.mockResolvedValueOnce(fail('promptx/library/unreadable', 'too-large'))
     await controller.library.openEntry('big.md')
     expect(toastText(controller)).toBe('读取失败：文件超过 2 MiB，无法打开')
     bridge.handle('library.read', () => fail('promptx/library/unreadable', 'not-utf8'))

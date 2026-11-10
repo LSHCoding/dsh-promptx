@@ -18,6 +18,8 @@ export const RUNTIME_SOURCES: readonly RuntimeSource[] = ['auto', 'mirror', 'off
 export interface ConfigRefs {
   libraryDir: Volatile<string>
   confirmDelete: Volatile<boolean>
+  convertMiddleDot: Volatile<boolean>
+  convertYen: Volatile<boolean>
   optimizeInstruction: Volatile<string>
   globalShortcut: Volatile<string>
   hideOnBlur: Volatile<boolean>
@@ -29,6 +31,10 @@ export const Config: Schema<unknown, ConfigRefs> = Schema.object({
     .description('Prompt library directory. Empty means <dsh home>/promptx/library. Absolute path or starting with ~.'),
   confirmDelete: Schema.boolean().default(true).volatile()
     .description('Ask before moving a prompt to the trash.'),
+  convertMiddleDot: Schema.boolean().default(true).volatile()
+    .description('Convert repeated middle dots to backticks or a code block.'),
+  convertYen: Schema.boolean().default(true).volatile()
+    .description('Convert repeated yen signs to dollar signs or a display math block.'),
   optimizeInstruction: Schema.string().role('textarea').default('').volatile()
     .description('Instruction sent to the model when optimizing. Empty means the built-in default.'),
   globalShortcut: Schema.string().default(DEFAULT_SHORTCUT).volatile()
@@ -44,6 +50,8 @@ export function readConfig(refs: ConfigRefs): PromptxConfig {
   return {
     libraryDir: refs.libraryDir.get(),
     confirmDelete: refs.confirmDelete.get(),
+    convertMiddleDot: refs.convertMiddleDot.get(),
+    convertYen: refs.convertYen.get(),
     optimizeInstruction: refs.optimizeInstruction.get(),
     globalShortcut: refs.globalShortcut.get(),
     hideOnBlur: refs.hideOnBlur.get(),

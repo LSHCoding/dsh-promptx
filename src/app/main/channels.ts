@@ -15,6 +15,13 @@ export const IPC_CHANNELS = {
   windowSetWidth: 'promptx:window.setWidth',
   windowOpenSettings: 'promptx:window.openSettings',
   prefsGet: 'promptx:prefs.get',
+  entryEditorOpen: 'promptx:entryEditor.open',
+  entryEditorGetState: 'promptx:entryEditor.getState',
+  entryEditorSave: 'promptx:entryEditor.save',
+  entryEditorReload: 'promptx:entryEditor.reload',
+  entryEditorClose: 'promptx:entryEditor.close',
+  entryEditorUpdate: 'promptx:entryEditor.update',
+  entryEditorPrepared: 'promptx:entryEditor.prepared',
   // 渲染进程 send，主进程 on（没有返回值）
   ready: 'promptx:ready',
   flushed: 'promptx:flushed',
@@ -28,9 +35,11 @@ export const IPC_CHANNELS = {
 
 /** 用 Record 列出事件名：BridgeEvents 加了事件而这里漏写时编译失败，白名单不会悄悄缺项。 */
 const EVENT_FLAGS: Record<BridgeEventName, true> = {
+  'entryEditor.state': true,
   'config': true,
   'optimize.event': true,
   'library.changed': true,
+  'library.entriesChanged': true,
   'window.shown': true,
   'window.hidden': true,
   'flush': true,

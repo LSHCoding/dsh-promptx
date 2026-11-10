@@ -204,6 +204,8 @@ export interface PromptxConfig {
   /** 空串表示默认的 `<dsh 数据目录>/promptx/library`。 */
   libraryDir: string
   confirmDelete: boolean
+  convertMiddleDot: boolean
+  convertYen: boolean
   /** 空白表示用默认指令。 */
   optimizeInstruction: string
   /** Electron 加速键写法，例如 `Control+P`；空串表示不注册全局快捷键。 */
@@ -219,6 +221,8 @@ export interface CompanionConfig {
   globalShortcut: string
   hideOnBlur: boolean
   confirmDelete: boolean
+  convertMiddleDot: boolean
+  convertYen: boolean
   /** null 表示跟随系统语言。 */
   locale: 'zh' | 'en' | null
   theme: 'light' | 'dark' | 'system'

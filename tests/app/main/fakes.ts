@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream'
 import { IPC_CHANNELS } from '../../../src/app/main/channels.ts'
 import type { ClipboardLike } from '../../../src/app/main/clipboard.ts'
 import type { IpcEventLike, IpcMainLike } from '../../../src/app/main/ipc.ts'
-import type { CompanionPlatform, MainWindow, TrayHandle, WindowCreateOptions, WindowEventName } from '../../../src/app/main/platform.ts'
+import type { CompanionPlatform, MainWindow, MessageBoxOptions, TrayHandle, WindowCreateOptions, WindowEventName } from '../../../src/app/main/platform.ts'
 import type { TrayAction, TrayModel } from '../../../src/app/main/tray-model.ts'
 import type { WorkspaceOptions } from '../../../src/app/main/window-controller.ts'
 import type { BridgeEventName, BridgeResult } from '../../../src/shared/bridge.ts'
@@ -120,6 +120,15 @@ export class FakeWindow implements MainWindow {
 
   setBackgroundColor(color: string): void {
     this.background = color
+  }
+
+  setTitle(title: string): void {
+    this.calls.push(`title ${title}`)
+  }
+
+  destroy(): void {
+    this.destroyed = true
+    this.visible = false
   }
 
   send(event: BridgeEventName, payload: unknown): void {
@@ -289,6 +298,8 @@ export interface FakePlatformOptions {
 }
 
 export class FakePlatform implements CompanionPlatform {
+  readonly messageBoxes: MessageBoxOptions[] = []
+  readonly messageBoxAnswers: number[] = []
   readonly platform: string
   readonly arch = 'arm64'
   readonly argv: readonly string[]
@@ -441,6 +452,11 @@ export class FakePlatform implements CompanionPlatform {
     return window
   }
 
+  showMessageBox(_window: MainWindow, options: MessageBoxOptions): Promise<number> {
+    this.messageBoxes.push(options)
+    return Promise.resolve(this.messageBoxAnswers.shift() ?? options.cancelId)
+  }
+
   createTray(onAction: (action: TrayAction) => void): TrayHandle | null {
     this.calls.push('createTray')
     if (this.trayFails) throw new Error('no status area')
@@ -492,6 +508,8 @@ export const BASE_CONFIG: CompanionConfig = {
   globalShortcut: 'Control+P',
   hideOnBlur: false,
   confirmDelete: true,
+  convertMiddleDot: true,
+  convertYen: true,
   locale: null,
   theme: 'system',
   libraryDir: '/Users/me/.dsh/promptx/library',
@@ -500,6 +518,11 @@ export const BASE_CONFIG: CompanionConfig = {
 
 /** 扮演 Host：用真实的帧编解码和 RpcPeer，和小程序之间是两条 PassThrough 管道。 */
 export class FakeHost {
+  entryDraftSave: (
+    params: CompanionRequests['entryDraft.save']['params'],
+  ) => CompanionRequests['entryDraft.save']['result'] | Promise<CompanionRequests['entryDraft.save']['result']> = () => ({
+    updatedAt: new Date().toISOString(),
+  })
   readonly toCompanion = new PassThrough()
   readonly fromCompanion = new PassThrough()
   readonly peer: HostSide
@@ -528,6 +551,8 @@ export class FakeHost {
       this.hello = params
       return { protocol: PROTOCOL_VERSION, ...this.helloResult }
     })
+    this.peer.handle('entryDraft.load', () => ({ record: null }))
+    this.peer.handle('entryDraft.save', params => this.entryDraftSave(params))
     for (const method of COMPANION_NOTIFICATION_METHODS) {
       this.peer.on(method, (params) => {
         this.notifications.push({ method, params })

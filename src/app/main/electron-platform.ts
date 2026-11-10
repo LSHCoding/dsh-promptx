@@ -6,6 +6,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -36,6 +37,7 @@ export interface ElectronPlatformOptions {
 export function createElectronPlatform(options: ElectronPlatformOptions): CompanionPlatform {
   const { appDir, logger } = options
   const mac = process.platform === 'darwin'
+  const windows = new WeakMap<MainWindow, BrowserWindow>()
   return {
     platform: process.platform,
     arch: process.arch,
@@ -94,7 +96,13 @@ export function createElectronPlatform(options: ElectronPlatformOptions): Compan
     },
     readSystemHotkeys: mac ? readSymbolicHotkeysXml : undefined,
     ipc: ipcMain,
-    createWindow: windowOptions => createMainWindow(appDir, windowOptions, logger),
+    createWindow: windowOptions => createMainWindow(appDir, windowOptions, logger, windows),
+    async showMessageBox(window, box) {
+      const native = windows.get(window)
+      if (native === undefined || native.isDestroyed()) return box.cancelId
+      const result = await dialog.showMessageBox(native, { ...box, type: 'question', noLink: true })
+      return result.response
+    },
     createTray: onAction => createTray(appDir, onAction, logger),
     onBeforeQuit: (listener) => {
       app.on('before-quit', (event) => {
@@ -135,7 +143,10 @@ function readSymbolicHotkeysXml(): Promise<string | null> {
   })
 }
 
-function createMainWindow(appDir: string, options: WindowCreateOptions, logger: CompanionLogger): MainWindow {
+function createMainWindow(
+  appDir: string, options: WindowCreateOptions, logger: CompanionLogger, windows: WeakMap<MainWindow, BrowserWindow>,
+): MainWindow {
+  const parent = options.parent === undefined ? undefined : windows.get(options.parent)
   const win = new BrowserWindow({
     width: options.width,
     height: options.height,
@@ -149,6 +160,8 @@ function createMainWindow(appDir: string, options: WindowCreateOptions, logger: 
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
+    ...(parent === undefined ? {} : { parent }),
+    modal: false,
     backgroundColor: options.backgroundColor,
     title: 'PromptX',
     webPreferences: {
@@ -174,7 +187,7 @@ function createMainWindow(appDir: string, options: WindowCreateOptions, logger: 
   const indexHtml = join(appDir, 'renderer', 'index.html')
   const load = (): void => {
     // loadFile 的 Promise 在页面加载失败（包括被中止）时拒绝；只记日志，冒烟测试会发现界面没有就绪。
-    runTask(logger, 'window-load', () => win.loadFile(indexHtml))
+    runTask(logger, 'window-load', () => win.loadFile(indexHtml, options.entryEditor === true ? { hash: 'entry-editor' } : {}))
   }
   load()
 
@@ -187,7 +200,7 @@ function createMainWindow(appDir: string, options: WindowCreateOptions, logger: 
     if (linux && event === 'resized') return 'resize'
     return event
   }
-  return {
+  const window: MainWindow = {
     isVisible: () => win.isVisible(),
     isFocused: () => win.isFocused(),
     show: () => {
@@ -215,6 +228,8 @@ function createMainWindow(appDir: string, options: WindowCreateOptions, logger: 
     setBackgroundColor: (color) => {
       win.setBackgroundColor(color)
     },
+    setTitle: (title) => { win.setTitle(title) },
+    destroy: () => { win.destroy() },
     send: (event, payload) => {
       if (win.isDestroyed() || contents.isDestroyed()) return
       contents.send(IPC_CHANNELS.event, event, payload)
@@ -241,6 +256,8 @@ function createMainWindow(appDir: string, options: WindowCreateOptions, logger: 
       })
     },
   }
+  windows.set(window, win)
+  return window
 }
 
 function createTray(appDir: string, onAction: (action: TrayAction) => void, logger: CompanionLogger): TrayHandle | null {

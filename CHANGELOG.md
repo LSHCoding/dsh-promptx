@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-11-10
+
+- Insert library entries at the editor cursor by double-clicking a row, preserving selection replacement, undo, and editor focus.
+- Add independently configurable Chinese-input conversions for `·` to backticks/code blocks and `¥` / `￥` to dollar signs/display math blocks.
+- Make Save and the save shortcut in the main window always create a new library entry. Restore older drafts without retaining their file-update binding.
+- Open existing library entries in a separate editor window, where Save changes updates that entry. Keep the main draft intact, confirm unsaved closes and switches, and store unfinished entry edits in a separate recovery draft.
+
+Manual macOS input-method and desktop-interaction acceptance, and cross-platform CI verification, remain pending.
+
 ## 0.1.0 — 2026-11-09
 
 Initial version for local installation in DeepSeek Harness.

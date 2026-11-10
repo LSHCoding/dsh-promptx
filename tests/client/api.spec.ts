@@ -187,6 +187,8 @@ describe('parsePanelStatus：长轮询回复的形状检查', () => {
       [],
       { ...good, seq: '1' },
       { ...good, config: { ...good.config, hideOnBlur: 'yes' } },
+      { ...good, config: { ...good.config, convertMiddleDot: undefined } },
+      { ...good, config: { ...good.config, convertYen: 'false' } },
       { ...good, config: { ...good.config, runtimeSource: 'ftp' } },
       { ...good, runtime: { ...good.runtime, state: 'sleeping' } },
       { ...good, companion: { state: 'zombie' } },

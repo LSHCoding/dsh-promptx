@@ -12,7 +12,6 @@ import { dialogButton, reason, runTask, text, type Context } from './context.ts'
 import type { Dialogs } from './dialogs.ts'
 import type { Draft } from './draft.ts'
 import type { PaneLayout } from './layout.ts'
-import { bindingFromRead, type LibrarySave } from './library-save.ts'
 import type { Toasts } from './toasts.ts'
 
 /** 搜索框输入后多久再查询：边输入边过滤，又不至于每个按键都发请求（N-01：搜索输入到结果稳定 ≤ 200 ms）。 */
@@ -27,7 +26,6 @@ export class Library {
   private trashToken = 0
   private trashPreviewToken = 0
   private insertToken = 0
-  private openToken = 0
   /**
    * 库目录的代次：插件推来 library.changed 时加一。删除、改元数据、恢复、打开这些操作的请求只带相对路径，
    * 插件按请求到达时的库目录解释它；用户确认之前库目录换了，同一个相对路径指的就是另一个库里的文件。
@@ -41,7 +39,6 @@ export class Library {
     private readonly draft: Draft,
     private readonly toasts: Toasts,
     private readonly dialogs: Dialogs,
-    private readonly saver: LibrarySave,
     private readonly layout: PaneLayout,
     /** 把焦点交给搜索框（和 ⌘L 同一个焦点请求）。 */
     private readonly focusSearch: () => void,
@@ -249,79 +246,18 @@ export class Library {
 
   // ───────────────────────────── 在编辑器中打开（L-07） ─────────────────────────────
 
-  private libraryDir(): string {
-    const state = this.ctx.store.getState()
-    return state.config?.libraryDir ?? state.library.list?.root ?? ''
-  }
-
   async openEntry(relPath: string): Promise<void> {
     this.toasts.beginAction()
     if (!this.draft.ready) return
     const entry = this.entry(relPath)
     if (entry?.status === 'unreadable') return
-    const binding = this.draft.binding
-    // 选中的就是当前绑定的条目：不弹确认，不重新载入。
-    if (binding !== null && binding.relPath === relPath) {
-      this.ctx.editor.focus()
-      this.toasts.success(text(this.ctx, 'toast.editing', { title: binding.title }))
-      return
-    }
     const generation = this.libraryGeneration
-    // 读回后允许整篇替换掉的内容：没有未保存内容时是现在的全文，「放弃」时是用户确认放弃的那份，「保存」时是实际存进文件的那份。
-    // 读取（和保存）要等插件回复，这期间编辑区仍可输入；整篇替换会清空撤销记录，替换掉这期间的新内容就再也找不回来，
-    // 所以读回时编辑区和这份不一样就不替换（红线 1，外部审查第 1 条）。
-    let replaceable: string | null = this.ctx.editor.getText()
-    if (this.draft.currentStatus() === 'unsaved') {
-      const title = entry?.title ?? relPath
-      const choice = await this.dialogs.open({
-        title: text(this.ctx, 'dialog.unsaved.title'),
-        message: text(this.ctx, 'dialog.unsaved.message', { title }),
-        buttons: [
-          dialogButton(this.ctx, 'cancel', 'common.cancel'),
-          dialogButton(this.ctx, 'discard', 'dialog.unsaved.discard'),
-          dialogButton(this.ctx, 'save', 'dialog.unsaved.save', 'primary'),
-        ],
-        defaultButton: 'save',
-        escapeButton: 'cancel',
-      })
-      if (choice.button !== 'save' && choice.button !== 'discard') return
-      if (this.libraryChangedSince(generation)) return
-      if (choice.button === 'save') {
-        const outcome = await this.saver.save()
-        // 保存期间换了库：打开已取消，不管保存结果如何都先说明这一点
-        if (this.libraryChangedSince(generation)) return
-        // 保存失败（含冲突后没有存成）就停下，什么都不替换。
-        if (outcome !== 'saved') return
-        // 存进文件的只是确认保存那一刻的内容（新建超时后重试时，是插件记下的上一次结果）。编辑区里还有没存进去的改动，
-        // 就不再读取、不替换，提示原因，用户再保存一次就能打开（外部审查第 1 条复核）
-        replaceable = this.draft.binding?.savedBody ?? null
-        if (this.ctx.editor.getText() !== replaceable) {
-          this.toasts.error(text(this.ctx, 'toast.unsavedNotOpened'))
-          return
-        }
-      } else {
-        replaceable = this.ctx.editor.getText()
-      }
-    }
-    const token = ++this.openToken
-    const result = await this.ctx.bridge.call('library.read', { relPath })
-    if (token !== this.openToken) return
+    const result = await this.ctx.bridge.entryEditor.open(relPath)
     if (this.libraryChangedSince(generation)) return
     if (!result.ok) {
-      // 读取失败：提示原因，草稿和绑定都不变（L-07）。
       this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, result.error) }))
-      return
     }
-    if (this.ctx.editor.getText() !== replaceable) {
-      this.toasts.error(text(this.ctx, 'toast.editedWhileLoading'))
-      return
-    }
-    // 整篇替换并清空撤销记录（E-01），进入绑定状态。
-    this.ctx.editor.load(result.value.body, { anchor: 0, head: 0 })
-    this.draft.setBinding(bindingFromRead(this.libraryDir(), result.value), true)
-    this.draft.flushSoon()
-    this.ctx.editor.focus()
-    this.toasts.success(text(this.ctx, 'toast.editing', { title: result.value.entry.title }))
+    // 独立编辑窗口拥有目标与版本，主窗口的正文、选区和撤销历史保持原样。
   }
 
   // ───────────────────────────── 重命名 / 标签、收藏（L-09、L-10） ─────────────────────────────

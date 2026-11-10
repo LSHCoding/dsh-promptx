@@ -298,6 +298,12 @@ function EntryRow({ entry, selected, now }: { entry: EntryMeta; selected: boolea
       data-menu-open={menuOpen ? 'true' : undefined}
       tabIndex={0}
       onClick={select}
+      onDoubleClick={() => {
+        if (entry.status === 'unreadable') return
+        // 选中同步完成，不等预览读取；插入沿用编辑器失焦前保留的选区和读取失效保护。
+        if (controller.store.getState().library.selected !== entry.relPath) select()
+        run(controller.library.insertSelected())
+      }}
       onKeyDown={(event) => {
         if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
           event.preventDefault()
@@ -318,7 +324,11 @@ function EntryRow({ entry, selected, now }: { entry: EntryMeta; selected: boolea
         </div>
       </div>
       {/* 悬停或选中时才显示的三个操作；不显示时标题占满整行（L-04）。 */}
-      <div className="px-row-actions" onClick={(event) => { event.stopPropagation() }}>
+      <div
+        className="px-row-actions"
+        onClick={(event) => { event.stopPropagation() }}
+        onDoubleClick={(event) => { event.stopPropagation() }}
+      >
         <IconButton
           icon="open"
           label={t('library.action.open')}

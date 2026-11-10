@@ -80,6 +80,23 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     await flush()
   })
 
+  it('两个输入转换默认开启，各自暂存并随保存一次提交', async () => {
+    const { api } = renderPage(makeStatus())
+    const dot = switchOf('连打「·」转反引号 / 代码块')
+    const yen = switchOf('输入「¥」转「$」/ 行间公式')
+    expect(dot.getAttribute('aria-checked')).toBe('true')
+    expect(yen.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(dot)
+    expect(yen.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(yen)
+    expect(api.saveConfig).not.toHaveBeenCalled()
+    fireEvent.click(saveButton())
+    expect(api.saveConfig).toHaveBeenCalledWith({ convertMiddleDot: false, convertYen: false })
+    await flush()
+    expect(dot.getAttribute('aria-checked')).toBe('false')
+    expect(yen.getAttribute('aria-checked')).toBe('false')
+  })
+
   it('没有改动时「保存」不可用；没有「取消」按钮', () => {
     renderPage(makeStatus())
     expect(saveButton().disabled).toBe(true)

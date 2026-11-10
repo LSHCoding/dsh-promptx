@@ -131,6 +131,8 @@ export class DraftSaver {
 export class Draft {
   readonly saver: DraftSaver
   /** 绑定的「代」：在编辑器中打开、清空、解除绑定、重新载入都换一代。保存结果回来时代号变了就不改绑定（L-08）。 */
+  private librarySavedBody: string | null = null
+  private libraryDirValue: string | undefined
   private generationValue = 0
   private loadToken = 0
   private metricsTimer: ReturnType<typeof setTimeout> | null = null
@@ -183,25 +185,33 @@ export class Draft {
     const text = record?.text ?? ''
     // 没有记录过选区（包括第一次使用）时光标放在文末。
     this.ctx.editor.load(text, record?.selection ?? null)
-    const binding = record?.binding ?? null
+    const previousBinding = record?.binding ?? null
+    const binding = null
+    this.librarySavedBody = previousBinding?.savedBody ?? null
     this.generationValue++
     this.update(draft => ({ ...draft, load: 'ready', loadError: null, binding }))
     this.ctx.editor.setEditable(true)
-    this.saver.enable({ text, selection: record?.selection ?? this.ctx.editor.getSelection(), binding })
+    this.saver.enable({ text, selection: record?.selection ?? this.ctx.editor.getSelection(), binding: previousBinding })
+    // 旧版本草稿只迁移更新目标，正文和选区完全保留。
+    if (previousBinding !== null) this.flushSoon()
     this.checkLibraryDir()
     this.refreshMetrics()
     this.onLoaded(true)
   }
 
-  /**
-   * 换绑定。newGeneration 为 true 表示编辑区换成了别的内容来源（打开、清空、解除绑定、重新载入），
-   * 在途的保存回来后不再改动绑定；保存成功、改元数据后更新版本号属于同一代。
-   */
+  /** 兼容原有清空/元数据调用：只更新保存状态，主草稿不再保留库文件的更新目标。 */
   setBinding(binding: Binding | null, newGeneration: boolean): void {
     if (newGeneration) this.generationValue++
-    this.update(draft => (draft.binding === binding ? draft : { ...draft, binding }))
+    this.librarySavedBody = binding?.savedBody ?? null
+    this.update(draft => (draft.binding === null ? draft : { ...draft, binding: null }))
     this.refreshMetrics()
     this.saver.markDirty()
+  }
+
+  /** 保存过的正文只用于状态显示，不保存库文件的更新目标。 */
+  markSaved(body: string): void {
+    this.librarySavedBody = body
+    this.refreshMetrics()
   }
 
   /**
@@ -210,22 +220,31 @@ export class Draft {
    * 换代不放进 checkLibraryDir：它在每次 config 推送和读回草稿时都会运行，库目录没变时换代会让正常的保存丢掉绑定。
    */
   onLibraryChanged(libraryDir: string): void {
-    if (this.binding === null) this.generationValue++
-    else this.checkLibraryDir(libraryDir)
+    this.libraryDirValue = libraryDir
+    this.generationValue++
+    this.librarySavedBody = null
+    this.refreshMetrics()
   }
 
-  /** 绑定的库目录和当前库目录不同（配置改了）：解除绑定，正文不动（L-01，技术方案 6.2）。 */
+  /** Config 可能早于 library.changed 到达，换目录时立即让在途新建和超时重试失效。 */
   checkLibraryDir(libraryDir: string | undefined = this.ctx.store.getState().config?.libraryDir): void {
-    const binding = this.binding
-    if (!this.ready || binding === null || libraryDir === undefined || libraryDir === '') return
-    if (binding.libraryDir === libraryDir) return
-    this.setBinding(null, true)
-    this.flushSoon()
+    if (!this.ready || libraryDir === undefined || libraryDir === '') return
+    const previous = this.libraryDirValue
+    this.libraryDirValue = libraryDir
+    if (previous === undefined || previous === libraryDir) return
+    this.generationValue++
+    this.librarySavedBody = null
+    this.refreshMetrics()
   }
 
   /** 按编辑区当前全文算出的保存状态，不等 150 ms 的防抖。操作判断（L-07 是否有未保存内容）用它。 */
   currentStatus(): SaveStatus {
-    return saveStatus(this.ctx.editor.getText(), this.binding)
+    return this.status(this.ctx.editor.getText())
+  }
+
+  private status(text: string): SaveStatus {
+    if (isBlank(text)) return 'blank'
+    return text === this.librarySavedBody ? 'saved' : 'unsaved'
   }
 
   scheduleMetrics(): void {
@@ -240,7 +259,7 @@ export class Draft {
     if (this.metricsTimer !== null) clearTimeout(this.metricsTimer)
     this.metricsTimer = null
     const text = this.ctx.editor.getText()
-    const status = saveStatus(text, this.binding)
+    const status = this.status(text)
     const chars = countCharacters(text)
     this.ctx.store.update((state: AppState) => (state.editor.status === status && state.editor.chars === chars
       ? state

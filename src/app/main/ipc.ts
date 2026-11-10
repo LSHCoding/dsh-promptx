@@ -8,6 +8,7 @@
 import type { BridgeResult, Prefs, ResolvedConfig, WindowBounds } from '../../shared/bridge.ts'
 import { RENDERER_FORWARDED_METHODS, type RendererForwardedMethod } from '../../shared/protocol.ts'
 import { IPC_CHANNELS } from './channels.ts'
+import type { EntryEditorManager } from './entry-editor.ts'
 
 export interface IpcEventLike {
   sender: unknown
@@ -191,5 +192,46 @@ export function registerIpcHandlers(ipc: IpcMainLike, options: RegisterIpcOption
     if (!isPlainObject(patch)) return false
     handlers.setPrefs(patch)
     return true
+  })
+}
+
+/** 子窗口独立能力表；不扩大主窗口通用 call/prefs/window 通道的信任范围。 */
+export function registerEntryEditorIpc(
+  ipc: IpcMainLike, isMain: (sender: unknown) => boolean, getEditor: () => EntryEditorManager | null,
+): void {
+  const handle = (channel: string, main: boolean, run: (editor: EntryEditorManager, args: unknown[]) => unknown): void => {
+    ipc.handle(channel, (event, ...args) => {
+      const editor = getEditor()
+      if (editor === null || !(main ? isMain(event.sender) : editor.isSender(event.sender))) throw new UntrustedSenderError(channel)
+      return run(editor, args)
+    })
+  }
+  handle(IPC_CHANNELS.entryEditorOpen, true, (editor, [relPath]) => {
+    if (typeof relPath !== 'string' || relPath.length === 0 || relPath.length > 4096) return { ok: false, error: INVALID }
+    return editor.open(relPath)
+  })
+  handle(IPC_CHANNELS.entryEditorGetState, false, editor => editor.getState())
+  handle(IPC_CHANNELS.entryEditorSave, false, (editor, [generation]) => (
+    editor.canAct(generation) ? editor.save() : { ok: false, error: INVALID }
+  ))
+  handle(IPC_CHANNELS.entryEditorReload, false, (editor, [generation]) => (
+    editor.canAct(generation) ? editor.reload() : { ok: false, error: INVALID }
+  ))
+  handle(IPC_CHANNELS.entryEditorClose, false, (editor, [generation]) => (
+    generation === undefined || editor.canAct(generation) ? editor.close() : { ok: false, error: INVALID }
+  ))
+  ipc.on(IPC_CHANNELS.entryEditorUpdate, (event, text, selection, generation) => {
+    const editor = getEditor()
+    if (editor === null || !editor.isSender(event.sender) || !editor.acceptsGeneration(generation)) return
+    if (typeof text !== 'string' || !isPlainObject(selection) ||
+      !Number.isSafeInteger(selection.anchor) || !Number.isSafeInteger(selection.head)) return
+    editor.update(text, { anchor: selection.anchor as number, head: selection.head as number })
+  })
+  ipc.on(IPC_CHANNELS.entryEditorPrepared, (event, id, generation, text, selection) => {
+    const editor = getEditor()
+    if (editor === null || !editor.isSender(event.sender) || !editor.acceptsGeneration(generation)) return
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || typeof text !== 'string' || !isPlainObject(selection) ||
+      !Number.isSafeInteger(selection.anchor) || !Number.isSafeInteger(selection.head)) return
+    editor.prepared(id, generation as number, text, { anchor: selection.anchor as number, head: selection.head as number })
   })
 }

@@ -30,6 +30,8 @@ export interface MainWindow extends ControlledWindow {
   setBounds(bounds: Rect): void
   setMinimumSize(width: number, height: number): void
   setBackgroundColor(color: string): void
+  setTitle(title: string): void
+  destroy(): void
   /** 发事件给渲染进程；webContents 已销毁时什么都不做。 */
   send(event: BridgeEventName, payload: unknown): void
   /** IPC 消息是否来自这个窗口自己的 webContents。 */
@@ -55,6 +57,16 @@ export interface WindowCreateOptions {
   width: number
   height: number
   backgroundColor: string
+  parent?: MainWindow
+  entryEditor?: boolean
+}
+
+export interface MessageBoxOptions {
+  title: string
+  message: string
+  buttons: string[]
+  defaultId: number
+  cancelId: number
 }
 
 export interface CompanionPlatform {
@@ -94,6 +106,7 @@ export interface CompanionPlatform {
   readonly ipc: IpcMainLike
   /** 建好隐藏的窗口并开始加载界面。 */
   createWindow(options: WindowCreateOptions): MainWindow
+  showMessageBox(window: MainWindow, options: MessageBoxOptions): Promise<number>
   /** 建不出来（例如桌面环境没有托盘）时返回 null。 */
   createTray(onAction: (action: TrayAction) => void): TrayHandle | null
   onBeforeQuit(listener: (prevent: () => void) => void): void

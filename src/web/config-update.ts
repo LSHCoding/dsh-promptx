@@ -44,6 +44,8 @@ export const MAX_INSTRUCTION_LENGTH = 100_000
 const CONFIG_FIELDS: Record<keyof PromptxConfig, true> = {
   libraryDir: true,
   confirmDelete: true,
+  convertMiddleDot: true,
+  convertYen: true,
   optimizeInstruction: true,
   globalShortcut: true,
   hideOnBlur: true,
@@ -154,6 +156,12 @@ async function validatePatch(
     const value = patch.confirmDelete
     if (typeof value === 'boolean') out.confirmDelete = value
     else errors.confirmDelete = 'value-invalid'
+  }
+  for (const field of ['convertMiddleDot', 'convertYen'] as const) {
+    if (!Object.hasOwn(patch, field)) continue
+    const value = patch[field]
+    if (typeof value === 'boolean') out[field] = value
+    else errors[field] = 'value-invalid'
   }
   if (Object.hasOwn(patch, 'hideOnBlur')) {
     const value = patch.hideOnBlur

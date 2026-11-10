@@ -86,6 +86,33 @@ async function invokeValue<T>(channel: string, ...args: unknown[]): Promise<T> {
 }
 
 const bridge: PromptxBridge = {
+  entryEditor: {
+    open(relPath) {
+      return invokeResult(IPC_CHANNELS.entryEditorOpen, failure('promptx/channel/closed'), relPath)
+    },
+    getState() {
+      return invokeResult(IPC_CHANNELS.entryEditorGetState, failure('promptx/channel/closed'))
+    },
+    update(text, selection, generation) {
+      ipcRenderer.send(IPC_CHANNELS.entryEditorUpdate, text, selection, generation)
+    },
+    prepared(id, generation, text, selection) {
+      ipcRenderer.send(IPC_CHANNELS.entryEditorPrepared, id, generation, text, selection)
+    },
+    save(generation) {
+      return invokeResult(IPC_CHANNELS.entryEditorSave, failure('promptx/channel/closed'), generation)
+    },
+    reload(generation) {
+      return invokeResult(IPC_CHANNELS.entryEditorReload, failure('promptx/channel/closed'), generation)
+    },
+    async close(generation) {
+      try {
+        await ipcRenderer.invoke(IPC_CHANNELS.entryEditorClose, generation)
+      } catch {
+        // 窗口关闭过程中来源失效时无需继续处理。
+      }
+    },
+  },
   platform: process.platform,
   call,
   on,

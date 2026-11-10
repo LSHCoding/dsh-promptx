@@ -164,6 +164,8 @@ describe('createConfigUpdater', () => {
     await expect(update({
       libraryDir: '  ~/prompts  ',
       confirmDelete: false,
+      convertMiddleDot: false,
+      convertYen: false,
       optimizeInstruction: '  \n\t',
       globalShortcut: 'alt+ctrl+p',
       hideOnBlur: true,
@@ -172,6 +174,8 @@ describe('createConfigUpdater', () => {
     expect(applied).toEqual([{
       libraryDir: '~/prompts',
       confirmDelete: false,
+      convertMiddleDot: false,
+      convertYen: false,
       optimizeInstruction: '',
       globalShortcut: 'Control+Alt+P',
       hideOnBlur: true,
@@ -211,6 +215,8 @@ describe('createConfigUpdater', () => {
     await expect(update({
       libraryDir: 5,
       confirmDelete: 'yes',
+      convertMiddleDot: 'false',
+      convertYen: 0,
       optimizeInstruction: null,
       globalShortcut: false,
       hideOnBlur: 1,
@@ -220,6 +226,8 @@ describe('createConfigUpdater', () => {
       errors: {
         libraryDir: 'value-invalid',
         confirmDelete: 'value-invalid',
+        convertMiddleDot: 'value-invalid',
+        convertYen: 'value-invalid',
         optimizeInstruction: 'value-invalid',
         globalShortcut: 'value-invalid',
         hideOnBlur: 'value-invalid',

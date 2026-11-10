@@ -25,11 +25,12 @@ import { RpcError } from '../../shared/rpc.ts'
 import type { CompanionConfig, CompanionStatus, ErrorInfo } from '../../shared/types.ts'
 import { parseCompanionConfig, resolveConfig, resolveLocale, WINDOW_BACKGROUND, type Locale } from './appearance.ts'
 import { ClipboardWriter } from './clipboard.ts'
+import { EntryEditorManager } from './entry-editor.ts'
 import { runE2eCommand, type CopyTiming, type E2eDeps, type RendererE2eRequest } from './e2e.ts'
 import type { CompanionEnv, CompanionPaths } from './env.ts'
 import { FlushCoordinator } from './flush.ts'
 import { HostLink, type CompanionPeer, type HostLinkClose, type InputStream, type OutputStream } from './host-link.ts'
-import { registerIpcHandlers, type E2eRendererResult, type ReadyInfo } from './ipc.ts'
+import { registerEntryEditorIpc, registerIpcHandlers, type E2eRendererResult, type ReadyInfo } from './ipc.ts'
 import { errorCode, type CompanionLogger } from './logger.ts'
 import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect } from './placement.ts'
 import type { CompanionPlatform, MainWindow, TrayHandle } from './platform.ts'
@@ -150,6 +151,7 @@ export class CompanionApp {
   #resolved: ResolvedConfig | null = null
   #window: MainWindow | null = null
   #controller: WindowController | null = null
+  #entryEditor: EntryEditorManager | null = null
   #tray: TrayHandle | null = null
   #booted = false
   #rendererReady = false
@@ -207,7 +209,8 @@ export class CompanionApp {
       ...(options.platform.readSystemHotkeys === undefined ? {} : { readSystemHotkeys: options.platform.readSystemHotkeys }),
       locale: () => this.#locale(),
       onTrigger: () => {
-        this.#controller?.toggle('shortcut')
+        if (this.#entryEditor?.focused === true) this.#controller?.hide('shortcut')
+        else this.#controller?.toggle('shortcut')
       },
       onStatus: () => {
         this.#scheduleTrayUpdate()
@@ -289,6 +292,7 @@ export class CompanionApp {
         },
       },
     })
+    registerEntryEditorIpc(this.#platform.ipc, sender => this.#window?.isSender(sender) ?? false, () => this.#entryEditor)
     this.#platform.onBeforeQuit((prevent) => {
       if (this.#finalized) return
       // 系统注销、关机时 Electron 走 before-quit：先拦下来写回草稿，再自己退出（app.exit 不再触发 before-quit）。
@@ -327,6 +331,41 @@ export class CompanionApp {
     this.#peer.handle('e2e.run', async (command) => {
       const ok = await this.#handshake
       if (!ok || this.#mode !== 'e2e') throw new PromptxError('promptx/internal', 'e2e disabled')
+      if (command.action === 'edit-entry') {
+        const editor = this.#entryEditor
+        if (editor === null) return { ok: false, data: { windowCreated: false } }
+        this.#controller?.show('e2e-entry')
+        const opened = await editor.open(command.relPath)
+        if (!opened.ok) return { ok: false, data: {}, error: opened.error }
+        const deadline = this.#platform.now() + 3000
+        while (!editor.stateRequested && this.#platform.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        const stateRequested = editor.stateRequested
+        // getState 表示子窗实际请求初始文档，不把它记作 OS 输入法或DOM挂载验收。
+        await new Promise(resolve => setTimeout(resolve, 100))
+        editor.sendE2eText(command.text)
+        const textDeadline = this.#platform.now() + 3000
+        let echoed = editor.getState()
+        while ((!echoed.ok || echoed.value.text !== command.text) && this.#platform.now() < textDeadline) {
+          await new Promise(resolve => setTimeout(resolve, 10))
+          echoed = editor.getState()
+        }
+        if (!echoed.ok || echoed.value.text !== command.text) return { ok: false, data: { stateRequested, rendererEchoed: false } }
+        const saved = await editor.save()
+        const snapshot = editor.getState()
+        const result = {
+          ok: saved.ok && stateRequested,
+          data: {
+            windowCreated: editor.windowCreated, stateRequested,
+            rendererEchoed: true,
+            targetRelPath: snapshot.ok ? snapshot.value.binding.relPath : null,
+            savedBodyMatches: snapshot.ok && snapshot.value.binding.savedBody === command.text,
+          },
+        }
+        if (saved.ok) await editor.close()
+        return result
+      }
       return runE2eCommand(command, this.#e2eDeps())
     })
     this.#peer.handle('shutdown', async () => {
@@ -443,6 +482,7 @@ export class CompanionApp {
     const previous = this.#resolved
     if (previous !== null && JSON.stringify(previous) === JSON.stringify(next)) return
     this.#resolved = next
+    this.#entryEditor?.applyConfig()
     this.#window?.send('config', next)
     this.#window?.setBackgroundColor(WINDOW_BACKGROUND[next.resolvedTheme])
     if (previous?.resolvedLocale !== next.resolvedLocale) {
@@ -467,6 +507,7 @@ export class CompanionApp {
     }
     if (command === 'show') controller.show('host')
     else if (command === 'hide') controller.hide('host')
+    else if (this.#entryEditor?.focused === true) controller.hide('host')
     else controller.toggle('host')
   }
 
@@ -520,6 +561,19 @@ export class CompanionApp {
         backgroundColor: WINDOW_BACKGROUND[theme],
       })
       this.#window = window
+      this.#entryEditor = new EntryEditorManager({
+        platform: this.#platform,
+        parent: window,
+        config: () => this.#resolved,
+        request: async (method, params) => {
+          if (!(await this.#handshake)) throw new PromptxError('promptx/channel/closed')
+          return this.#peer.request(method, params)
+        },
+        changed: (libraryDir) => { window.send('library.entriesChanged', { libraryDir }) },
+        onBlur: () => { this.#controller?.handleBlur() },
+        logger: this.#logger,
+      })
+      runTask(this.#logger, 'entry-editor-initialize', () => this.#entryEditor?.initialize() ?? Promise.resolve())
       this.#controller = new WindowController({
         platform: this.#platform.platform,
         window,
@@ -542,13 +596,16 @@ export class CompanionApp {
           // （一次原生调用加一次比较，没变化时什么都不发）。
           this.#refreshAppearance()
           this.#onVisibility('window.shown', reason)
+          this.#entryEditor?.show()
         },
         onHidden: (reason) => {
+          this.#entryEditor?.hide()
           this.#copyTiming = { ...this.#copyTiming, hiddenAt: this.#platform.now() }
           this.#onVisibility('window.hidden', reason)
         },
         logger: this.#logger,
         now: () => this.#platform.now(),
+        isRelatedFocused: () => this.#entryEditor?.protectingFocus ?? false,
       })
       this.#controller.setHideOnBlur(this.#config?.hideOnBlur ?? false)
       this.#wireWindow(window)
@@ -967,9 +1024,10 @@ export class CompanionApp {
     this.#logger.info('exit.begin', { reason })
     this.#exitFlush = flushMs === null
       ? Promise.resolve()
-      : this.#flush.flush(flushMs).then((result) => {
-        this.#logger.info('exit.flush', { result })
-      })
+      : withTimeout(Promise.allSettled([
+        this.#flush.flush(flushMs).then((result) => { this.#logger.info('exit.flush', { result }) }),
+        this.#entryEditor?.flushForExit() ?? Promise.resolve(),
+      ]).then(() => {}), flushMs, undefined)
     return this.#exitFlush
   }
 
@@ -991,6 +1049,7 @@ export class CompanionApp {
         this.#trayTimer = null
         this.#smokeTimer = null
         this.#controller?.dispose()
+        this.#entryEditor?.dispose()
         this.#health.dispose()
         this.#flush.dispose()
         this.#e2eReplies.dispose()

@@ -16,6 +16,8 @@ const config: CompanionConfig = {
   globalShortcut: 'Control+P',
   hideOnBlur: false,
   confirmDelete: true,
+  convertMiddleDot: true,
+  convertYen: true,
   locale: null,
   theme: 'system',
   libraryDir: '/Users/me/.dsh/promptx/library',
@@ -101,6 +103,15 @@ describe('parseCompanionConfig', () => {
     expect(parseCompanionConfig({}, null)).toEqual(FALLBACK_COMPANION_CONFIG)
     expect(FALLBACK_COMPANION_CONFIG.globalShortcut).toBe('')
     expect(FALLBACK_COMPANION_CONFIG.theme).toBe('system')
+  })
+
+  it('defaults both input conversions on and preserves each previous value on malformed updates', () => {
+    expect(parseCompanionConfig({}, null)).toMatchObject({ convertMiddleDot: true, convertYen: true })
+    expect(parseCompanionConfig({ convertMiddleDot: false, convertYen: true }, config))
+      .toMatchObject({ convertMiddleDot: false, convertYen: true })
+    const previous = { ...config, convertMiddleDot: false, convertYen: false }
+    expect(parseCompanionConfig({ convertMiddleDot: 'true', convertYen: 1 }, previous))
+      .toMatchObject({ convertMiddleDot: false, convertYen: false })
   })
 
   it('maps locale tags the way the Host does (zh* is Chinese, anything else English)', () => {

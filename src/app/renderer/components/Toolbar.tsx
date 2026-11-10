@@ -13,6 +13,7 @@ export function Toolbar(): ReactElement {
   const libraryOpen = useAppState(state => state.library.open)
   const status = useAppState(state => state.editor.status)
   const loaded = useAppState(state => state.draft.load === 'ready')
+  const saving = useAppState(state => state.draft.librarySaving)
   const session = useAppState(state => state.optimize.session)
   const sessionOpen = useAppState(state => state.optimize.paneOpen)
   const running = session?.rounds.some(round => round.status === 'running') ?? false
@@ -35,7 +36,7 @@ export function Toolbar(): ReactElement {
           icon="save"
           label={t('toolbar.save')}
           shortcut={shortcut('save')}
-          disabled={!loaded}
+          disabled={!loaded || saving || status === 'blank'}
           keepFocus
           onClick={() => {
             run(controller.save())

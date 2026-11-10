@@ -51,6 +51,7 @@ function deps(overrides: Partial<CompanionHandlerDeps> = {}): CompanionHandlerDe
   }
   return {
     draft,
+    entryDraft: { load: () => Promise.resolve(null), save: () => Promise.resolve({ updatedAt: 'entry' }), close: () => Promise.resolve() },
     library: {} as LibraryApi,
     optimize: {} as OptimizeApi,
     openSettings: () => ({ open: null, navigated: true }),
@@ -67,6 +68,37 @@ function deps(overrides: Partial<CompanionHandlerDeps> = {}): CompanionHandlerDe
 const STATUS: CompanionStatus = { shortcut: null, tray: true, visible: false, locale: 'en', rendererError: null }
 
 describe('attachCompanionHandlers', () => {
+  it('isolates entry-editor recovery from the main draft and requires an independent load on every connection', async () => {
+    const entrySaved: string[] = []
+    const d = deps({ entryDraft: {
+      load: () => Promise.resolve(null),
+      save: (input) => { entrySaved.push(input.text); return Promise.resolve({ updatedAt: 'entry' }) },
+      close: () => Promise.resolve(),
+    } })
+    const first = fakePeer()
+    attachCompanionHandlers(first.peer, d)
+    await first.call('draft.load')
+    await expect(first.call('entryDraft.save', { text: 'blocked', binding: null, selection: null })).rejects.toMatchObject({ code: 'promptx/draft/unreadable' })
+    await first.call('entryDraft.load')
+    await first.call('entryDraft.save', { text: 'entry edits', binding: null, selection: null })
+    expect(entrySaved).toEqual(['entry edits'])
+    expect(d.saved).toEqual([])
+    const next = fakePeer()
+    attachCompanionHandlers(next.peer, d)
+    await expect(next.call('entryDraft.save', { text: 'blocked again', binding: null, selection: null })).rejects.toMatchObject({ code: 'promptx/draft/unreadable' })
+  })
+
+  it('does not allow entry recovery writes after a failed read', async () => {
+    const p = fakePeer()
+    attachCompanionHandlers(p.peer, deps({ entryDraft: {
+      load: () => Promise.reject(new Error('corrupt entry recovery')),
+      save: () => Promise.resolve({ updatedAt: '' }),
+      close: () => Promise.resolve(),
+    } }))
+    await expect(p.call('entryDraft.load')).rejects.toThrow('corrupt entry recovery')
+    await expect(p.call('entryDraft.save', { text: 'x', binding: null, selection: null })).rejects.toMatchObject({ code: 'promptx/draft/unreadable' })
+  })
+
   it('refuses draft.save on a connection that has not read the draft back yet', async () => {
     const d = deps()
     const first = fakePeer()

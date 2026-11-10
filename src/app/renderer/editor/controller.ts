@@ -7,6 +7,7 @@ import { history, isolateHistory } from '@codemirror/commands'
 import type { TextSelection } from '../../../shared/types.ts'
 import type { EditResult } from './commands.ts'
 import { editorKeymap, plainTextPaste } from './keymap.ts'
+import { inputConversions, type InputConversions } from './input-conversions.ts'
 
 export interface EditorUpdate {
   docChanged: boolean
@@ -30,6 +31,8 @@ export interface EditorController {
   /** 对当前状态执行一个 CodeMirror 命令（撤销、重做等）。 */
   runCommand(command: StateCommand): boolean
   setEditable(editable: boolean): void
+  /** 两项中文输入转换独立开关，立即应用到后续输入。 */
+  setInputConversions(options: InputConversions): void
   /** 跟随界面语言更新占位文字和无障碍名称。 */
   setLabels(labels: { placeholder: string; ariaLabel: string }): void
   focus(): void
@@ -74,6 +77,7 @@ export function createEditorController(options: EditorOptions): EditorController
   const highlightSlot = new Compartment()
   const listeners = new Set<(update: EditorUpdate) => void>()
   let editable = false
+  let conversions: InputConversions = { middleDot: true, yen: true }
   let labels = { placeholder: options.placeholder, ariaLabel: options.ariaLabel }
   let view: EditorView | null = null
 
@@ -93,6 +97,7 @@ export function createEditorController(options: EditorOptions): EditorController
       highlightSlot.of([]),
       editorKeymap(options.platform),
       plainTextPaste,
+      inputConversions(() => conversions),
       EditorView.contentAttributes.of({ spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' }),
       EditorView.updateListener.of((update) => {
         if (update.docChanged || update.selectionSet) notify({ docChanged: update.docChanged, selectionSet: update.selectionSet })
@@ -169,6 +174,9 @@ export function createEditorController(options: EditorOptions): EditorController
       if (editable === next) return
       editable = next
       dispatchTransaction(current().update({ effects: editableSlot.reconfigure(editableExtension(next)) }))
+    },
+    setInputConversions(next) {
+      conversions = { ...next }
     },
     setLabels(next) {
       if (next.placeholder === labels.placeholder && next.ariaLabel === labels.ariaLabel) return

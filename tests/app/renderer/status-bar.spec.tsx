@@ -151,11 +151,11 @@ describe('底栏接上状态', () => {
     expect(message(container)).toBe('草稿保存失败：草稿存储处于未知状态')
   })
 
-  it('显示绑定的标题和保存状态；macOS 上快捷键是 ⌘↩，Windows 上是 Ctrl+Enter', async () => {
+  it('旧绑定草稿恢复后不显示更新目标；Windows 的复制快捷键仍是 Ctrl+Enter', async () => {
     const bridge = new FakeBridge('win32')
     bridge.handle('draft.load', () => ok({ record: draftRecord('正文', { binding: binding('a.md', '正文', { title: '代码审查' }) }) }))
     const { container } = await mount(bridge)
-    expect(container.querySelector('.px-status-title')?.textContent).toBe('代码审查')
+    expect(container.querySelector('.px-status-title')).toBeNull()
     expect(screen.getByText('已保存')).toBeTruthy()
     expect(container.querySelector('kbd')?.textContent).toBe('Ctrl+Enter')
   })

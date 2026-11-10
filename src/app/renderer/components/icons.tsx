@@ -5,6 +5,7 @@ import type { ReactElement } from 'react'
 export type IconName =
   | 'library'
   | 'save'
+  | 'saveAsNew'
   | 'optimize'
   | 'stop'
   | 'clear'
@@ -31,6 +32,12 @@ const PATHS: Readonly<Record<IconName, ReactElement>> = {
     <>
       <path d="M3.5 2.5h7l2 2v8a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />
       <path d="M5.5 2.5v3h4v-3M5 13.5v-4h6v4" />
+    </>
+  ),
+  saveAsNew: (
+    <>
+      <path d="M8 13.5H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h5l3 3V8M9 2.5V6h3M5.5 8h3M5.5 10.5H7" />
+      <path d="M11.5 9.5v4M9.5 11.5h4" />
     </>
   ),
   optimize: (

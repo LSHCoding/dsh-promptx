@@ -128,11 +128,12 @@ describe('读回草稿之前（F-01、技术方案 4.5）', () => {
     expect((await start(third)).editor.getSelection()).toEqual({ anchor: 2, head: 2 })
   })
 
-  it('读回绑定后底栏显示已保存', async () => {
+  it('旧绑定迁移为无绑定草稿，底栏可保留已保存状态', async () => {
     const bridge = new FakeBridge()
     bridge.handle('draft.load', () => ok({ record: draftRecord('正文', { binding: binding('a.md', '正文') }) }))
     const controller = await start(bridge)
-    expect(controller.store.getState().draft.binding?.relPath).toBe('a.md')
+    expect(controller.store.getState().draft.binding).toBeNull()
+    expect(bridge.callsTo('draft.save').at(-1)?.binding).toBeNull()
     expect(controller.store.getState().editor).toEqual({ chars: 2, status: 'saved' })
   })
 
@@ -350,7 +351,7 @@ describe('库目录变了', () => {
     const controller = await start(bridge)
     bridge.emit('library.changed', { libraryDir: LIBRARY_DIR })
     await settle()
-    expect(controller.store.getState().draft.binding).not.toBeNull()
+    expect(controller.store.getState().draft.binding).toBeNull()
 
     bridge.emit('library.changed', { libraryDir: '/somewhere/else' })
     await settle()

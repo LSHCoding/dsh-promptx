@@ -5,6 +5,8 @@ import { getBridge } from './bridge.ts'
 import { App } from './components/App.tsx'
 import { AppController, fallbackLocale } from './controller/app.ts'
 import { runTask } from './controller/context.ts'
+import { EntryEditorApp } from './entry-editor/App.tsx'
+import { EntryEditorController } from './entry-editor/controller.ts'
 
 function main(): void {
   const container = document.getElementById('root')
@@ -13,6 +15,12 @@ function main(): void {
   if (bridge === null) {
     // 只有在小程序之外直接打开 index.html 时才会走到这里。
     container.textContent = 'PromptX: the preload bridge is missing.'
+    return
+  }
+  if (window.location.hash === '#entry-editor') {
+    const controller = new EntryEditorController(bridge, fallbackLocale())
+    createRoot(container).render(<EntryEditorApp controller={controller} />)
+    runTask(controller.start())
     return
   }
   // 主进程在 hello 回复之后才有配置；在那之前跟随系统的语言和明暗，拿到配置后立即切换。

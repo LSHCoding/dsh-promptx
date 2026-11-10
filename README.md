@@ -4,12 +4,12 @@ English | [中文](README.zh.md)
 
 PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin with a small companion window. Press a global shortcut in any app and a prompt editor floats above it. Write a prompt, reuse one from your Markdown prompt library, or let the model configured in dsh rewrite it. Press ⌘↩ to copy the whole prompt; the window hides and focus returns to the app you were using, ready to paste.
 
-> Version: v0.1.0. macOS is the supported platform. Windows and Linux are previews; cross-platform CI verification and manual testing on those platforms are pending.
+> Version: v0.1.1. macOS is the supported platform. Windows and Linux are previews; cross-platform CI verification and manual testing on those platforms are pending.
 
 ## What it does
 
 - **Global shortcut and floating window**: ⌃P on macOS, Ctrl+Alt+P on Windows and Linux. The window stays above other apps and hides again after you copy.
-- **Editor**: plain-text Markdown editing with list continuation and Tab indentation. Enter never sends anything.
+- **Editor**: plain-text Markdown editing with list continuation, Tab indentation, and optional Chinese-input conversions for backticks/code blocks and dollar signs/math blocks. Enter never sends anything.
 - **Prompt library**: a normal folder of Markdown files with YAML front matter (title, tags, favorite). Search, filter, insert at the cursor, open, save, rename, tag, favorite, delete to a trash folder and restore. Files you have not edited in PromptX are never modified.
 - **Rewrite with your dsh model**: a side panel streams a rewrite from the default model configured in dsh, with follow-up requests, apply (one undo restores the original), and copy.
 - **Drafts are kept**: hiding the window, restarting the companion or restarting dsh keeps your draft.
@@ -41,6 +41,12 @@ Restart dsh after installing or updating the plugin. On the first start, open th
 | Rewrite with the model / stop | ⇧⌘O | Shift+Ctrl+O |
 | Hide the window | Esc | Esc |
 
+Double-click a library entry to insert its body at the editor's cursor, replacing any selected text. **Save** and ⌘S / Ctrl+S in the main window always create a new library entry, including after an earlier save.
+
+Use **Open in editor** on a library entry to edit it in a separate window above PromptX. **Save changes** and ⌘S / Ctrl+S in that window update only the selected entry. Your main draft stays in place. Closing or switching away from unsaved edits asks whether to save, discard, or cancel; unfinished entry edits have their own recovery draft.
+
+With input conversions enabled, typing two `·` characters produces two backticks; a third creates a code block. Two `¥` or `￥` characters produce `$$`; a third creates a display math block. Single characters and pasted text are preserved. Each conversion can be undone, and each feature has its own switch in the plugin settings.
+
 The menu bar (macOS) or tray icon has Show/Hide, Reset window position, Settings…, and Restart window. Settings live on the PromptX page of dsh's Plugins page: library folder, delete confirmation, rewrite instruction, global shortcut, hide when the window loses focus, and runtime download source.
 
 ## Where data lives
@@ -52,6 +58,7 @@ All paths are under the dsh data directory (`~/.dsh` unless `DSH_HOME` is set):
 | Prompt library (default) | `promptx/library/` — any folder you choose in settings |
 | Deleted prompts | `_trash/` inside the library folder |
 | Draft | `storages/promptx_draft_<profile hash>.json` |
+| Entry-editor recovery draft | `storages/promptx_entry_draft_<profile hash>.json` |
 | Companion runtime | `promptx/runtime/` |
 | Window position and panel state | `promptx/prefs.json` |
 | Companion logs (no prompt text) | `promptx/logs/` |

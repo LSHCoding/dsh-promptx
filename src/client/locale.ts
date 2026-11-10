@@ -17,6 +17,7 @@ export const zh = {
   duplicateInstance: '另一个 dsh 进程已在为这个 profile 运行 PromptX。这个进程不启动小窗，也不读写草稿；要改设置，请到那个 dsh 里修改，或者先退出它，再重启这个 dsh。',
 
   sectionWindow: '小窗',
+  sectionEditor: '编辑器',
   sectionLibrary: 'Prompt 库',
   sectionOptimize: '优化',
 
@@ -85,6 +86,11 @@ export const zh = {
   hideOnBlurLabel: '失焦时隐藏',
   hideOnBlurHint: '切到别的应用时自动隐藏小窗；拖动或缩放小窗不算切走。',
 
+  convertMiddleDotLabel: '连打「·」转反引号 / 代码块',
+  convertMiddleDotHint: '连续输入两个 · 变成两个反引号，第三个生成代码块；单个 · 保持原样。',
+  convertYenLabel: '输入「¥」转「$」/ 行间公式',
+  convertYenHint: '连续输入两个 ¥ 或 ￥ 变成 $$，第三个生成行间公式块；单个符号保持原样。',
+
   libraryDirLabel: '库目录',
   libraryDirHint: '写绝对路径，或以 ~ 开头的路径；留空使用默认位置。保存后小窗的库侧栏直接换成新目录。',
   confirmDeleteLabel: '删除前确认',
@@ -145,6 +151,7 @@ export const en: Record<PromptxLocaleKey, string> = {
   duplicateInstance: 'Another dsh process is already running PromptX for this profile. This process does not start the PromptX window or touch the draft. Change the settings in that dsh, or quit it and restart this one.',
 
   sectionWindow: 'PromptX window',
+  sectionEditor: 'Editor',
   sectionLibrary: 'Prompt library',
   sectionOptimize: 'Optimization',
 
@@ -212,6 +219,11 @@ export const en: Record<PromptxLocaleKey, string> = {
 
   hideOnBlurLabel: 'Hide when inactive',
   hideOnBlurHint: 'Hide the PromptX window when you switch to another app. Moving or resizing the window does not count.',
+
+  convertMiddleDotLabel: 'Repeated · to backticks / code block',
+  convertMiddleDotHint: 'Two middle dots become two backticks; a third creates a code block. A single dot stays unchanged.',
+  convertYenLabel: '¥ to $ / display math',
+  convertYenHint: 'Two ¥ or ￥ signs become $$; a third creates a display math block. A single sign stays unchanged.',
 
   libraryDirLabel: 'Library folder',
   libraryDirHint: 'An absolute path, or one starting with ~. Leave empty for the default location. After saving, the library sidebar in the window shows the new folder.',

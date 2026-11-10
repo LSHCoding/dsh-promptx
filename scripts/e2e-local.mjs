@@ -162,6 +162,30 @@ try {
   if (typeof saved.data.relPath === 'string') {
     const file = readFileSync(join(status.effectiveLibraryDir, saved.data.relPath), 'utf8')
     check('new file has front matter fields', ['id:', 'title:', 'tags:', 'favorite:', 'created:', 'updated:'].every(k => file.includes(`\n${k}`)), saved.data.relPath)
+
+    // 主窗口每次独立保存均新建；未改动的前两条必须逐字节保留。
+    const snapshots = new Map([[saved.data.relPath, file]])
+    for (let index = 0; index < 2; index++) {
+      const next = await api('e2e', { command: { action: 'save-to-library' } })
+      const relPath = next.data.relPath
+      const distinct = next.ok === true && typeof relPath === 'string' && !snapshots.has(relPath)
+      check(`main save #${index + 2} creates a distinct entry`, distinct, String(relPath))
+      if (distinct) snapshots.set(relPath, readFileSync(join(status.effectiveLibraryDir, relPath), 'utf8'))
+    }
+    check('earlier entries unchanged after repeated saves', [...snapshots].every(([path, bytes]) => readFileSync(join(status.effectiveLibraryDir, path), 'utf8') === bytes))
+    const beforeEdit = await api('e2e', { command: { action: 'state' } })
+    check('main draft has no file-update binding', beforeEdit.ok === true && beforeEdit.data.renderer?.boundRelPath === null)
+
+    // 子窗实际加载并请求状态；测试模式模拟编辑，原生manager沿正式保存链只更新指定文件。
+    const editedBody = '# 独立条目编辑\n\n修改已有条目，主窗口草稿保持原样。'
+    const edited = await api('e2e', { command: { action: 'edit-entry', relPath: saved.data.relPath, text: editedBody } })
+    check('entry editor loads and edits through its renderer', edited.ok === true && edited.data.windowCreated === true && edited.data.stateRequested === true && edited.data.rendererEchoed === true)
+    check('entry editor saves only its target', edited.data.targetRelPath === saved.data.relPath && edited.data.savedBodyMatches === true && readFileSync(join(status.effectiveLibraryDir, saved.data.relPath), 'utf8').endsWith(editedBody))
+    check('other entries unchanged after entry editing', [...snapshots].filter(([path]) => path !== saved.data.relPath).every(([path, bytes]) => readFileSync(join(status.effectiveLibraryDir, path), 'utf8') === bytes))
+    await sleep(800)
+    const afterEdit = await api('e2e', { command: { action: 'state' } })
+    const mainDraft = JSON.parse(readFileSync(draftFile, 'utf8'))
+    check('entry editing preserves the main draft', afterEdit.data.renderer?.textLength === beforeEdit.data.renderer?.textLength && afterEdit.data.renderer?.boundRelPath === null && mainDraft.tables.draft.current.text === text)
   }
 
   // 4. 读取 256 KiB 的条目

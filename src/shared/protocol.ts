@@ -24,7 +24,9 @@ import type {
 } from './types.ts'
 
 // 2：status 加了 locale 和 rendererError（审查 F5、CR-03）。
-export const PROTOCOL_VERSION = 2
+// 3：CompanionConfig 增加两个中文输入转换开关。
+// 4：独立条目编辑恢复草稿，与主窗口草稿隔离。
+export const PROTOCOL_VERSION = 4
 
 type Empty = Record<string, never>
 
@@ -51,6 +53,8 @@ export interface HelloResult {
 export type E2eCommand =
   | { action: 'core-path'; text: string }
   | { action: 'save-to-library' }
+  /** 测试模式：经过真实子窗载入、编辑和保存，不能由普通运行模式调用。 */
+  | { action: 'edit-entry'; relPath: string; text: string }
   | { action: 'state' }
   /** Host 自己处理：计时读取一条库条目（N-01 的 256 KiB 读取）。 */
   | { action: 'host-read'; relPath: string }
@@ -82,6 +86,8 @@ export interface CompanionRequests {
   'hello': { params: HelloParams; result: HelloResult }
   'draft.load': { params: Empty; result: { record: DraftRecord | null } }
   'draft.save': { params: { text: string; selection: TextSelection | null; binding: Binding | null }; result: { updatedAt: string } }
+  'entryDraft.load': { params: Empty; result: { record: DraftRecord | null } }
+  'entryDraft.save': { params: { text: string; selection: TextSelection | null; binding: Binding | null }; result: { updatedAt: string } }
   'library.list': { params: LibraryListParams; result: LibraryListResult }
   'library.read': { params: { relPath: string }; result: LibraryReadResult }
   /** requestId 用于新建文件去重：同一个 requestId 重发时返回已经建好的文件，不再建第二个。 */
@@ -135,6 +141,7 @@ export type HostNotificationMethod = keyof HostNotifications
 /** 方法表，供两端注册处理函数时核对（测试检查两端的注册与这里一致）。 */
 export const COMPANION_REQUEST_METHODS = [
   'hello', 'draft.load', 'draft.save',
+  'entryDraft.load', 'entryDraft.save',
   'library.list', 'library.read', 'library.save', 'library.updateMeta', 'library.delete',
   'trash.list', 'trash.read', 'trash.restore',
   'optimize.start', 'optimize.followup', 'optimize.retry', 'optimize.cancel', 'optimize.clear', 'optimize.state',

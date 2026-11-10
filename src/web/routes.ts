@@ -301,6 +301,10 @@ function parseE2eCommand(value: unknown): E2eCommand {
       onlyKeys(value, ['action', 'text'])
       if (typeof value.text !== 'string') throw new BadRequest('command.text must be a string')
       return { action, text: value.text }
+    case 'edit-entry':
+      onlyKeys(value, ['action', 'relPath', 'text'])
+      if (typeof value.text !== 'string' || typeof value.relPath !== 'string') throw new BadRequest('entry path and text must be strings')
+      return { action, relPath: value.relPath, text: value.text }
     case 'save-to-library':
     case 'state':
       onlyKeys(value, ['action'])

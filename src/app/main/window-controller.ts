@@ -51,6 +51,8 @@ export interface WindowControllerOptions {
   blurCheckDelayMs?: number
   /** 拖动、缩放窗口也会触发 blur：最近这么久内有过 will-move / will-resize 时不因失焦隐藏。 */
   moveGuardMs?: number
+  /** 非模态条目编辑子窗拿到焦点时，父窗失焦不能触发自动隐藏。 */
+  isRelatedFocused?: () => boolean
 }
 
 export type ToggleResult = 'shown' | 'focused' | 'hidden'
@@ -72,6 +74,7 @@ export class WindowController {
   readonly #workspaceResetDelayMs: number
   readonly #blurCheckDelayMs: number
   readonly #moveGuardMs: number
+  readonly #isRelatedFocused: () => boolean
 
   #hideOnBlur = false
   #modalOpen = false
@@ -96,6 +99,7 @@ export class WindowController {
     this.#workspaceResetDelayMs = options.workspaceResetDelayMs ?? 50
     this.#blurCheckDelayMs = options.blurCheckDelayMs ?? 100
     this.#moveGuardMs = options.moveGuardMs ?? 500
+    this.#isRelatedFocused = options.isRelatedFocused ?? (() => false)
   }
 
   get visible(): boolean {
@@ -196,7 +200,7 @@ export class WindowController {
   }
 
   #shouldHideAfterBlur(): boolean {
-    if (!this.#hideOnBlur || this.#modalOpen) return false
+    if (!this.#hideOnBlur || this.#modalOpen || this.#isRelatedFocused()) return false
     if (!this.#window.isVisible() || this.#window.isFocused()) return false
     return this.#now() - this.#lastMoveAt >= this.#moveGuardMs
   }

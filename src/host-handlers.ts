@@ -18,6 +18,7 @@ import type {
 
 export interface CompanionHandlerDeps {
   draft: DraftApi
+  entryDraft: DraftApi
   library: LibraryApi
   optimize: OptimizeApi
   openSettings: () => { open: string | null; navigated: boolean }
@@ -28,6 +29,7 @@ export interface CompanionHandlerDeps {
 /** 给新建立的连接注册所有处理函数。每个连接一份状态（是否已读回草稿）。 */
 export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDeps): void {
   let draftLoaded = false
+  let entryDraftLoaded = false
 
   peer.handle('draft.load', async () => {
     const record = await deps.draft.load()
@@ -38,6 +40,18 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
     if (!draftLoaded) return Promise.reject(new PromptxError('promptx/draft/unreadable', 'draft not loaded on this connection'))
     const p = record(params)
     return deps.draft.save({ text: str(p.text, 'text'), selection: selection(p.selection), binding: binding(p.binding) })
+  })
+
+  peer.handle('entryDraft.load', async () => {
+    entryDraftLoaded = false
+    const record = await deps.entryDraft.load()
+    entryDraftLoaded = true
+    return { record }
+  })
+  peer.handle('entryDraft.save', (params) => {
+    if (!entryDraftLoaded) return Promise.reject(new PromptxError('promptx/draft/unreadable', 'entry draft not loaded on this connection'))
+    const p = record(params)
+    return deps.entryDraft.save({ text: str(p.text, 'text'), selection: selection(p.selection), binding: binding(p.binding) })
   })
 
   peer.handle('library.list', (params) => {

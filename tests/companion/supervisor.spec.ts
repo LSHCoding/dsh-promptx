@@ -13,7 +13,7 @@ import { failOnProcessProblems } from './process-traps.ts'
 
 const MOCK = fileURLToPath(new URL('../fixtures/mock-companion.mjs', import.meta.url))
 
-const CONFIG: CompanionConfig = { globalShortcut: '', hideOnBlur: false, confirmDelete: true, locale: null, theme: 'system', libraryDir: '/tmp/library', profile: 'test' }
+const CONFIG: CompanionConfig = { globalShortcut: '', hideOnBlur: false, confirmDelete: true, convertMiddleDot: true, convertYen: true, locale: null, theme: 'system', libraryDir: '/tmp/library', profile: 'test' }
 
 /** 测试用的短时序：真实的 15 秒握手、5 秒心跳在单测里太慢。 */
 const FAST: NonNullable<SupervisorOptions['timings']> = {
@@ -192,6 +192,16 @@ describe('CompanionSupervisor', () => {
     expect(h.supervisor.state()).toBe('stopped')
     expect(h.supervisor.peer()).toBeNull()
     expect(h.exited).toEqual(h.spawned)
+  })
+
+  it.each([2, 3])('rejects the previous protocol %s', async (protocol) => {
+    const h = createHarness([`--protocol=${protocol}`])
+    h.supervisor.start()
+    await waitFor(() => h.supervisor.state() === 'failed', 'old protocol rejected')
+    expect(h.supervisor.error()).toEqual({ code: 'promptx/companion/protocol-mismatch', detail: `host ${PROTOCOL_VERSION}, companion ${protocol}` })
+    expect(h.ready).toHaveLength(0)
+    await waitFor(() => h.exited.length === 1, 'old companion exit')
+    expect(h.launches).toBe(1)
   })
 
   it('rejects a protocol mismatch with -32001 and fails without restarting', async () => {

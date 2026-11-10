@@ -44,7 +44,7 @@ export const POLL_MIN_IDLE_MS = 1_000
 
 /** 配置项的字段，顺序与 PromptxConfig 一致。 */
 export const CONFIG_FIELDS = [
-  'libraryDir', 'confirmDelete', 'optimizeInstruction', 'globalShortcut', 'hideOnBlur', 'runtimeSource',
+  'libraryDir', 'confirmDelete', 'convertMiddleDot', 'convertYen', 'optimizeInstruction', 'globalShortcut', 'hideOnBlur', 'runtimeSource',
 ] as const satisfies readonly (keyof PromptxConfig)[]
 
 export type CompanionAction = 'restart' | 'show'
@@ -211,10 +211,11 @@ function parseInUseBy(value: unknown): Array<{ profile: string; version: string 
 
 function parseConfig(value: unknown): PromptxConfig | null {
   if (!isRecord(value)) return null
-  const { libraryDir, confirmDelete, optimizeInstruction, globalShortcut, hideOnBlur, runtimeSource } = value
+  const { libraryDir, confirmDelete, convertMiddleDot, convertYen, optimizeInstruction, globalShortcut, hideOnBlur, runtimeSource } = value
   if (typeof libraryDir !== 'string' || typeof confirmDelete !== 'boolean' || typeof optimizeInstruction !== 'string') return null
+  if (typeof convertMiddleDot !== 'boolean' || typeof convertYen !== 'boolean') return null
   if (typeof globalShortcut !== 'string' || typeof hideOnBlur !== 'boolean' || !oneOf(runtimeSource, RUNTIME_SOURCES)) return null
-  return { libraryDir, confirmDelete, optimizeInstruction, globalShortcut, hideOnBlur, runtimeSource }
+  return { libraryDir, confirmDelete, convertMiddleDot, convertYen, optimizeInstruction, globalShortcut, hideOnBlur, runtimeSource }
 }
 
 function parseRuntime(value: unknown): RuntimeStatus | null {

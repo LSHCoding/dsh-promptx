@@ -135,6 +135,8 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
     globalShortcut: config.globalShortcut.get(),
     hideOnBlur: config.hideOnBlur.get(),
     confirmDelete: config.confirmDelete.get(),
+    convertMiddleDot: config.convertMiddleDot.get(),
+    convertYen: config.convertYen.get(),
     locale: appearance.locale,
     theme: appearance.theme,
     libraryDir: effectiveLibraryDir(),
@@ -175,6 +177,7 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
     lockDir: join(paths.root, 'locks'),
   })
   const draft = createDraftService({ facility: ctx.storageDomain, profile })
+  const entryDraft = createDraftService({ facility: ctx.storageDomain, profile, scope: 'entry' })
   // supervisor 在下面才创建；这些闭包只在它创建之后才会被调用。
   const peer = (): HostPeer | null => supervisor.peer()
   const optimize = new OptimizeService({
@@ -232,6 +235,7 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
     attach: (channel) => {
       attachCompanionHandlers(channel, {
         draft,
+        entryDraft,
         library,
         optimize,
         openSettings,
@@ -453,6 +457,7 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
       if (lastSpawnedPid !== undefined) await runtime.releaseLease(lastSpawnedPid).catch(() => {})
       runtime.dispose()
       await draft.close().catch(() => {})
+      await entryDraft.close().catch(() => {})
       const held = lock
       lock = null
       lockHeld = false

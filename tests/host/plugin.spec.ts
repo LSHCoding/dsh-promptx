@@ -32,6 +32,15 @@ describe.skipIf(process.platform === 'win32')('PromptX Host wiring', () => {
     expect(await leases(h.home)).toEqual([])
   })
 
+  it.each([undefined, { convertMiddleDot: false, convertYen: false }])('provides input conversion settings through Config defaults and explicit values: %j', async (options) => {
+    const h = await setup()
+    const fiber = h.start(options)
+    await waitFor(async () => (await h.status()).companion.state === 'running', 'running')
+    const expected = options ?? { convertMiddleDot: true, convertYen: true }
+    expect((await h.status()).config).toMatchObject(expected)
+    await fiber.dispose()
+  })
+
   it('keeps a duplicate instance away from the companion, the runtime and the active lease (H1, H3)', async () => {
     const h = await setup()
     const first = h.start()

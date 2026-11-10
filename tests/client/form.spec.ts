@@ -18,6 +18,8 @@ import type { PromptxConfig } from '../../src/shared/types.ts'
 const config: PromptxConfig = {
   libraryDir: '',
   confirmDelete: true,
+  convertMiddleDot: true,
+  convertYen: true,
   optimizeInstruction: '',
   globalShortcut: 'Control+P',
   hideOnBlur: false,

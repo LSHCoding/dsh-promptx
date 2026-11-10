@@ -4,7 +4,7 @@
 
 PromptX 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的插件，带一个配套的桌面小窗。在任何应用里按全局快捷键，Prompt 编辑小窗浮在当前应用上方；写 Prompt、从自己的 Markdown Prompt 库里取模板，或者让 dsh 里配置的模型帮忙改写。按 ⌘↩ 复制全文，小窗隐藏，焦点回到刚才的应用，直接粘贴。
 
-> 版本：v0.1.0。macOS 正式支持；Windows、Linux 为预览，三平台 CI 验证及 Windows、Linux 实机验收待完成。
+> 版本：v0.1.1。macOS 正式支持；Windows、Linux 为预览，三平台 CI 验证及 Windows、Linux 实机验收待完成。
 
 ## 功能
 
@@ -41,6 +41,12 @@ npx @deepseek-ai/dsh plugin --profile <你的 profile> add /本仓库的/绝对�
 | 用模型改写 / 停止 | ⇧⌘O | Shift+Ctrl+O |
 | 隐藏小窗 | Esc | Esc |
 
+双击库条目，将正文插入编辑器光标位置；有选区时替换选区。主窗口的「保存」和 ⌘S / Ctrl+S 始终新建库条目，保存后继续编辑、再次保存也会新建。
+
+点击条目的「在编辑器中打开」，在 PromptX 上方打开独立编辑窗口。该窗口的「保存修改」和 ⌘S / Ctrl+S 只更新正在编辑的条目，主窗口的草稿保持原样。关闭或切换未保存的编辑时会询问保存、放弃或取消；未完成的条目编辑有单独的恢复草稿。
+
+开启中文输入转换后，连续两个 `·` 变成两个反引号，第三个生成代码块；连续两个 `¥` 或 `￥` 变成 `$$`，第三个生成行间公式块。单个字符和粘贴内容保持原样，转换可以撤销，两项在插件配置页各有开关。
+
 菜单栏（macOS）或托盘图标里有显示 / 隐藏、重置窗口位置、设置…、重启小窗。配置在 dsh 插件页的 PromptX 页面：库目录、删除前确认、优化指令、全局快捷键、失焦时自动隐藏、运行时下载源。
 
 ## 数据存放位置
@@ -52,6 +58,7 @@ npx @deepseek-ai/dsh plugin --profile <你的 profile> add /本仓库的/绝对�
 | Prompt 库（默认） | `promptx/library/`，可以在配置里换成任意目录 |
 | 删除的 Prompt | 库目录下的 `_trash/` |
 | 草稿 | `storages/promptx_draft_<profile 哈希>.json` |
+| 条目编辑恢复草稿 | `storages/promptx_entry_draft_<profile 哈希>.json` |
 | 小窗运行时 | `promptx/runtime/` |
 | 小窗位置和侧栏状态 | `promptx/prefs.json` |
 | 小窗日志（不含 Prompt 内容） | `promptx/logs/` |

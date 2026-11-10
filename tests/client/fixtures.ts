@@ -13,6 +13,8 @@ export function makeStatus(overrides: Partial<PanelStatus> = {}): PanelStatus {
     config: {
       libraryDir: '',
       confirmDelete: true,
+      convertMiddleDot: true,
+      convertYen: true,
       optimizeInstruction: '',
       globalShortcut: 'Control+P',
       hideOnBlur: false,

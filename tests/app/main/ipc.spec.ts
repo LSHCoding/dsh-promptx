@@ -94,9 +94,11 @@ describe('IPC channels', () => {
 
   it('lists exactly the bridge events', () => {
     const expected: Record<BridgeEventName, true> = {
+      'entryEditor.state': true,
       'config': true,
       'optimize.event': true,
       'library.changed': true,
+      'library.entriesChanged': true,
       'window.shown': true,
       'window.hidden': true,
       'flush': true,
@@ -108,7 +110,7 @@ describe('IPC channels', () => {
   it('registers a handler for every channel the preload uses', () => {
     const { ipc } = setup()
     const registered = [...ipc.handlers.keys(), ...ipc.listeners.keys()].sort()
-    const expected = Object.values(IPC_CHANNELS).filter(channel => channel !== IPC_CHANNELS.event).sort()
+    const expected = Object.values(IPC_CHANNELS).filter(channel => channel !== IPC_CHANNELS.event && !channel.startsWith('promptx:entryEditor.')).sort()
     expect(registered).toEqual(expected)
   })
 })
@@ -117,7 +119,7 @@ describe('isForwardedMethod', () => {
   it('accepts only the renderer allow-list', () => {
     for (const method of RENDERER_FORWARDED_METHODS) expect(isForwardedMethod(method)).toBe(true)
     // hello 由主进程自己发；Host 发来的请求和其他名字都不能经渲染进程转发。
-    for (const method of ['hello', 'host.openSettings', 'ping', 'shutdown', 'e2e.run', 'status', 'constructor', '__proto__', 42, null]) {
+    for (const method of ['hello', 'entryDraft.load', 'entryDraft.save', 'host.openSettings', 'ping', 'shutdown', 'e2e.run', 'status', 'constructor', '__proto__', 42, null]) {
       expect(isForwardedMethod(method)).toBe(false)
     }
   })

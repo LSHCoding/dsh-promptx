@@ -103,6 +103,8 @@ describe('companion smoke', () => {
       attach: (peer) => {
         peer.handle('draft.load', () => ({ record: null }))
         peer.handle('draft.save', () => ({ updatedAt: new Date().toISOString() }))
+        peer.handle('entryDraft.load', () => ({ record: null }))
+        peer.handle('entryDraft.save', () => ({ updatedAt: new Date().toISOString() }))
         peer.handle('optimize.state', () => ({ session: null }))
         peer.handle('library.list', () => ({ state: 'missing', root: dataDir, folders: [], tags: [], entries: [], total: 0 }))
         peer.on('status', (status) => {
@@ -120,6 +122,8 @@ describe('companion smoke', () => {
           globalShortcut: 'Control+Alt+Shift+F8',
           hideOnBlur: false,
           confirmDelete: true,
+          convertMiddleDot: true,
+          convertYen: true,
           locale: 'en',
           theme: 'system',
           libraryDir: join(dataDir, 'library'),

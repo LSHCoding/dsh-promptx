@@ -133,6 +133,32 @@ function ConfigForm(props: {
         />
       </section>
 
+      <section className="promptx-section" aria-labelledby={`${ids}-editor`}>
+        <h4 className="promptx-section-title" id={`${ids}-editor`}>{t('sectionEditor')}</h4>
+        <SwitchField
+          t={t}
+          label={t('convertMiddleDotLabel')}
+          hint={t('convertMiddleDotHint')}
+          checked={values.convertMiddleDot}
+          error={errors.convertMiddleDot}
+          disabled={saving}
+          onChange={(value) => {
+            form.stage('convertMiddleDot', value)
+          }}
+        />
+        <SwitchField
+          t={t}
+          label={t('convertYenLabel')}
+          hint={t('convertYenHint')}
+          checked={values.convertYen}
+          error={errors.convertYen}
+          disabled={saving}
+          onChange={(value) => {
+            form.stage('convertYen', value)
+          }}
+        />
+      </section>
+
       <section className="promptx-section" aria-labelledby={`${ids}-library`}>
         <h4 className="promptx-section-title" id={`${ids}-library`}>{t('sectionLibrary')}</h4>
         <TextField

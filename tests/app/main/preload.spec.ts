@@ -71,10 +71,26 @@ beforeEach(async () => {
 })
 
 describe('preload: exposure', () => {
+  it('forwards isolated entry actions and the document generation without exposing ipcRenderer', async () => {
+    invoke.mockResolvedValue({ ok: true, value: null })
+    await bridge.entryEditor.open('a.md')
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.entryEditorOpen, 'a.md')
+    bridge.entryEditor.update('正文', { anchor: 2, head: 2 }, 7)
+    expect(electron.state.sent.at(-1)).toEqual([IPC_CHANNELS.entryEditorUpdate, '正文', { anchor: 2, head: 2 }, 7])
+    bridge.entryEditor.prepared(11, 7, '最后文字', { anchor: 4, head: 4 })
+    expect(electron.state.sent.at(-1)).toEqual([IPC_CHANNELS.entryEditorPrepared, 11, 7, '最后文字', { anchor: 4, head: 4 }])
+    await bridge.entryEditor.save(7)
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.entryEditorSave, 7)
+    await bridge.entryEditor.reload(7)
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.entryEditorReload, 7)
+    await bridge.entryEditor.close(7)
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.entryEditorClose, 7)
+  })
+
   it('exposes window.promptx with the platform and nothing from Electron itself', () => {
     expect([...electron.state.exposed.keys()]).toEqual(['promptx'])
     expect(bridge.platform).toBe(process.platform)
-    expect(Object.keys(bridge).sort()).toEqual(['call', 'e2eDone', 'flushed', 'getConfig', 'on', 'platform', 'prefs', 'ready', 'window'])
+    expect(Object.keys(bridge).sort()).toEqual(['call', 'e2eDone', 'entryEditor', 'flushed', 'getConfig', 'on', 'platform', 'prefs', 'ready', 'window'])
     expect(JSON.stringify(Object.keys(bridge.window).sort())).toBe(JSON.stringify(
       ['copyAndHide', 'copyText', 'getBounds', 'hide', 'openSettings', 'setMinWidth', 'setModalOpen', 'setWidth'],
     ))

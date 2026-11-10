@@ -103,10 +103,10 @@ export class AppController {
     this.draft = new Draft(this.ctx, (loaded) => {
       this.onDraftLoaded(loaded)
     })
-    this.saver = new LibrarySave(this.ctx, this.draft, this.toasts, this.dialogs, () => {
+    this.saver = new LibrarySave(this.ctx, this.draft, this.toasts, () => {
       if (this.store.getState().library.open) runTask(this.library.refresh(false))
     })
-    this.library = new Library(this.ctx, this.draft, this.toasts, this.dialogs, this.saver, this.layout, () => {
+    this.library = new Library(this.ctx, this.draft, this.toasts, this.dialogs, this.layout, () => {
       this.requestFocus('search')
     })
     this.optimize = new Optimize(this.ctx, this.toasts, this.dialogs, this.layout, () => {
@@ -129,6 +129,12 @@ export class AppController {
       }),
       bridge.on('library.changed', ({ libraryDir }) => {
         runTask(this.library.onLibraryChanged(libraryDir))
+      }),
+      bridge.on('library.entriesChanged', ({ libraryDir }) => {
+        const state = this.store.getState()
+        if (state.config?.libraryDir !== libraryDir || !state.library.open) return
+        // 条目编辑只刷新库内容，主草稿的保存标记和未知创建请求保持原样。
+        runTask(this.library.reload())
       }),
       bridge.on('window.shown', () => {
         this.onShown()
@@ -192,6 +198,7 @@ export class AppController {
 
   private applyConfig(config: ResolvedConfig): void {
     this.store.update(state => ({ ...state, config, locale: config.resolvedLocale, theme: config.resolvedTheme }))
+    this.editor.setInputConversions({ middleDot: config.convertMiddleDot, yen: config.convertYen })
     this.applyLabels()
     this.draft.checkLibraryDir(config.libraryDir)
   }
@@ -302,6 +309,12 @@ export class AppController {
     this.toasts.beginAction()
     this.closeMenu()
     return this.saver.save()
+  }
+
+  saveAsNew(): Promise<SaveOutcome> {
+    this.toasts.beginAction()
+    this.closeMenu()
+    return this.saver.saveAsNew()
   }
 
   /** 工具栏「设置」：打开 dsh 插件页里 PromptX 的配置页（技术方案 4.8），主进程随后隐藏小窗。 */
@@ -466,7 +479,7 @@ export class AppController {
         const started = performance.now()
         const outcome = await this.save()
         const ms = performance.now() - started
-        return { ok: outcome === 'saved', data: { outcome, ms, relPath: this.draft.binding?.relPath ?? null } }
+        return { ok: outcome === 'saved', data: { outcome, ms, relPath: this.saver.lastSavedRelPath } }
       }
       case 'typing-latency':
         return this.measureTyping(e2eSize(command))

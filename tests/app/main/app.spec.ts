@@ -8,11 +8,11 @@ import { CompanionApp, type CompanionTimings } from '../../../src/app/main/app.t
 import { IPC_CHANNELS } from '../../../src/app/main/channels.ts'
 import { companionPaths, type CompanionEnv, type CompanionPaths } from '../../../src/app/main/env.ts'
 import { physicalShortcutKey, shortcutLockPath } from '../../../src/app/main/shortcut-lock.ts'
-import type { ResolvedConfig } from '../../../src/shared/bridge.ts'
+import type { EntryEditorSnapshot, ResolvedConfig } from '../../../src/shared/bridge.ts'
 import { PromptxError } from '../../../src/shared/errors.ts'
 import { initialWindowBounds } from '../../../src/shared/layout.ts'
 import { PROTOCOL_VERSION, RPC_ERROR, type E2eResult, type HelloResult } from '../../../src/shared/protocol.ts'
-import type { CompanionStatus } from '../../../src/shared/types.ts'
+import type { CompanionStatus, LibraryReadResult } from '../../../src/shared/types.ts'
 import {
   BASE_CONFIG,
   FakeHost,
@@ -140,6 +140,16 @@ function start(options: StartOptions = {}): Harness {
   return harness
 }
 
+function entryForEditing(): LibraryReadResult {
+  return {
+    entry: {
+      relPath: 'a.md', folder: '', id: 'a', title: 'A', tags: [], favorite: false,
+      updatedAt: 0, createdAt: null, status: 'ok', hasFrontMatter: true,
+    },
+    body: '原条目', version: { sha256: 'original', size: 3 },
+  }
+}
+
 /** 启动、ready、等窗口建好并上报过快捷键状态。 */
 async function boot(options: StartOptions = {}): Promise<Harness & { renderer: FakeRenderer }> {
   const harness = start(options)
@@ -211,6 +221,19 @@ describe('configuration and appearance (S-03)', () => {
     expect(platform.window.options.backgroundColor).toBe('#151517')
     const config = await renderer.invoke(IPC_CHANNELS.getConfig) as ResolvedConfig
     expect(config).toEqual({ ...BASE_CONFIG, resolvedLocale: 'zh', resolvedTheme: 'dark' })
+  })
+
+  it('relays input conversion switches to the mounted renderer without restarting the window', async () => {
+    const { platform, host, renderer } = await boot()
+    expect(await renderer.invoke(IPC_CHANNELS.getConfig)).toMatchObject({ convertMiddleDot: true, convertYen: true })
+    const window = platform.window
+    renderer.received.length = 0
+    host.peer.notify('config', { ...BASE_CONFIG, convertMiddleDot: false, convertYen: false })
+    await until(() => renderer.events('config').length === 1, 2000, 'input conversion config')
+    expect(renderer.events('config')[0]).toMatchObject({ convertMiddleDot: false, convertYen: false })
+    expect(platform.window).toBe(window)
+    expect(window.destroyed).toBe(false)
+    expect(await renderer.invoke(IPC_CHANNELS.getConfig)).toMatchObject({ convertMiddleDot: false, convertYen: false })
   })
 
   it('re-sends the config when the system theme changes, and only then', async () => {
@@ -373,6 +396,21 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     await until(() => !platform.window.visible, 2000, 'hide on blur')
   })
 
+  it('父窗切到子窗不隐藏，子窗切到外部应用时按hideOnBlur收起两个窗口', async () => {
+    const { platform, host, renderer } = await boot({ hello: { config: { ...BASE_CONFIG, hideOnBlur: true } } })
+    host.peer.handle('library.read', entryForEditing)
+    platform.shortcuts.press('Control+P')
+    await renderer.invoke(IPC_CHANNELS.entryEditorOpen, 'a.md')
+    const child = platform.windows[1]
+    if (child === undefined) throw new Error('missing child')
+    platform.window.blur()
+    await sleep(130)
+    expect(platform.window.visible).toBe(true)
+    expect(child.visible).toBe(true)
+    child.blur()
+    await until(() => !platform.window.visible && !child.visible, 2000, 'both windows hidden after external focus')
+  })
+
   it('reports visibility changes to the Host', async () => {
     const { platform, host } = await boot()
     platform.shortcuts.press('Control+P')
@@ -520,6 +558,48 @@ describe('renderer requests over IPC (5.3, 9)', () => {
 })
 
 describe('writing the draft back before exit (S07, design-spec 5.2)', () => {
+  it('条目恢复写入失败时，仍等待主草稿flush完成后才退出', async () => {
+    const { platform, host, renderer } = await boot()
+    host.peer.handle('library.read', entryForEditing)
+    await renderer.invoke(IPC_CHANNELS.entryEditorOpen, 'a.md')
+    const child = platform.windows[1]
+    if (child === undefined) throw new Error('missing child')
+    const state = await platform.ipc.invoke(child.sender, IPC_CHANNELS.entryEditorGetState) as {
+      ok: true
+      value: { generation: number }
+    }
+    child.onSend = (event, payload) => {
+      if (event !== 'entryEditor.state') return
+      const snapshot = payload as EntryEditorSnapshot
+      if (snapshot.freezeId !== null) {
+        platform.ipc.send(child.sender, IPC_CHANNELS.entryEditorPrepared,
+          snapshot.freezeId, snapshot.generation, snapshot.text, snapshot.selection ?? { anchor: 0, head: 0 })
+      }
+    }
+    platform.ipc.send(child.sender, IPC_CHANNELS.entryEditorUpdate, '未保存条目', { anchor: 0, head: 0 }, state.value.generation)
+    let entryFailed = false
+    host.entryDraftSave = () => {
+      entryFailed = true
+      throw new PromptxError('promptx/draft/write-failed')
+    }
+    let finish!: (value: { updatedAt: string }) => void
+    let mainStarted = false
+    host.peer.handle('draft.save', () => {
+      mainStarted = true
+      return new Promise<{ updatedAt: string }>((resolve) => { finish = resolve })
+    })
+    renderer.text = '必须保留的主草稿'
+    renderer.ready()
+    const reply = host.peer.request('shutdown', { reason: 'dispose' })
+    await until(() => entryFailed && mainStarted, 2000, 'both flushes started')
+    await sleep(20)
+    expect(platform.exitCode).toBeNull()
+    finish({ updatedAt: 'now' })
+    await expect(reply).resolves.toEqual({})
+    await expect(platform.exited).resolves.toBe(0)
+    expect(renderer.saves).toContain('必须保留的主草稿')
+  })
+
   it('on shutdown asks the renderer to flush, waits for the save, replies and exits 0', async () => {
     const { platform, host, renderer } = await boot()
     const order: string[] = []

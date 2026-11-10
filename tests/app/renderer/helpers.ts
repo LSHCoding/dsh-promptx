@@ -64,6 +64,8 @@ export function config(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig 
     globalShortcut: 'Control+P',
     hideOnBlur: false,
     confirmDelete: true,
+    convertMiddleDot: true,
+    convertYen: true,
     locale: 'zh',
     theme: 'light',
     libraryDir: LIBRARY_DIR,
@@ -145,6 +147,16 @@ export class FakeBridge implements PromptxBridge {
   readonly ready = vi.fn<PromptxBridge['ready']>()
   readonly flushed = vi.fn<PromptxBridge['flushed']>()
   readonly e2eDone = vi.fn<PromptxBridge['e2eDone']>()
+
+  readonly entryEditor = {
+    open: vi.fn<PromptxBridge['entryEditor']['open']>(async () => ok(null)),
+    getState: vi.fn<PromptxBridge['entryEditor']['getState']>(async () => fail('promptx/internal', 'entry editor not open')),
+    update: vi.fn<PromptxBridge['entryEditor']['update']>(),
+    prepared: vi.fn<PromptxBridge['entryEditor']['prepared']>(),
+    save: vi.fn<PromptxBridge['entryEditor']['save']>(async () => ok(null)),
+    reload: vi.fn<PromptxBridge['entryEditor']['reload']>(async () => ok(null)),
+    close: vi.fn<PromptxBridge['entryEditor']['close']>(async () => {}),
+  }
 
   readonly window = {
     hide: vi.fn(async () => {}),

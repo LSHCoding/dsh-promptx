@@ -1,21 +1,14 @@
-// 保存到库（需求 L-08、L-12，技术方案 5.5「库保存」，审查 S05）：
-// - 同一时间只有一个 library.save 在途；在途时再按 ⌘S 合并成一次，等结果回来后用新的绑定再发；
-// - 新建文件的请求带 requestId，超时后重发用同一个 id，插件返回已经建好的文件，不会建出第二个；
-// - 超时属于「结果未知」：先重新读取这一条核对，再允许重试；
-// - 保存完成时编辑区已经换成别的条目或被清空，不改动当前的绑定。
+// 主窗口的保存始终新建库条目；已有条目的更新只由独立编辑窗口发起。
+// 同一时刻只发一次新建，超时重试沿用 requestId，防止连续按键和未知结果产生重复文件。
 
-import type { MessageKey } from '../../../shared/i18n/index.ts'
-import type { Binding, LibraryReadResult, SaveConflict, SaveMode } from '../../../shared/types.ts'
+import type { Binding, LibraryReadResult } from '../../../shared/types.ts'
 import { isBlank } from '../../../shared/text-metrics.ts'
-import type { DialogButton, DialogSpec } from '../state/state.ts'
-import { dialogButton, randomId, reason, text, type Context } from './context.ts'
-import type { Dialogs } from './dialogs.ts'
+import { randomId, reason, text, type Context } from './context.ts'
 import type { Draft } from './draft.ts'
 import type { Toasts } from './toasts.ts'
 
 export type SaveOutcome = 'saved' | 'blank' | 'conflict' | 'cancelled' | 'failed'
 
-/** 从读取结果生成绑定：在编辑器中打开、重新载入磁盘版本时用。 */
 export function bindingFromRead(libraryDir: string, read: LibraryReadResult): Binding {
   return {
     libraryDir,
@@ -30,45 +23,20 @@ export function bindingFromRead(libraryDir: string, read: LibraryReadResult): Bi
 
 export class LibrarySave {
   private current: Promise<SaveOutcome> | null = null
-  /** 在途时再按 ⌘S 合并成的那一次，记下按下时的草稿代次（见 save）。 */
-  private followUp: { promise: Promise<SaveOutcome>; generation: number } | null = null
-  /** 结果未知的新建请求：同一代绑定下重试时沿用它的 requestId。 */
   private pendingCreate: { requestId: string; generation: number } | null = null
+  /** 仅供保存完成提示和端到端结果展示，不作为后续写入的绑定。 */
+  lastSavedRelPath: string | null = null
 
   constructor(
     private readonly ctx: Context,
     private readonly draft: Draft,
     private readonly toasts: Toasts,
-    private readonly dialogs: Dialogs,
-    /** 保存后刷新侧栏列表（新条目出现在列表里）。 */
     private readonly afterSave: () => void,
   ) {}
 
-  /** ⌘S 或工具栏「保存」。返回这次（或合并后的那次）保存的结果，供「在编辑器中打开」的「保存」判断要不要继续载入。 */
   save(): Promise<SaveOutcome> {
-    if (this.current === null) return this.start('normal')
-    // 合并的那一次等在途的保存回来才发，到时读的是那时的编辑区和绑定。只对按下保存时的内容来源有效：
-    // 这期间打开了别的条目、清空、重新载入或换了库（都会换代），就不再发，否则会把刚打开、没改过的文件
-    // 重写一遍（补 updated、id，红线 2），或者把草稿建进刚换的库里（外部审查第二轮复核）。换代后再按 ⌘S 另排一次。
-    const generation = this.draft.generation
-    if (this.followUp?.generation !== generation) {
-      const promise: Promise<SaveOutcome> = this.current.then((outcome) => {
-        if (this.followUp?.promise === promise) this.followUp = null
-        if (outcome !== 'saved') return outcome
-        return this.draft.generation === generation ? this.start('normal') : 'cancelled'
-      })
-      this.followUp = { promise, generation }
-    }
-    return this.followUp.promise
-  }
-
-  /** 有保存在途（含冲突对话框还没选完）。 */
-  get busy(): boolean {
-    return this.current !== null
-  }
-
-  private start(mode: SaveMode): Promise<SaveOutcome> {
-    const run: Promise<SaveOutcome> = this.perform(mode).finally(() => {
+    if (this.current !== null) return this.current
+    const run = this.perform().finally(() => {
       if (this.current !== run) return
       this.current = null
       this.setSaving(false)
@@ -78,168 +46,68 @@ export class LibrarySave {
     return run
   }
 
+  saveAsNew(): Promise<SaveOutcome> {
+    return this.save()
+  }
+
+  get busy(): boolean {
+    return this.current !== null
+  }
+
   private setSaving(librarySaving: boolean): void {
     this.ctx.store.update(state => (state.draft.librarySaving === librarySaving
       ? state
       : { ...state, draft: { ...state.draft, librarySaving } }))
   }
 
-  private async perform(mode: SaveMode): Promise<SaveOutcome> {
+  private async perform(): Promise<SaveOutcome> {
     if (!this.draft.ready) return 'failed'
-    // 写入的是按下保存那一刻的内容，之后继续输入不影响这次写入（L-08）。
     const body = this.ctx.editor.getText()
     if (isBlank(body)) {
       this.toasts.error(text(this.ctx, 'toast.nothingToSave'))
       return 'blank'
     }
     const generation = this.draft.generation
-    const binding = mode === 'saveAsNew' ? null : this.draft.binding
-    const creating = binding === null
-    const requestId = creating ? this.createRequestId(generation) : randomId()
-    const folder = creating && mode !== 'saveAsNew' ? this.targetFolder() : null
-    const result = await this.ctx.bridge.call('library.save', { text: body, binding, folder, mode, requestId })
+    if (this.pendingCreate?.generation !== generation) {
+      this.pendingCreate = { requestId: randomId(), generation }
+    }
+    const requestId = this.pendingCreate.requestId
+    const result = await this.ctx.bridge.call('library.save', {
+      text: body,
+      binding: null,
+      folder: this.targetFolder(),
+      mode: 'normal',
+      requestId,
+    })
     if (!result.ok) {
-      if (result.error.code === 'promptx/channel/timeout') return this.afterTimeout(binding, body, generation)
-      if (creating) this.pendingCreate = null
-      this.toasts.error(text(this.ctx, 'toast.saveFailed', { reason: reason(this.ctx, result.error) }))
+      if (result.error.code === 'promptx/channel/timeout') {
+        // 新建是否完成尚不确定，保留 id；下一次保存让 Host 返回同一次创建的结果。
+        this.afterSave()
+        this.toasts.error(text(this.ctx, 'toast.saveTimedOut'))
+      } else {
+        this.pendingCreate = null
+        this.toasts.error(text(this.ctx, 'toast.saveFailed', { reason: reason(this.ctx, result.error) }))
+      }
       return 'failed'
     }
-    if (creating) this.pendingCreate = null
-    if (result.value.kind === 'saved') {
-      this.applySaved(result.value.binding, generation)
-      return 'saved'
-    }
-    return this.resolveConflict(result.value.conflict, generation)
-  }
-
-  /**
-   * 新建文件的位置：库侧栏展开且选中了当前库里一个真实文件夹时存进那个文件夹，其他情况存库根目录（L-08）。
-   * 「真实」以当前列表为准：换库后新库的列表还没回来、或者新库还不存在时，记下的文件夹是旧库的，文件夹栏里也没有高亮，
-   * 照它保存的话插件会在新库里把这个文件夹建出来（外部审查第二轮复核）。记下的选择本身不动，换回旧库照常生效。
-   */
-  private targetFolder(): string | null {
-    const { open, view, folder, list } = this.ctx.store.getState().library
-    if (!open || view !== 'library' || folder.kind !== 'folder') return null
-    return list?.folders.includes(folder.path) === true ? folder.path : null
-  }
-
-  private createRequestId(generation: number): string {
-    if (this.pendingCreate?.generation !== generation) this.pendingCreate = { requestId: randomId(), generation }
-    return this.pendingCreate.requestId
-  }
-
-  private applySaved(binding: Binding, generation: number): void {
+    this.pendingCreate = null
+    if (result.value.kind !== 'saved') return 'conflict'
+    this.lastSavedRelPath = result.value.entry.relPath
     if (generation === this.draft.generation) {
-      this.draft.setBinding(binding, false)
+      this.draft.markSaved(result.value.binding.savedBody)
       this.draft.flushSoon()
-      // 保存期间继续输入了：底栏是「未保存」，并说明只存了提交时的内容（L-08）。
-      const unchanged = this.ctx.editor.getText() === binding.savedBody
+      const unchanged = this.ctx.editor.getText() === result.value.binding.savedBody
       this.toasts.success(text(this.ctx, unchanged ? 'toast.saved' : 'toast.savedPartial'))
     } else {
       this.toasts.success(text(this.ctx, 'toast.saved'))
     }
     this.afterSave()
+    return 'saved'
   }
 
-  /** 保存请求超时：结果未知，先核对再允许重试（技术方案 5.5，审查 S05）。 */
-  private async afterTimeout(binding: Binding | null, body: string, generation: number): Promise<SaveOutcome> {
-    if (binding !== null) {
-      const read = await this.ctx.bridge.call('library.read', { relPath: binding.relPath })
-      const stillBound = generation === this.draft.generation && this.draft.binding?.relPath === binding.relPath
-      if (read.ok && stillBound && read.value.body === body) {
-        // 写入其实完成了：绑定到磁盘上的这个版本，下次保存不会把自己的写入当成外部修改。
-        this.applySaved(bindingFromRead(binding.libraryDir, read.value), generation)
-        return 'saved'
-      }
-    } else {
-      // 新建：保留 requestId，重试时插件直接返回已经建好的文件。刷新列表，用户能看到它是不是已经建好了。
-      this.afterSave()
-    }
-    this.toasts.error(text(this.ctx, 'toast.saveTimedOut'))
-    return 'failed'
-  }
-
-  private async resolveConflict(conflict: SaveConflict, generation: number): Promise<SaveOutcome> {
-    // 保存完成时编辑区已经换了内容来源：这个冲突说的是之前的绑定，不再打扰用户。
-    if (generation !== this.draft.generation) return 'conflict'
-    const button = (id: string, label: MessageKey, tone?: DialogButton['tone']): DialogButton => dialogButton(this.ctx, id, label, tone)
-    const cancel = button('cancel', 'common.cancel')
-    const saveAsNew = button('saveAsNew', 'dialog.saveAsNew')
-    let spec: DialogSpec
-    switch (conflict) {
-      case 'modified':
-        spec = {
-          title: text(this.ctx, 'dialog.modified.title'),
-          message: text(this.ctx, 'dialog.modified.message'),
-          buttons: [cancel, saveAsNew, button('reload', 'dialog.reload', 'primary')],
-          defaultButton: 'cancel',
-          escapeButton: 'cancel',
-        }
-        break
-      case 'missing':
-        spec = {
-          title: text(this.ctx, 'dialog.missing.title'),
-          message: text(this.ctx, 'dialog.missing.message', { title: this.draft.binding?.title ?? '' }),
-          buttons: [cancel, { ...saveAsNew, tone: 'primary' }],
-          defaultButton: 'cancel',
-          escapeButton: 'cancel',
-        }
-        break
-      case 'noFrontMatter':
-        spec = {
-          title: text(this.ctx, 'dialog.frontMatter.title'),
-          message: text(this.ctx, 'dialog.frontMatter.message'),
-          buttons: [cancel, saveAsNew, button('addFrontMatter', 'dialog.frontMatter.confirm', 'primary')],
-          defaultButton: 'addFrontMatter',
-          escapeButton: 'cancel',
-        }
-        break
-      case 'invalidFrontMatter':
-        spec = {
-          title: text(this.ctx, 'dialog.invalidMeta.title'),
-          message: text(this.ctx, 'dialog.invalidMeta.message'),
-          buttons: [cancel, { ...saveAsNew, tone: 'primary' }],
-          defaultButton: 'cancel',
-          escapeButton: 'cancel',
-        }
-        break
-    }
-    const choice = await this.dialogs.open(spec)
-    if (generation !== this.draft.generation) return 'cancelled'
-    switch (choice.button) {
-      // 另存为新 Prompt 一律存到库根目录（L-12）。
-      case 'saveAsNew':
-        return this.perform('saveAsNew')
-      case 'addFrontMatter':
-        return this.perform('addFrontMatter')
-      case 'reload':
-        await this.reload()
-        return 'conflict'
-      default:
-        return 'cancelled'
-    }
-  }
-
-  /** 重新载入磁盘版本（L-12）：整篇替换并清空撤销记录，绑定到磁盘上的新版本。 */
-  async reload(): Promise<void> {
-    const binding = this.draft.binding
-    if (binding === null) return
-    // 用户选「重新载入」时编辑区里的这份可以替换。读取期间编辑区又有了改动就不替换：整篇替换会清空撤销记录，
-    // 这些改动没有提示就丢了（红线 1；和「在编辑器中打开」同样处理，外部审查第 1 条）。
-    const replaceable = this.ctx.editor.getText()
-    const read = await this.ctx.bridge.call('library.read', { relPath: binding.relPath })
-    if (!read.ok) {
-      this.toasts.error(text(this.ctx, 'toast.readFailed', { reason: reason(this.ctx, read.error) }))
-      return
-    }
-    if (this.draft.binding?.relPath !== binding.relPath) return
-    if (this.ctx.editor.getText() !== replaceable) {
-      this.toasts.error(text(this.ctx, 'toast.editedWhileLoading'))
-      return
-    }
-    this.ctx.editor.load(read.value.body, this.ctx.editor.getSelection())
-    this.draft.setBinding(bindingFromRead(binding.libraryDir, read.value), true)
-    this.draft.flushSoon()
-    this.toasts.success(text(this.ctx, 'toast.reloaded'))
+  private targetFolder(): string | null {
+    const { open, view, folder, list } = this.ctx.store.getState().library
+    if (!open || view !== 'library' || folder.kind !== 'folder') return null
+    return list?.folders.includes(folder.path) === true ? folder.path : null
   }
 }

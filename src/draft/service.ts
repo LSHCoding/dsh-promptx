@@ -24,9 +24,9 @@ const RECORD_KEY = 'current'
  */
 type DraftSchema = Parameters<typeof domainTable<typeof RECORD_KEY, DraftRecord>>[0]
 
-function draftSpec(profileHash: string) {
+function draftSpec(profileHash: string, scope: 'main' | 'entry') {
   return defineDomain({
-    name: `promptx_draft_${profileHash}`,
+    name: `${scope === 'entry' ? 'promptx_entry_draft' : 'promptx_draft'}_${profileHash}`,
     version: 1,
     layout: 'single',
     tables: { draft: domainTable<typeof RECORD_KEY, DraftRecord>(draftRecordSchema as unknown as DraftSchema) },
@@ -40,6 +40,8 @@ export interface DraftServiceOptions {
   facility: Pick<DomainFacility, 'open'>
   /** profile 名和它的哈希（profile 名 UTF-8 的 SHA-256 前 16 位小写十六进制；没有 profile 时为 none）。 */
   profile: { name: string; hash: string }
+  /** 独立条目编辑器使用另一个存储单元，格式沿用 DraftRecord v1。 */
+  scope?: 'main' | 'entry'
   now?: () => Date
 }
 
@@ -58,7 +60,7 @@ export function createDraftService(options: DraftServiceOptions): DraftApi {
   // defineDomain 在名字不合规时抛错。哈希由 Host 算出，正常不会出错；万一出错也只让草稿读不出来，不影响插件启动
   let spec: DraftSpec | null = null
   try {
-    spec = draftSpec(options.profile.hash)
+    spec = draftSpec(options.profile.hash, options.scope ?? 'main')
   } catch {
     spec = null
   }

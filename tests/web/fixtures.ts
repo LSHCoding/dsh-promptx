@@ -33,6 +33,8 @@ export function statusPieces(): StatusPieces {
     config: {
       libraryDir: '',
       confirmDelete: true,
+      convertMiddleDot: true,
+      convertYen: true,
       optimizeInstruction: '',
       globalShortcut: 'Control+P',
       hideOnBlur: false,
