@@ -64,6 +64,32 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
         </div>
       </header>
       {snapshot === null ? null : <div className="px-entry-path" title={snapshot.binding.relPath}>{snapshot.binding.relPath}</div>}
+      {snapshot === null ? null : (
+        <div className="px-entry-metadata">
+          <label className="px-field">
+            <span className="px-field-label">{t('dialog.rename.titleField')}</span>
+            <input
+              className="px-input"
+              type="text"
+              value={state.metadata.title}
+              readOnly={!ready || frozen}
+              onChange={(event) => { controller.updateMetadata('title', event.target.value) }}
+            />
+          </label>
+          <label className="px-field">
+            <span className="px-field-label">{t('dialog.rename.tagsField')}</span>
+            <input
+              className="px-input"
+              type="text"
+              value={state.metadata.tags}
+              readOnly={!ready || frozen}
+              aria-describedby="entry-editor-tags-hint"
+              onChange={(event) => { controller.updateMetadata('tags', event.target.value) }}
+            />
+            <span className="px-field-hint" id="entry-editor-tags-hint">{t('dialog.rename.tagsHint')}</span>
+          </label>
+        </div>
+      )}
       <div className="px-editor-area">
         <div className="px-editor" ref={host} />
         {state.load === 'loading' ? <div className="px-editor-overlay" role="status">{t('entryEditor.loading')}</div> : null}

@@ -316,7 +316,7 @@ describe('configuration and appearance (S-03)', () => {
 })
 
 describe('showing and hiding (F-01, F-02, D10)', () => {
-  it('toggles with the global shortcut: hidden → shown, focused → hidden, unfocused → focused', async () => {
+  it('toggles with the global shortcut even after the window loses focus', async () => {
     const { platform, renderer } = await boot()
     const window = platform.window
     platform.shortcuts.press('Control+P')
@@ -336,10 +336,12 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     platform.shortcuts.press('Control+P')
     window.blur()
     await sleep(160)
+    expect(window.visible).toBe(true)
+    expect(window.focused).toBe(false)
+    expect(renderer.events('window.hidden')).toHaveLength(1)
     platform.shortcuts.press('Control+P')
-    expect(window.visible && window.focused).toBe(true)
-    // 可见但没有焦点：拿回焦点，不隐藏；界面同样收到 window.shown，把焦点交给编辑区。
-    await until(() => renderer.events('window.shown').length === 3, 2000, 'third window.shown')
+    expect(window.visible).toBe(false)
+    await until(() => renderer.events('window.hidden').length === 2, 2000, 'second window.hidden')
   })
 
   it('keeps visibleOnFullScreen on both workspace calls (TC-03)', async () => {
@@ -374,6 +376,9 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     await until(() => !harness.platform.window.visible, 2000, 'hide')
     harness.host.peer.notify('window.command', { command: 'toggle' })
     await until(() => harness.platform.window.visible, 2000, 'toggle')
+    harness.platform.window.blur()
+    harness.host.peer.notify('window.command', { command: 'toggle' })
+    await until(() => harness.platform.window.focused, 2000, 'toggle refocuses an unfocused window')
     harness.host.peer.notify('window.command', { command: 'explode' } as never)
     await sleep(20)
     expect(harness.platform.window.visible).toBe(true)
@@ -389,14 +394,16 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     expect(platform.exitCode).toBeNull()
   })
 
-  it('hides on blur when the option is on', async () => {
+  it('keeps the main window visible after blur with a legacy hideOnBlur setting', async () => {
     const { platform } = await boot({ hello: { config: { ...BASE_CONFIG, hideOnBlur: true } } })
     platform.shortcuts.press('Control+P')
     platform.window.blur()
-    await until(() => !platform.window.visible, 2000, 'hide on blur')
+    await sleep(160)
+    expect(platform.window.visible).toBe(true)
+    expect(platform.window.focused).toBe(false)
   })
 
-  it('父窗切到子窗不隐藏，子窗切到外部应用时按hideOnBlur收起两个窗口', async () => {
+  it('子窗切到外部应用时两个窗口保持显示，快捷键收起两个窗口', async () => {
     const { platform, host, renderer } = await boot({ hello: { config: { ...BASE_CONFIG, hideOnBlur: true } } })
     host.peer.handle('library.read', entryForEditing)
     platform.shortcuts.press('Control+P')
@@ -406,9 +413,15 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     platform.window.blur()
     await sleep(130)
     expect(platform.window.visible).toBe(true)
-    expect(child.visible).toBe(true)
+    expect(child.visible && child.focused).toBe(true)
     child.blur()
-    await until(() => !platform.window.visible && !child.visible, 2000, 'both windows hidden after external focus')
+    await sleep(160)
+    expect(platform.window.visible).toBe(true)
+    expect(child.visible).toBe(true)
+    expect(child.focused).toBe(false)
+    platform.shortcuts.press('Control+P')
+    expect(platform.window.visible).toBe(false)
+    expect(child.visible).toBe(false)
   })
 
   it('reports visibility changes to the Host', async () => {
@@ -727,23 +740,6 @@ describe('renderer crashes (S14, design-spec 5.4)', () => {
     renderer.ready()
     await until(() => (host.lastStatus() as CompanionStatus).rendererError === null, 2000, 'recovered status')
     expect(platform.exitCode).toBeNull()
-  })
-
-  it('with hide-on-blur, a dialog that was open when the renderer crashed no longer blocks hiding after the reload (CR-02)', async () => {
-    const { platform, renderer } = await boot({ hello: { config: { ...BASE_CONFIG, hideOnBlur: true } } })
-    renderer.ready()
-    platform.shortcuts.press('Control+P')
-    renderer.send(IPC_CHANNELS.windowSetModalOpen, true)
-    // 对话框开着：失焦不隐藏（判断在 blur 之后约 100 ms）。
-    platform.window.blur()
-    await sleep(200)
-    expect(platform.window.visible).toBe(true)
-    // 界面带着对话框一起崩了，重新载入后不会再发 setModalOpen(false)。
-    platform.window.rendererGone('crashed')
-    renderer.ready()
-    platform.window.focus()
-    platform.window.blur()
-    await until(() => !platform.window.visible, 2000, 'hide on blur after the reload')
   })
 
   it('exits 3 when the window stays unresponsive', async () => {

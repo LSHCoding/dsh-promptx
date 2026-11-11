@@ -92,7 +92,7 @@ describe('preload: exposure', () => {
     expect(bridge.platform).toBe(process.platform)
     expect(Object.keys(bridge).sort()).toEqual(['call', 'e2eDone', 'entryEditor', 'flushed', 'getConfig', 'on', 'platform', 'prefs', 'ready', 'window'])
     expect(JSON.stringify(Object.keys(bridge.window).sort())).toBe(JSON.stringify(
-      ['copyAndHide', 'copyText', 'getBounds', 'hide', 'openSettings', 'setMinWidth', 'setModalOpen', 'setWidth'],
+      ['copyAndHide', 'copyText', 'getBounds', 'hide', 'openSettings', 'setMinWidth', 'setWidth'],
     ))
   })
 
@@ -192,18 +192,16 @@ describe('preload: events', () => {
 })
 
 describe('preload: one-way messages', () => {
-  it('sends ready, flushed, e2eDone, modal, min width and prefs on their channels', () => {
+  it('sends ready, flushed, e2eDone, min width and prefs on their channels', () => {
     bridge.ready({ editorMounted: true, draftLoaded: false })
     bridge.flushed(4)
     bridge.e2eDone(5, { ok: true, data: { ms: 1 } })
-    bridge.window.setModalOpen(true)
     bridge.window.setMinWidth(660)
     bridge.prefs.set({ panes: { library: true, folderWidth: 150, listWidth: 300, previewHeight: 232, sessionWidth: 420 } })
     expect(electron.state.sent).toEqual([
       [IPC_CHANNELS.ready, { editorMounted: true, draftLoaded: false }],
       [IPC_CHANNELS.flushed, 4],
       [IPC_CHANNELS.e2eDone, 5, { ok: true, data: { ms: 1 } }],
-      [IPC_CHANNELS.windowSetModalOpen, true],
       [IPC_CHANNELS.windowSetMinWidth, 660],
       [IPC_CHANNELS.prefsSet, { panes: { library: true, folderWidth: 150, listWidth: 300, previewHeight: 232, sessionWidth: 420 } }],
     ])

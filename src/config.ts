@@ -40,7 +40,7 @@ export const Config: Schema<unknown, ConfigRefs> = Schema.object({
   globalShortcut: Schema.string().default(DEFAULT_SHORTCUT).volatile()
     .description('Global shortcut (Electron accelerator) that shows or hides the PromptX window. Empty disables it.'),
   hideOnBlur: Schema.boolean().default(false).volatile()
-    .description('Hide the PromptX window when it loses focus.'),
+    .description('Legacy setting kept for existing profiles. PromptX now stays visible when it loses focus.'),
   runtimeSource: Schema.union(['auto', 'mirror', 'official'] as const).default('auto').volatile()
     .description('Where to download the Electron runtime: auto (mirror first, then official), mirror only, or official only.'),
 }) as unknown as Schema<unknown, ConfigRefs>

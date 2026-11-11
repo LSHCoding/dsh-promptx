@@ -79,7 +79,7 @@ export interface PaneOpenPlan {
  * 1. 小窗先向有空余的一侧加宽：库侧栏在左边，先往左；会话栏在右边，先往右；那一侧不够再用另一侧。
  *    不超出屏幕的可用区域。
  * 2. 仍然不够时，把编辑区压窄，最窄到 editorMin（本来就比 editorMin 窄时不再压）。
- * 3. 还不够时，暂时收起另一侧的可选栏。
+ * 3. 打开库侧栏时还不够，可以暂时收起会话栏。打开会话栏不改变库的显示状态。
  */
 export function planPaneOpen(input: PaneOpenInput): PaneOpenPlan {
   const { window: before, workArea, panes, opening, editorMin } = input
@@ -106,7 +106,7 @@ export function planPaneOpen(input: PaneOpenInput): PaneOpenPlan {
   const editorBefore = before.width - otherWidth
   let editorWidth = window.width - otherWidth - paneWidth
   let collapse: OptionalPane | null = null
-  if (editorWidth < Math.min(editorBefore, editorMin) && otherWidth > 0) {
+  if (other === 'session' && editorWidth < Math.min(editorBefore, editorMin) && otherWidth > 0) {
     collapse = other
     editorWidth += otherWidth
   }

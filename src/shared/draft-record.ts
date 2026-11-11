@@ -5,7 +5,7 @@
 // 校验不过就抛错：存储服务把它报成 invalid-record，Host 再报 `promptx/draft/unreadable`，
 // 小窗保持不可编辑、不覆盖原记录（F-01）。错误信息会进日志，所以只写字段名，不带任何字段的值。
 
-import type { Binding, DraftRecord, TextSelection } from './types.ts'
+import type { Binding, DraftRecord, EntryMetadataDraft, TextSelection } from './types.ts'
 
 type Fields = Record<string, unknown>
 
@@ -55,6 +55,16 @@ function parseBinding(value: unknown): Binding {
   }
 }
 
+function parseEntryMetadata(value: unknown): EntryMetadataDraft {
+  if (!isObject(value)) fail('entryMetadata must be an object')
+  if (!Array.isArray(value.savedTags)) fail('entryMetadata.savedTags must be an array')
+  return {
+    title: expectString(value.title, 'entryMetadata.title'),
+    tags: expectString(value.tags, 'entryMetadata.tags'),
+    savedTags: value.savedTags.map(tag => expectString(tag, 'entryMetadata.savedTags item')),
+  }
+}
+
 /**
  * 严格校验一条草稿记录，返回只含已知字段的新对象（多余的字段丢掉）。
  * 不合法时抛出 Error，信息里不含用户内容。
@@ -62,12 +72,15 @@ function parseBinding(value: unknown): Binding {
 export function parseDraftRecord(raw: unknown): DraftRecord {
   if (!isObject(raw)) fail('record must be an object')
   if (raw.version !== 1) fail('version must be 1')
+  const binding = raw.binding === null ? null : parseBinding(raw.binding)
+  if (raw.entryMetadata !== undefined && binding === null) fail('entryMetadata needs a binding')
   return {
     version: 1,
     text: expectString(raw.text, 'text'),
     selection: raw.selection === null ? null : parseSelection(raw.selection),
-    binding: raw.binding === null ? null : parseBinding(raw.binding),
+    binding,
     updatedAt: expectString(raw.updatedAt, 'updatedAt'),
+    ...(raw.entryMetadata === undefined ? {} : { entryMetadata: parseEntryMetadata(raw.entryMetadata) }),
   }
 }
 

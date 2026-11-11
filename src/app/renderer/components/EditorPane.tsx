@@ -18,8 +18,10 @@ export function EditorPane(): ReactElement {
   useLayoutEffect(() => {
     if (host.current === null) return undefined
     controller.editor.mount(host.current)
+    controller.layout.setEditorElement(host.current)
     controller.editorMounted()
     return () => {
+      controller.layout.setEditorElement(null)
       controller.editor.unmount()
     }
   }, [controller])

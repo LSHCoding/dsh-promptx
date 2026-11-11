@@ -301,10 +301,16 @@ function parseE2eCommand(value: unknown): E2eCommand {
       onlyKeys(value, ['action', 'text'])
       if (typeof value.text !== 'string') throw new BadRequest('command.text must be a string')
       return { action, text: value.text }
-    case 'edit-entry':
-      onlyKeys(value, ['action', 'relPath', 'text'])
+    case 'edit-entry': {
+      onlyKeys(value, ['action', 'relPath', 'text', 'metadata'])
       if (typeof value.text !== 'string' || typeof value.relPath !== 'string') throw new BadRequest('entry path and text must be strings')
-      return { action, relPath: value.relPath, text: value.text }
+      const { metadata, relPath, text } = value
+      if (metadata === undefined) return { action, relPath, text }
+      if (!isPlainObject(metadata) || typeof metadata.title !== 'string' || !Array.isArray(metadata.tags) ||
+        !metadata.tags.every((tag: unknown): tag is string => typeof tag === 'string')) throw new BadRequest('invalid entry metadata')
+      onlyKeys(metadata, ['title', 'tags'])
+      return { action, relPath, text, metadata: { title: metadata.title, tags: metadata.tags } }
+    }
     case 'save-to-library':
     case 'state':
       onlyKeys(value, ['action'])

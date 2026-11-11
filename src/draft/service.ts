@@ -12,7 +12,7 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { Domain, DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { draftRecordSchema, parseDraftRecord } from '../shared/draft-record.ts'
 import { PromptxError } from '../shared/errors.ts'
-import type { Binding, DraftRecord, TextSelection } from '../shared/types.ts'
+import type { DraftRecord } from '../shared/types.ts'
 import type { DraftApi } from '../services.ts'
 
 /** 存储单元里唯一的一条记录。 */
@@ -119,7 +119,7 @@ export function createDraftService(options: DraftServiceOptions): DraftApi {
       return record ?? null
     },
 
-    async save(input: { text: string; selection: TextSelection | null; binding: Binding | null }): Promise<{ updatedAt: string }> {
+    async save(input): Promise<{ updatedAt: string }> {
       if (closed) throw new PromptxError('promptx/draft/unreadable', 'closed')
       // 读回原记录之前不保存，否则读不出来的原记录会被这次保存覆盖（F-01、E-02、红线 1）
       const current = domain
@@ -128,7 +128,11 @@ export function createDraftService(options: DraftServiceOptions): DraftApi {
       let record: DraftRecord
       try {
         // 写之前按同一份 schema 校验：小程序传来的值不合格时写进去，下次打开会因为 invalid-record 整份读不出来
-        record = parseDraftRecord({ version: 1, text: input.text, selection: input.selection, binding: input.binding, updatedAt })
+        const { text, selection, binding, entryMetadata } = input
+        record = parseDraftRecord({
+          version: 1, text, selection, binding, updatedAt,
+          ...(options.scope === 'entry' && entryMetadata !== undefined ? { entryMetadata } : {}),
+        })
       } catch {
         throw new PromptxError('promptx/draft/write-failed', 'invalid-record')
       }

@@ -44,6 +44,24 @@
   white-space: nowrap;
 }
 
+.px-entry-metadata {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.px-entry-metadata .px-field {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.px-entry-metadata .px-input {
+  min-width: 0;
+}
+
 .px-entry-notice {
   display: flex;
   flex: none;

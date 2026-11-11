@@ -97,6 +97,7 @@ export function StatusBarContainer(): ReactElement {
   const editor = useAppState(state => state.editor)
   const binding = useAppState(state => state.draft.binding)
   const saveError = useAppState(state => state.draft.saveError)
+  const suggesting = useAppState(state => state.draft.librarySuggesting)
   const toast = useAppState(state => state.toast)
   const session = useAppState(state => state.optimize.session)
   const platform = useAppState(state => state.platform)
@@ -120,6 +121,7 @@ export function StatusBarContainer(): ReactElement {
   let message: StatusMessage | null = null
   if (toast?.kind === 'error') message = { kind: 'error', text: toast.text, toastId: toast.id }
   else if (saveError !== null) message = { kind: 'error', text: t('status.draftSaveFailed', { reason: errorReason(locale, saveError) }) }
+  else if (suggesting) message = { kind: 'info', text: t('status.generatingMetadata') }
   else if (toast !== null) message = { kind: 'success', text: toast.text, toastId: toast.id }
   else if (running && session !== null) message = { kind: 'info', text: t('status.optimizing', { model: session.model.name }) }
 

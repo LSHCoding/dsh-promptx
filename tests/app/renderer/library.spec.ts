@@ -23,6 +23,7 @@ import {
   ok,
   openDialog,
   readResult,
+  saveAndConfirm,
   settle,
   startController,
   toastText,
@@ -260,7 +261,7 @@ describe('插入到光标（L-06）', () => {
     expect(controller.editor.getText()).toBe('原文')
   })
 
-  it('为会话栏腾地方收起了侧栏：插入同样作废', async () => {
+  it('打开会话栏时库侧栏保持显示，在途插入继续完成', async () => {
     const { bridge, controller } = await ready()
     bridge.bounds = { x: 0, y: 0, width: 980, height: 600, workArea: { x: 0, y: 0, width: 980, height: 800 } }
     const read: Deferred<BridgeResult<LibraryReadResult>> = deferred()
@@ -268,10 +269,10 @@ describe('插入到光标（L-06）', () => {
     const inserting = controller.library.insertSelected()
     await settle()
     await controller.layout.open('session')
-    expect(controller.store.getState().library.open).toBe(false)
+    expect(controller.store.getState().library.open).toBe(true)
     read.resolve(ok(readResult(REVIEW, '迟到的正文')))
     await inserting
-    expect(controller.editor.getText()).toBe('')
+    expect(controller.editor.getText()).toBe('迟到的正文')
   })
 })
 
@@ -345,9 +346,9 @@ describe('重命名、标签与收藏（L-09、L-10）', () => {
     expect(dialog.title).toBe('重命名 / 标签')
     expect(dialog.form).toEqual({ title: '代码审查清单', tags: '代码' })
     expect(dialog.defaultButton).toBe('save')
-    controller.resolveDialog(dialog.id, { button: 'save', form: { title: '  新标题  ', tags: '写作，示例; 写作 #评审' } })
+    controller.resolveDialog(dialog.id, { button: 'save', form: { title: '  新标题  ', tags: '写作，Code Review; 写作; #评审' } })
     await renaming
-    expect(bridge.callsTo('library.updateMeta')).toEqual([{ relPath: REVIEW.relPath, patch: { title: '新标题', tags: ['写作', '示例', '评审'] }, addFrontMatter: false }])
+    expect(bridge.callsTo('library.updateMeta')).toEqual([{ relPath: REVIEW.relPath, patch: { title: '新标题', tags: ['写作', 'Code Review', '评审'] }, addFrontMatter: false, tagPhrases: true }])
     expect(toastText(controller)).toBe('已更新标题和标签。')
   })
 
@@ -373,7 +374,7 @@ describe('重命名、标签与收藏（L-09、L-10）', () => {
     expect(bridge.callsTo('library.updateMeta')[0]?.patch).toEqual({ favorite: true })
     expect(controller.draft.binding).toBeNull()
     type(controller, '再改正文')
-    expect(await controller.save()).toBe('saved')
+    expect(await saveAndConfirm(controller)).toBe('saved')
     expect(bridge.callsTo('library.save')[0]?.binding).toBeNull()
     expect(controller.editor.getText()).toBe('检查边界条件。再改正文')
   })
@@ -387,7 +388,7 @@ describe('重命名、标签与收藏（L-09、L-10）', () => {
     await controller.library.open()
     await controller.library.toggleFavorite(REVIEW.relPath)
     expect(controller.draft.binding).toBeNull()
-    expect(await controller.save()).toBe('saved')
+    expect(await saveAndConfirm(controller)).toBe('saved')
     expect(controller.store.getState().dialog).toBeNull()
     expect(bridge.callsTo('library.save')[0]?.binding).toBeNull()
   })

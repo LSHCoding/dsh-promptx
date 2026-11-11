@@ -70,6 +70,7 @@ export const en: Record<keyof typeof zh, string> = {
   'status.copyAndHide': 'Copy & Hide',
   'status.optimizing': 'Optimizing with {model}. You can keep editing.',
   'status.optimizingIndicator': 'Optimizing',
+  'status.generatingMetadata': 'Generating title and tags…',
   'status.draftSaveFailed': 'Couldn\'t save the draft: {reason}',
 
   // ───────── 底栏提示 ─────────
@@ -190,6 +191,9 @@ export const en: Record<keyof typeof zh, string> = {
   'dialog.rename.tagsField': 'Tags',
   'dialog.rename.tagsHint': 'Separate with commas, up to 5',
   'dialog.rename.save': 'Save',
+  'dialog.saveMetadata.title': 'Confirm title and tags',
+  'dialog.saveMetadata.confirm': 'Confirm',
+  'dialog.saveMetadata.manual': 'Couldn\'t generate a title and tags. Enter them manually to save.',
   'dialog.delete.title': 'Delete prompt?',
   'dialog.delete.message': 'It moves to the trash and can be restored from there. The editor content won\'t change.',
   'dialog.delete.confirm': 'Delete',
@@ -252,6 +256,7 @@ export const en: Record<keyof typeof zh, string> = {
   'error.promptx/library/write-failed': 'Couldn\'t write the file',
   'error.promptx/library/move-failed': 'Couldn\'t move the file',
   'error.promptx/library/invalid-title': 'The title can\'t be empty',
+  'error.promptx/library/duplicate-title': 'Another prompt already uses this title. Enter a different title.',
   'error.promptx/trash/record-failed': 'Couldn\'t update the trash record',
   'error.promptx/trash/not-found': 'The file isn\'t in the trash',
   'error.promptx/optimize/empty': 'Nothing to optimize.',

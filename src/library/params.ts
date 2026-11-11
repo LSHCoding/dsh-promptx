@@ -3,8 +3,8 @@
 // 形状不对报 promptx/internal（说明是 invalid-params 之类的固定词），不带参数的值；路径的校验在 rel-path.ts。
 
 import { PromptxError } from '../shared/errors.ts'
-import { normalizeTags } from '../shared/library-rules.ts'
-import type { Binding, FolderSel, LibraryListParams, LibraryScope, RestoreTarget, SaveMode } from '../shared/types.ts'
+import { normalizeTagPhrases, normalizeTags } from '../shared/library-rules.ts'
+import type { Binding, FolderSel, LibraryListParams, LibraryScope, PromptMetadata, RestoreTarget, SaveMode } from '../shared/types.ts'
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -71,6 +71,8 @@ export interface SaveRequest {
   folder: string | null
   mode: SaveMode
   requestId: string
+  metadata: Partial<PromptMetadata> | undefined
+  libraryDir: string | undefined
 }
 
 function parseSaveMode(value: unknown): SaveMode {
@@ -87,6 +89,8 @@ export function parseSaveRequest(value: unknown): SaveRequest {
     folder: expectStringOrNull(value.folder),
     mode: parseSaveMode(value.mode),
     requestId: expectString(value.requestId),
+    metadata: value.metadata === undefined ? undefined : parsePromptMetadata(value.metadata, true),
+    libraryDir: value.libraryDir === undefined ? undefined : expectString(value.libraryDir),
   }
 }
 
@@ -108,20 +112,24 @@ export interface MetaRequest {
   favorite?: boolean
 }
 
-export function parseMetaPatch(value: unknown): MetaRequest {
+function parsePromptMetadata(value: unknown, tagPhrases: boolean): Partial<PromptMetadata> {
   if (!isObject(value)) throw invalid()
-  const request: MetaRequest = {}
+  const request: Partial<PromptMetadata> = {}
   if (value.title !== undefined) {
-    // 标题去掉首尾空白后不能为空（L-09）
     const title = expectString(value.title).trim()
-    if (title === '') throw new PromptxError('promptx/library/invalid-title')
+    if (title === '' || /[\r\n\0\u2028\u2029]/u.test(title)) throw new PromptxError('promptx/library/invalid-title')
     request.title = title
   }
   if (value.tags !== undefined) {
     if (!isStringArray(value.tags)) throw invalid()
-    // 按中英文逗号、分号、换行和空格切分，去掉两端的 #，忽略大小写去重，最多 5 个（L-09）
-    request.tags = normalizeTags(value.tags)
+    request.tags = tagPhrases ? normalizeTagPhrases(value.tags) : normalizeTags(value.tags)
   }
+  return request
+}
+
+function parseMetaPatch(value: unknown, tagPhrases: boolean): MetaRequest {
+  if (!isObject(value)) throw invalid()
+  const request: MetaRequest = parsePromptMetadata(value, tagPhrases)
   if (value.favorite !== undefined) request.favorite = expectBoolean(value.favorite)
   return request
 }
@@ -134,7 +142,8 @@ export interface MetaUpdate {
 
 export function parseMetaUpdate(value: unknown): MetaUpdate {
   if (!isObject(value)) throw invalid()
-  return { relPath: value.relPath, patch: parseMetaPatch(value.patch), addFrontMatter: expectBoolean(value.addFrontMatter) }
+  const tagPhrases = value.tagPhrases === undefined ? false : expectBoolean(value.tagPhrases)
+  return { relPath: value.relPath, patch: parseMetaPatch(value.patch, tagPhrases), addFrontMatter: expectBoolean(value.addFrontMatter) }
 }
 
 export interface RestoreRequest {

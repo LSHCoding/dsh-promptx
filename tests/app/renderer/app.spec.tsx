@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { undo } from '@codemirror/commands'
-import type { BridgeResult } from '../../../src/shared/bridge.ts'
+import { DEFAULT_PREFS, type BridgeResult } from '../../../src/shared/bridge.ts'
 import type { DraftRecord } from '../../../src/shared/types.ts'
 import { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { App } from '../../../src/app/renderer/components/App.tsx'
@@ -252,11 +252,20 @@ describe('窗口级快捷键在真实的界面里', () => {
     expect(textarea.value).toBe('再精简一些')
   })
 
-  it('⌘L：编辑区里按展开侧栏、焦点进搜索框；侧栏里再按收起、焦点回到编辑区', async () => {
+  it('首次启动显示库的两列，⌘L 在编辑区也能收起库，展开时焦点进搜索框', async () => {
     const bridge = new FakeBridge()
+    bridge.storedPrefs = structuredClone(DEFAULT_PREFS)
     bridge.handle('library.list', () => ok(listResult([entry('a.md')])))
     await mountApp(bridge)
+    expect(document.querySelector('.px-folders')).not.toBeNull()
+    expect(document.querySelector('.px-list-column')).not.toBeNull()
     editorContent().focus()
+    await act(async () => {
+      fireEvent.keyDown(editorContent(), { key: 'l', code: 'KeyL', metaKey: true })
+      await settle()
+    })
+    expect(document.querySelector('.px-folders')).toBeNull()
+    expect(document.querySelector('.px-list-column')).toBeNull()
     await act(async () => {
       fireEvent.keyDown(editorContent(), { key: 'l', code: 'KeyL', metaKey: true })
       await settle()

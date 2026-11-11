@@ -1,9 +1,9 @@
-// 对话框（需求 5.8，技术方案 5.5）：在小窗内居中，打开时焦点在对话框里（有输入框时在第一个输入框，否则在默认按钮上），
+// 对话框（需求 5.8，技术方案 5.5）：在小窗内居中，打开时将焦点放到默认按钮或第一个输入框，
 // Tab 在对话框里循环，Esc 等于对话框指定的按钮（由窗口级快捷键处理，见 AppController.handleKeydown）。
 
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react'
 import { isComposingKey } from '../appearance.ts'
-import type { DialogState, RenameForm } from '../state/state.ts'
+import type { DialogState, MetadataForm } from '../state/state.ts'
 import { useAppState, useController, useT } from './hooks.ts'
 
 export function DialogHost(): ReactElement | null {
@@ -19,8 +19,8 @@ function Dialog({ dialog }: { dialog: DialogState }): ReactElement {
   const t = useT()
   const titleId = useId()
   const root = useRef<HTMLDivElement>(null)
-  const [form, setForm] = useState<RenameForm | undefined>(dialog.form)
-  // 重命名对话框：标题去掉首尾空白后为空时「保存」不可用（L-09）。
+  const [form, setForm] = useState<MetadataForm | undefined>(dialog.form)
+  // 标题为空时禁用表单的提交按钮。
   const blocked = (buttonId: string) => form !== undefined && buttonId === dialog.defaultButton && form.title.trim() === ''
   const resolve = (button: string) => {
     if (blocked(button)) return
@@ -31,7 +31,8 @@ function Dialog({ dialog }: { dialog: DialogState }): ReactElement {
     const element = root.current
     if (element === null) return undefined
     const previous = document.activeElement
-    const target = form === undefined
+    const defaultFocused = form === undefined || (dialog.focusDefaultButton === true && !blocked(dialog.defaultButton))
+    const target = defaultFocused
       ? element.querySelector<HTMLElement>(`[data-button="${dialog.defaultButton}"]`)
       : element.querySelector<HTMLElement>('input')
     target?.focus()
@@ -64,7 +65,7 @@ function Dialog({ dialog }: { dialog: DialogState }): ReactElement {
       }
       return
     }
-    // 输入框里按 Enter 等于默认按钮（重命名对话框的「保存」）。
+    // 输入框里按 Enter 等于默认按钮。
     if (event.key === 'Enter' && event.target instanceof HTMLInputElement) {
       event.preventDefault()
       resolve(dialog.defaultButton)
@@ -111,6 +112,7 @@ function Dialog({ dialog }: { dialog: DialogState }): ReactElement {
               </label>
             </div>
           )}
+        {dialog.error === undefined ? null : <p className="px-dialog-error" role="alert">{dialog.error}</p>}
         <div className="px-dialog-buttons">
           {dialog.buttons.map(button => (
             <button

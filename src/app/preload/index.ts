@@ -93,11 +93,11 @@ const bridge: PromptxBridge = {
     getState() {
       return invokeResult(IPC_CHANNELS.entryEditorGetState, failure('promptx/channel/closed'))
     },
-    update(text, selection, generation) {
-      ipcRenderer.send(IPC_CHANNELS.entryEditorUpdate, text, selection, generation)
+    update(text, selection, generation, metadata) {
+      ipcRenderer.send(IPC_CHANNELS.entryEditorUpdate, text, selection, generation, ...(metadata === undefined ? [] : [metadata]))
     },
-    prepared(id, generation, text, selection) {
-      ipcRenderer.send(IPC_CHANNELS.entryEditorPrepared, id, generation, text, selection)
+    prepared(id, generation, text, selection, metadata) {
+      ipcRenderer.send(IPC_CHANNELS.entryEditorPrepared, id, generation, text, selection, ...(metadata === undefined ? [] : [metadata]))
     },
     save(generation) {
       return invokeResult(IPC_CHANNELS.entryEditorSave, failure('promptx/channel/closed'), generation)
@@ -154,9 +154,6 @@ const bridge: PromptxBridge = {
     },
     openSettings() {
       return invokeResult<{ navigated: boolean }>(IPC_CHANNELS.windowOpenSettings, failure('promptx/settings/unavailable'))
-    },
-    setModalOpen(open) {
-      ipcRenderer.send(IPC_CHANNELS.windowSetModalOpen, open)
     },
     setMinWidth(width) {
       ipcRenderer.send(IPC_CHANNELS.windowSetMinWidth, width)

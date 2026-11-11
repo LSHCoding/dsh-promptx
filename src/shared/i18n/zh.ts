@@ -70,6 +70,7 @@ export const zh = {
   'status.copyAndHide': '复制并隐藏',
   'status.optimizing': '正在用 {model} 优化，可继续编辑。',
   'status.optimizingIndicator': '正在优化',
+  'status.generatingMetadata': '正在生成标题和标签…',
   'status.draftSaveFailed': '草稿保存失败：{reason}',
 
   // ───────── 底栏提示 ─────────
@@ -191,6 +192,9 @@ export const zh = {
   'dialog.rename.tagsField': '标签',
   'dialog.rename.tagsHint': '用逗号分隔，最多 5 个',
   'dialog.rename.save': '保存',
+  'dialog.saveMetadata.title': '确认标题和标签',
+  'dialog.saveMetadata.confirm': '确认',
+  'dialog.saveMetadata.manual': '未能生成标题和标签，可以手动填写后保存。',
   'dialog.delete.title': '删除 Prompt？',
   'dialog.delete.message': '删除后移入回收站，可以在回收站恢复。编辑器里的内容不会改变。',
   'dialog.delete.confirm': '删除',
@@ -253,6 +257,7 @@ export const zh = {
   'error.promptx/library/write-failed': '写入文件失败',
   'error.promptx/library/move-failed': '移动文件失败',
   'error.promptx/library/invalid-title': '标题不能为空',
+  'error.promptx/library/duplicate-title': '库中已有同名 Prompt，请换一个标题。',
   'error.promptx/trash/record-failed': '回收站记录写入失败',
   'error.promptx/trash/not-found': '回收站里没有这个文件',
   'error.promptx/optimize/empty': '没有可优化的内容。',

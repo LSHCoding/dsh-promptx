@@ -26,8 +26,10 @@ export interface DraftSlice {
   binding: Binding | null
   /** 最近一次草稿保存失败的原因；下一次保存成功前一直显示（E-02）。 */
   saveError: ErrorInfo | null
-  /** 有一个 library.save 在途（L-08）。 */
+  /** 保存流程进行中，含标题和标签确认。 */
   librarySaving: boolean
+  /** 模型正在生成标题和标签。 */
+  librarySuggesting: boolean
 }
 
 export interface EditorSlice {
@@ -92,8 +94,8 @@ export interface DialogButton {
   tone?: 'primary' | 'danger'
 }
 
-/** 重命名 / 标签对话框的输入框（L-09）。 */
-export interface RenameForm {
+/** 标题和标签对话框的输入框。 */
+export interface MetadataForm {
   title: string
   tags: string
 }
@@ -101,13 +103,17 @@ export interface RenameForm {
 export interface DialogSpec {
   title: string
   message?: string
+  /** 表单提交失败的原因。 */
+  error?: string
   /** 从左到右的顺序，跟随 dsh 的习惯：取消在左，主要动作在右。 */
   buttons: DialogButton[]
   /** 打开时焦点所在的按钮（技术方案 5.5 的表）。 */
   defaultButton: string
+  /** 有预填表单时也将焦点放到默认按钮。 */
+  focusDefaultButton?: boolean
   /** Esc 等于哪个按钮。O-04 的对话框没有「取消」，Esc 等于「保持当前内容」。 */
   escapeButton: string
-  form?: RenameForm
+  form?: MetadataForm
 }
 
 export interface DialogState extends DialogSpec {
@@ -116,7 +122,7 @@ export interface DialogState extends DialogSpec {
 
 export interface DialogResult {
   button: string
-  form?: RenameForm
+  form?: MetadataForm
 }
 
 export interface Toast {
@@ -161,7 +167,7 @@ export function initialState(platform: string, locale: Locale, theme: 'light' | 
     locale,
     theme,
     config: null,
-    draft: { load: 'loading', loadError: null, binding: null, saveError: null, librarySaving: false },
+    draft: { load: 'loading', loadError: null, binding: null, saveError: null, librarySaving: false, librarySuggesting: false },
     editor: { chars: 0, status: 'blank' },
     library: {
       open: false,

@@ -6,7 +6,7 @@
 import { join } from 'node:path'
 import type { Context, Message } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { LlmChunk } from '../../src/services.ts'
+import type { LlmChunk, LlmLike } from '../../src/services.ts'
 import { failOnProcessProblems } from '../companion/process-traps.ts'
 import { cleanupHarnesses, setup, tempDir, waitFor } from './harness.ts'
 
@@ -22,8 +22,9 @@ const SECRET = 'SENTINEL-7f3a9c-内容'
 function fakeLlm() {
   let calls = 0
   return {
-    async* stream(): AsyncGenerator<LlmChunk> {
+    async* stream(options: Parameters<LlmLike['stream']>[0]): AsyncGenerator<LlmChunk> {
       await Promise.resolve()
+      if (options.purpose === 'promptx-library-metadata') throw new Error(`${SECRET} model failure`)
       calls += 1
       if (calls === 1) {
         yield { type: 'text-delta', index: 0, text: `Improved:\n\n\`\`\`prompt\n${SECRET} better\n\`\`\`\n` }
@@ -68,9 +69,13 @@ describe.skipIf(process.platform === 'win32')('no prompt content in logs (N-02)'
     const events = await h.events()
     const steps = events.filter(line => line.includes(' step '))
     // 每一步都真的走到了：该成功的成功，该失败的失败。
-    for (const name of ['draft.save', 'library.save', 'library.read', 'favorite', 'rename', 'library.delete', 'trash.list', 'trash.read', 'trash.restore', 'library.list', 'optimize.start', 'optimize.followup', 'optimize.state']) {
+    for (const name of [
+      'draft.save', 'library.save', 'library.read', 'favorite', 'rename', 'library.delete', 'trash.list', 'trash.read',
+      'trash.restore', 'library.list', 'library.suggestMetadata', 'optimize.start', 'optimize.followup', 'optimize.state',
+    ]) {
       expect(steps.some(line => line.includes(` step ${name} ok`)), name).toBe(true)
     }
+    expect(events.some(line => line.endsWith('metadata manual fallback'))).toBe(true)
     for (const name of ['missing read', 'bad path', 'bad folder']) {
       expect(steps.some(line => line.includes(` step ${name} error `)), name).toBe(true)
     }

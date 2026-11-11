@@ -1,11 +1,11 @@
 // 库条目的独立编辑会话。目标和原文件版本由主进程持有，子窗口不能改写主草稿或选择任意保存路径。
 // 恢复记录与主草稿分开；关闭确认、库冲突和退出恢复均不能隐式覆盖 Prompt 文件。
 
-import type { BridgeResult, EntryEditorSnapshot, ResolvedConfig } from '../../shared/bridge.ts'
+import { entryMetadataPatch, isEntryDirty, type BridgeResult, type EntryEditorSnapshot, type EntryMetadataFields, type ResolvedConfig } from '../../shared/bridge.ts'
 import { toErrorInfo } from '../../shared/errors.ts'
 import { translate, type MessageKey } from '../../shared/i18n/index.ts'
 import type { CompanionRequests } from '../../shared/protocol.ts'
-import type { Binding, LibraryReadResult, TextSelection } from '../../shared/types.ts'
+import type { Binding, EntryMetadataDraft, LibraryReadResult, PromptMetadata, TextSelection } from '../../shared/types.ts'
 import { WINDOW_BACKGROUND } from './appearance.ts'
 import type { CompanionLogger } from './logger.ts'
 import type { CompanionPlatform, MainWindow, MessageBoxOptions } from './platform.ts'
@@ -19,7 +19,6 @@ export interface EntryEditorOptions {
   config(): ResolvedConfig | null
   request<M extends EntryMethod>(method: M, params: CompanionRequests[M]['params']): Promise<CompanionRequests[M]['result']>
   changed(libraryDir: string): void
-  onBlur?(): void
   logger: CompanionLogger
 }
 
@@ -31,6 +30,10 @@ function bindingOf(libraryDir: string, read: LibraryReadResult): Binding {
     libraryDir, relPath: read.entry.relPath, id: read.entry.id, title: read.entry.title,
     sha256: read.version.sha256, size: read.version.size, savedBody: read.body,
   }
+}
+
+function metadataOf(title: string, savedTags: string[]): EntryMetadataDraft {
+  return { title, tags: savedTags.join(', '), savedTags }
 }
 
 export class EntryEditorManager {
@@ -47,7 +50,6 @@ export class EntryEditorManager {
   private generation = 0
   private disposed = false
   private active = false
-  private confirming = false
   private requestedGeneration = 0
   private nextFreezeId = 0
   private freezePromise: Promise<boolean> | null = null
@@ -62,7 +64,6 @@ export class EntryEditorManager {
   constructor(private readonly options: EntryEditorOptions) {}
 
   get focused(): boolean { return this.window?.isFocused() ?? false }
-  get protectingFocus(): boolean { return this.focused || this.confirming }
   get windowCreated(): boolean { return this.window !== null && !this.window.isDestroyed() }
   get stateRequested(): boolean { return this.state !== null && this.requestedGeneration === this.state.generation }
   acceptsGeneration(generation: unknown): boolean {
@@ -90,15 +91,32 @@ export class EntryEditorManager {
   private async loadRecovery(): Promise<void> {
     const { record } = await this.options.request('entryDraft.load', {})
     if (this.disposed) return
+    if (record === null || record.binding === null || (record.text === record.binding.savedBody && record.entryMetadata === undefined)) {
+      this.initialized = true
+      return
+    }
+    const metadata = record.entryMetadata ?? await this.readRecoveryMetadata(record.binding)
+    if (this.isDisposed()) return
     this.initialized = true
-    if (record?.binding === null || record === null || record.text === record.binding.savedBody) return
     this.state = {
       generation: ++this.generation, binding: record.binding, text: record.text, selection: record.selection,
+      metadata,
       config: this.options.config(), saving: false, error: null, conflict: null, recovered: true, freezeId: null,
     }
     this.active = true
     this.ensureWindow()
     if (this.options.parent.isVisible()) this.show()
+  }
+
+  private async readRecoveryMetadata(binding: Binding): Promise<EntryMetadataDraft> {
+    // 旧恢复记录不含标签。只有仍是原文件版本时才从库补回，避免把新版本的元数据混进旧草稿。
+    if (binding.libraryDir === this.options.config()?.libraryDir) {
+      const read = await this.options.request('library.read', { relPath: binding.relPath }).catch(() => null)
+      if (read !== null && read.version.sha256 === binding.sha256 && read.version.size === binding.size) {
+        return metadataOf(binding.title, read.entry.tags)
+      }
+    }
+    return metadataOf(binding.title, [])
   }
 
   open(relPath: string): Promise<BridgeResult<null>> {
@@ -122,6 +140,7 @@ export class EntryEditorManager {
     if (this.isDisposed() || revision !== this.revision || libraryDir !== this.options.config()?.libraryDir) return success
     this.state = {
       generation: ++this.generation, binding: bindingOf(libraryDir, read), text: read.body,
+      metadata: metadataOf(read.entry.title, read.entry.tags),
       selection: { anchor: 0, head: 0 }, config: this.options.config(), saving: false,
       error: null, conflict: null, recovered: false, freezeId: null,
     }
@@ -134,12 +153,12 @@ export class EntryEditorManager {
     return success
   }
 
-  update(text: string, selection: TextSelection): void {
+  update(text: string, selection: TextSelection, metadata?: EntryMetadataFields): void {
     if (this.state === null || !this.active || this.disposed) return
     if (this.state.freezeId !== null && this.preparing === null) return
     const length = text.length
     if (selection.anchor < 0 || selection.head < 0 || selection.anchor > length || selection.head > length) return
-    this.state = { ...this.state, text, selection }
+    this.state = { ...this.state, text, selection, metadata: { ...this.state.metadata, ...metadata } }
     this.revision++
     // 最迟首个修改后 600ms 落盘，连续输入不会无限推迟。
     if (this.timer === null) this.timer = setTimeout(() => {
@@ -162,8 +181,10 @@ export class EntryEditorManager {
   private async saveEntry(): Promise<BridgeResult<null>> {
     const state = this.state
     if (state === null || !this.active || this.disposed) return { ok: false, error: closed }
-    // 打开后未改正文时保存是空操作，避免仅按快捷键就改写原文件的元数据和updated。
-    if (state.text === state.binding.savedBody) return success
+    const metadata = entryMetadataPatch(state, state.metadata)
+    const metadataChanged = Object.keys(metadata).length > 0
+    // 仅按保存快捷键不能改写原文件的元数据或更新时间。
+    if (state.text === state.binding.savedBody && !metadataChanged) return success
     if (state.binding.libraryDir !== this.options.config()?.libraryDir) {
       return this.fail({ code: 'promptx/library/unavailable', detail: 'library-changed' })
     }
@@ -172,6 +193,7 @@ export class EntryEditorManager {
     const params = {
       text: state.text, binding: state.binding, folder: null, mode: 'normal' as const,
       requestId: `entry-${this.options.platform.pid}-${Date.now()}-${this.revision}`,
+      ...(metadataChanged ? { metadata } : {}),
     }
     let result = await this.options.request('library.save', params)
     if (result.kind === 'conflict' && result.conflict === 'noFrontMatter') {
@@ -186,8 +208,18 @@ export class EntryEditorManager {
       this.publish()
       return { ok: false, error: { code: 'promptx/library/conflict', detail: result.conflict } }
     }
-    // 保存期间的新输入留在当前文档；只推进文件版本和已保存正文。
-    this.state = { ...this.state, binding: result.binding, error: null, conflict: null, recovered: false }
+    // 保存期间的新输入留在当前文档；只推进文件版本与已保存的正文、标题和标签。
+    const { title, tags } = this.state.metadata
+    this.state = {
+      ...this.state, binding: result.binding,
+      metadata: {
+        // 无显式标题的旧文件由正文推导标题，正文保存后同步新标题。
+        title: metadata.title === undefined && title === state.metadata.title ? result.binding.title : title,
+        tags: metadata.tags === undefined && tags === state.metadata.tags ? result.entry.tags.join(', ') : tags,
+        savedTags: result.entry.tags,
+      },
+      error: null, conflict: null, recovered: false,
+    }
     this.revision++
     await this.flush()
     this.options.changed(result.binding.libraryDir)
@@ -216,6 +248,7 @@ export class EntryEditorManager {
       if (revision !== this.revision || state.binding.libraryDir !== this.options.config()?.libraryDir) return success
       this.state = {
         ...state, generation: ++this.generation, text: read.body, selection: { anchor: 0, head: 0 },
+        metadata: metadataOf(read.entry.title, read.entry.tags),
         binding: bindingOf(state.binding.libraryDir, read), error: null, conflict: null, recovered: false, freezeId: null,
       }
       this.revision++
@@ -273,12 +306,12 @@ export class EntryEditorManager {
     return this.freezePromise
   }
 
-  prepared(id: number, generation: number, text: string, selection: TextSelection): void {
+  prepared(id: number, generation: number, text: string, selection: TextSelection, metadata?: EntryMetadataFields): void {
     const pending = this.preparing
     if (pending === null || pending.id !== id || pending.generation !== generation || !this.acceptsGeneration(generation)) return
     if (selection.anchor < 0 || selection.head < 0 || selection.anchor > text.length || selection.head > text.length) return
-    // 这份文字来自renderer已经设为只读后的最终快照，必须先进入镜像再判断未保存或替换文档。
-    this.update(text, selection)
+    // 界面进入只读后回传最终编辑内容，主进程据此判断是否有未保存的修改。
+    this.update(text, selection, metadata)
     clearTimeout(pending.timer)
     this.preparing = null
     pending.resolve(true)
@@ -290,12 +323,13 @@ export class EntryEditorManager {
     await this.flush()
   }
 
-  sendE2eText(text: string): void {
-    this.window?.send('e2e', { id: 0, action: 'entry-edit-text', text })
+  sendE2eText(text: string, metadata?: PromptMetadata): void {
+    this.window?.send('e2e', { id: 0, action: 'entry-edit-text', text, ...(metadata === undefined ? {} : { metadata }) })
   }
 
   private dirty(): boolean {
-    return this.state !== null && this.state.text !== this.state.binding.savedBody
+    const state = this.state
+    return state !== null && isEntryDirty(state, state.text, state.metadata)
   }
 
   private async resolveUnsaved(): Promise<boolean> {
@@ -311,6 +345,7 @@ export class EntryEditorManager {
     if (this.state !== null) {
       this.state = {
         ...this.state, generation: ++this.generation, text: this.state.binding.savedBody,
+        metadata: metadataOf(this.state.binding.title, this.state.metadata.savedTags),
         selection: null, error: null, conflict: null,
       }
       this.revision++
@@ -320,7 +355,7 @@ export class EntryEditorManager {
     return true
   }
 
-  private async confirm(
+  private confirm(
     kind: 'unsaved' | 'reload' | 'frontMatter', buttons: MessageKey[], defaultId: number, cancelId: number,
   ): Promise<number> {
     const window = this.window ?? this.options.parent
@@ -335,8 +370,7 @@ export class EntryEditorManager {
       title: translate(locale, title), message: translate(locale, message, { title: this.state?.binding.title ?? '' }),
       buttons: buttons.map(key => translate(locale, key)), defaultId, cancelId,
     }
-    this.confirming = true
-    try { return await this.options.platform.showMessageBox(window, box) } finally { this.confirming = false }
+    return this.options.platform.showMessageBox(window, box)
   }
 
   flush(): Promise<void> {
@@ -345,8 +379,11 @@ export class EntryEditorManager {
     if (this.writing !== null) return this.writing.then(() => this.flush())
     if (!this.initialized || this.state === null || this.persisted === this.revision) return Promise.resolve()
     const revision = this.revision
-    const { text, selection, binding } = this.state
-    const task = this.options.request('entryDraft.save', { text, selection, binding }).then(() => {
+    const { text, selection, binding, metadata } = this.state
+    const metadataChanged = Object.keys(entryMetadataPatch(this.state, metadata)).length > 0
+    const task = this.options.request('entryDraft.save', {
+      text, selection, binding, ...(metadataChanged ? { entryMetadata: metadata } : {}),
+    }).then(() => {
       this.persisted = revision
     }).catch((error: unknown) => {
       this.fail(error)
@@ -404,7 +441,6 @@ export class EntryEditorManager {
       runTask(this.options.logger, 'entry-editor-recover', this.flush())
       this.window?.reload()
     })
-    this.window.on('blur', () => { this.options.onBlur?.() })
     this.publish()
   }
 

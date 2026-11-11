@@ -4,7 +4,7 @@ import { resolveConfig } from '../../../src/app/main/appearance.ts'
 import { registerEntryEditorIpc, registerIpcHandlers, UntrustedSenderError } from '../../../src/app/main/ipc.ts'
 import { IPC_CHANNELS } from '../../../src/app/main/channels.ts'
 import { PromptxError } from '../../../src/shared/errors.ts'
-import type { DraftRecord, EntryMeta, LibraryReadResult, SaveResult } from '../../../src/shared/types.ts'
+import type { DraftRecord, EntryMeta, LibraryReadResult, PromptMetadata, SaveResult } from '../../../src/shared/types.ts'
 import type { EntryEditorSnapshot } from '../../../src/shared/bridge.ts'
 import { BASE_CONFIG, FakePlatform, type FakeWindow } from './fakes.ts'
 
@@ -29,10 +29,10 @@ function setup(recovery: DraftRecord | null = null) {
   const requests: { method: string; params: unknown }[] = []
   let read = (relPath: string) => Promise.resolve(entry(relPath))
   let persist = (_input: unknown) => Promise.resolve({ updatedAt: 'now' })
-  let save = (input: { text: string }) => Promise.resolve(saved ?? {
-    kind: 'saved' as const, created: false, entry: entry().entry,
+  let save = (input: { text: string; metadata?: Partial<PromptMetadata> }) => Promise.resolve(saved ?? {
+    kind: 'saved' as const, created: false, entry: { ...entry().entry, ...input.metadata },
     binding: {
-      libraryDir: config.libraryDir, relPath: 'a.md', id: 'a.md', title: 'a.md',
+      libraryDir: config.libraryDir, relPath: 'a.md', id: 'a.md', title: input.metadata?.title ?? 'a.md',
       sha256: `sha-${input.text}`, size: input.text.length, savedBody: input.text,
     },
   })
@@ -59,7 +59,7 @@ function setup(recovery: DraftRecord | null = null) {
       if (snapshot.freezeId === null) return
       const text = finalText ?? snapshot.text
       finalText = null
-      manager.prepared(snapshot.freezeId, snapshot.generation, text, { anchor: text.length, head: text.length })
+      manager.prepared(snapshot.freezeId, snapshot.generation, text, { anchor: text.length, head: text.length }, snapshot.metadata)
     }
     return window
   }
@@ -94,7 +94,71 @@ describe('独立条目编辑窗口', () => {
     expect(await h.manager.save()).toEqual({ ok: true, value: null })
     const write = h.requests.find(call => call.method === 'library.save')
     expect(write?.params).toMatchObject({ text: '新文', binding: { relPath: 'a.md', savedBody: '原文' }, mode: 'normal' })
+    expect(write?.params).not.toHaveProperty('metadata')
     expect(h.changed).toHaveBeenCalledOnce()
+  })
+
+  it('只改标题或标签也保存，对每次写入只传改动的字段', async () => {
+    const h = setup()
+    const read = entry()
+    read.entry.tags = ['Code Review']
+    h.setRead(() => Promise.resolve(read))
+    await h.manager.open('a.md')
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: { metadata: { title: 'a.md', tags: 'Code Review' } } })
+    h.setResult({ kind: 'saved', created: false, entry: { ...read.entry, title: '评审' }, binding: {
+      libraryDir: h.config.libraryDir, relPath: 'a.md', id: 'a.md', title: '评审', sha256: 'saved', size: 2, savedBody: '原文',
+    } })
+    h.manager.update('原文', { anchor: 0, head: 0 }, { title: '评审', tags: 'Code Review' })
+    expect(await h.manager.save()).toEqual({ ok: true, value: null })
+    expect(h.requests.find(call => call.method === 'library.save')?.params).toMatchObject({ metadata: { title: '评审' } })
+    expect(h.requests.find(call => call.method === 'library.save')?.params).not.toHaveProperty('metadata.tags')
+    expect(h.requests.at(-1)?.params).not.toHaveProperty('entryMetadata')
+    h.setResult({ kind: 'saved', created: false, entry: { ...read.entry, title: '评审', tags: ['Code Review', '风格检查'] }, binding: {
+      libraryDir: h.config.libraryDir, relPath: 'a.md', id: 'a.md', title: '评审', sha256: 'tags-saved', size: 2, savedBody: '原文',
+    } })
+    h.manager.update('原文', { anchor: 0, head: 0 }, { title: '评审', tags: 'Code Review, 风格检查' })
+    expect(await h.manager.save()).toEqual({ ok: true, value: null })
+    const write = h.requests.filter(call => call.method === 'library.save').at(-1)
+    expect(write?.params).toMatchObject({ metadata: { tags: ['Code Review', '风格检查'] } })
+    expect(write?.params).not.toHaveProperty('metadata.title')
+    h.manager.update('原文', { anchor: 0, head: 0 }, { title: '库中已有标题', tags: 'Code Review, 风格检查' })
+    h.setSave(() => Promise.reject(new PromptxError('promptx/library/duplicate-title')))
+    expect(await h.manager.save()).toMatchObject({ ok: false, error: { code: 'promptx/library/duplicate-title' } })
+    await h.manager.flush()
+    expect(h.requests.at(-1)?.params).toHaveProperty('entryMetadata.title', '库中已有标题')
+  })
+
+  it('正文保存后同步旧文件的新推导标题，避免将旧标题误当成未保存的修改', async () => {
+    const h = setup()
+    await h.manager.open('a.md')
+    h.setResult({ kind: 'saved', created: false, entry: { ...entry().entry, title: '新标题' }, binding: {
+      libraryDir: h.config.libraryDir, relPath: 'a.md', id: 'a.md', title: '新标题', sha256: 'saved', size: 4, savedBody: '新标题\n',
+    } })
+    h.manager.update('新标题\n', { anchor: 4, head: 4 })
+    await h.manager.save()
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: { metadata: { title: '新标题' } } })
+    expect(h.requests.at(-1)?.params).not.toHaveProperty('entryMetadata')
+    await h.manager.save()
+    expect(h.requests.filter(call => call.method === 'library.save')).toHaveLength(1)
+  })
+
+  it('恢复只有元数据修改的草稿，关闭取消后仍保留输入', async () => {
+    const record: DraftRecord = {
+      version: 1, text: '原文', selection: null, updatedAt: 'now',
+      binding: { libraryDir: BASE_CONFIG.libraryDir, relPath: 'a.md', id: 'a.md', title: '原名', sha256: 'old', size: 2, savedBody: '原文' },
+      entryMetadata: { title: '未保存标题', tags: 'Code Review,', savedTags: ['旧标签'] },
+    }
+    const h = setup(record)
+    await h.manager.initialize()
+    h.manager.show()
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: { recovered: true, metadata: record.entryMetadata } })
+    await h.manager.close()
+    expect(h.child().visible).toBe(true)
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: { metadata: record.entryMetadata } })
+    h.platform.messageBoxAnswers.push(1)
+    await h.manager.close()
+    expect(h.child().visible).toBe(false)
+    expect(h.requests.at(-1)?.params).not.toHaveProperty('entryMetadata')
   })
 
   it('同一条目重复打开只聚焦，不替换未保存内容；其他条目切换可以取消', async () => {

@@ -51,6 +51,20 @@ describe('KeyedQueue', () => {
 })
 
 describe('serialized mutations (S05)', () => {
+  it('serializes title checks across profiles saving to different folders of the same library', async () => {
+    const root = await temp.make()
+    const first = makeService(root)
+    const second = makeService(root)
+    const params = { text: 'body', binding: null, mode: 'normal', requestId: '' } as const
+    const attempts = await Promise.allSettled([
+      first.save({ ...params, folder: 'first', metadata: { title: 'Same Title', tags: [] } }),
+      second.save({ ...params, folder: 'second', metadata: { title: 'same title', tags: [] } }),
+    ])
+    const failed = attempts.find(result => result.status === 'rejected')
+    expect(failed?.reason).toMatchObject({ code: 'promptx/library/duplicate-title' })
+    expect((await listAll(first)).entries).toHaveLength(1)
+  })
+
   it('a favorite toggled while a save is in flight does not revert the save', async () => {
     const root = await temp.make()
     await writeTree(root, { 'a.md': BASE })
@@ -184,7 +198,7 @@ describe('index updates racing with a refresh', () => {
     const rootReal = await realpath(root)
     const cache = new IndexCache()
     const scanning = cache.refresh(rootReal, { skipRealpaths: [], platform: process.platform })
-    cache.record(rootReal, 'new/x.md', indexedFromText('new/x.md', '# X\n', { mtimeMs: 0, size: 4 }))
+    cache.record(rootReal, 'new/x.md', indexedFromText('new/x.md', '# X\n', { mtimeMs: 0, ctimeMs: 0, ino: 0, size: 4 }))
     cache.record(rootReal, 'dir1/p1.md', null)
     const index = await scanning
     expect(index.files.has('new/x.md')).toBe(true)

@@ -108,6 +108,11 @@ export type SaveResult =
   | { kind: 'saved'; binding: Binding; entry: EntryMeta; created: boolean }
   | { kind: 'conflict'; conflict: SaveConflict }
 
+export interface PromptMetadata {
+  title: string
+  tags: string[]
+}
+
 export interface MetaPatch {
   title?: string
   tags?: string[]
@@ -153,11 +158,18 @@ export type RestoreResult =
 
 // ───────────────────────────── 草稿 ─────────────────────────────
 
+export interface EntryMetadataDraft {
+  title: string
+  tags: string
+  savedTags: string[]
+}
+
 export interface DraftRecord {
   version: 1
   text: string
   selection: TextSelection | null
   binding: Binding | null
+  entryMetadata?: EntryMetadataDraft
   /** ISO 8601 UTC。 */
   updatedAt: string
 }

@@ -83,9 +83,6 @@ export const zh = {
   recording: '正在录制…',
   fixedShortcutsNote: '小窗里的其他快捷键暂时固定，不能修改。',
 
-  hideOnBlurLabel: '失焦时隐藏',
-  hideOnBlurHint: '切到别的应用时自动隐藏小窗；拖动或缩放小窗不算切走。',
-
   convertMiddleDotLabel: '连打「·」转反引号 / 代码块',
   convertMiddleDotHint: '连续输入两个 · 变成两个反引号，第三个生成代码块；单个 · 保持原样。',
   convertYenLabel: '输入「¥」转「$」/ 行间公式',
@@ -216,9 +213,6 @@ export const en: Record<PromptxLocaleKey, string> = {
   record: 'Record',
   recording: 'Recording…',
   fixedShortcutsNote: 'The other shortcuts inside the PromptX window are fixed for now.',
-
-  hideOnBlurLabel: 'Hide when inactive',
-  hideOnBlurHint: 'Hide the PromptX window when you switch to another app. Moving or resizing the window does not count.',
 
   convertMiddleDotLabel: 'Repeated · to backticks / code block',
   convertMiddleDotHint: 'Two middle dots become two backticks; a third creates a code block. A single dot stays unchanged.',

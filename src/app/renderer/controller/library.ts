@@ -2,7 +2,7 @@
 // 复制正文、删除和回收站。库的读写都在插件里（一个操作只实现一次），这里只发请求、处理结果和用户的选择。
 // 每个异步请求都带令牌，结果回来时令牌已过期就丢弃（技术方案 5.5「异步结果与回退规则」）。
 
-import { normalizeTags, tagKey } from '../../../shared/library-rules.ts'
+import { normalizeTagPhrases, tagKey } from '../../../shared/library-rules.ts'
 import type { MessageKey } from '../../../shared/i18n/index.ts'
 import type { EntryMeta, FolderSel, LibraryListResult, LibraryScope, MetaPatch, MetaResult, RestoreTarget } from '../../../shared/types.ts'
 import { insertSnippet } from '../editor/commands.ts'
@@ -66,18 +66,18 @@ export class Library {
     if (hadFocus || nothingFocused()) this.ctx.editor.focus()
   }
 
-  /**
-   * 工具栏「库」。展开时和 ⌘L 一样把焦点放进搜索框（需求 4.3 第 1 步「侧栏展开，焦点在搜索框」，审查 CR-06）：
-   * 按钮带 keepFocus，点下去焦点留在编辑区，不交出去的话用户接着打的搜索词会打进草稿。侧栏一出现就交，不等列表重读完。
-   * 收起时焦点照旧由 close() 交回编辑区。
-   */
+  /** 工具栏「库」和 ⌘L 共用。展开后立刻把焦点放进搜索框，不等列表重读。 */
   async toggle(): Promise<void> {
     this.toasts.beginAction()
-    if (this.state.open) {
-      await this.close()
+    const hadFocus = focusWithin('library')
+    const opened = await this.layout.toggleLibrary(() => {
+      this.cancelInsert()
+    })
+    if (!opened) {
+      if (hadFocus || nothingFocused()) this.ctx.editor.focus()
       return
     }
-    await this.layout.open('library')
+    if (!this.state.open) return
     this.focusSearch()
     await this.reload()
   }
@@ -267,18 +267,24 @@ export class Library {
     const entry = this.entry(relPath)
     if (entry === undefined || entry.status === 'unreadable') return
     const generation = this.libraryGeneration
+    const originalTags = entry.tags.join(', ')
     const choice = await this.dialogs.open({
       title: text(this.ctx, 'dialog.rename.title'),
       buttons: [dialogButton(this.ctx, 'cancel', 'common.cancel'), dialogButton(this.ctx, 'save', 'dialog.rename.save', 'primary')],
       defaultButton: 'save',
       escapeButton: 'cancel',
-      form: { title: entry.title, tags: entry.tags.join(', ') },
+      form: { title: entry.title, tags: originalTags },
     })
     if (choice.button !== 'save' || choice.form === undefined) return
     const title = choice.form.title.trim()
     // 标题去掉首尾空白后为空时「保存」不可用；这里再兜一次底。
     if (title === '') return
-    await this.updateMeta(relPath, { title, tags: normalizeTags(choice.form.tags) }, 'toast.metaSaved', false, generation)
+    const patch: MetaPatch = {
+      ...(title === entry.title ? {} : { title }),
+      ...(choice.form.tags === originalTags ? {} : { tags: normalizeTagPhrases([choice.form.tags]) }),
+    }
+    if (patch.title === undefined && patch.tags === undefined) return
+    await this.updateMeta(relPath, patch, 'toast.metaSaved', false, generation)
   }
 
   async toggleFavorite(relPath: string): Promise<void> {
@@ -297,7 +303,9 @@ export class Library {
     generation = this.libraryGeneration,
   ): Promise<void> {
     if (this.libraryChangedSince(generation)) return
-    const result = await this.ctx.bridge.call('library.updateMeta', { relPath, patch, addFrontMatter })
+    const result = await this.ctx.bridge.call('library.updateMeta', {
+      relPath, patch, addFrontMatter, ...(patch.tags === undefined ? {} : { tagPhrases: true }),
+    })
     if (!result.ok) {
       this.toasts.error(text(this.ctx, 'toast.metaFailed', { reason: reason(this.ctx, result.error) }))
       return

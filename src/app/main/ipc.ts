@@ -5,7 +5,7 @@
 // - 参数先做类型检查再交给处理函数，Host 收到后还会再校验一遍。
 // 预加载脚本那边也有一份同样的白名单，这里不依赖它：渲染进程被攻破时预加载的检查可以被绕过，主进程这一层不能。
 
-import type { BridgeResult, Prefs, ResolvedConfig, WindowBounds } from '../../shared/bridge.ts'
+import type { BridgeResult, EntryMetadataFields, Prefs, ResolvedConfig, WindowBounds } from '../../shared/bridge.ts'
 import { RENDERER_FORWARDED_METHODS, type RendererForwardedMethod } from '../../shared/protocol.ts'
 import { IPC_CHANNELS } from './channels.ts'
 import type { EntryEditorManager } from './entry-editor.ts'
@@ -43,7 +43,6 @@ export interface IpcHandlers {
   ready(info: ReadyInfo): void
   flushed(id: number): void
   e2eDone(id: number, result: E2eRendererResult): void
-  setModalOpen(open: boolean): void
   setMinWidth(width: number): void
   setPrefs(patch: Record<string, unknown>): void
 }
@@ -176,12 +175,6 @@ export function registerIpcHandlers(ipc: IpcMainLike, options: RegisterIpcOption
     return true
   })
 
-  listen(IPC_CHANNELS.windowSetModalOpen, ([open]) => {
-    if (typeof open !== 'boolean') return false
-    handlers.setModalOpen(open)
-    return true
-  })
-
   listen(IPC_CHANNELS.windowSetMinWidth, ([width]) => {
     if (!isFiniteNumber(width) || width < 0) return false
     handlers.setMinWidth(width)
@@ -220,18 +213,28 @@ export function registerEntryEditorIpc(
   handle(IPC_CHANNELS.entryEditorClose, false, (editor, [generation]) => (
     generation === undefined || editor.canAct(generation) ? editor.close() : { ok: false, error: INVALID }
   ))
-  ipc.on(IPC_CHANNELS.entryEditorUpdate, (event, text, selection, generation) => {
+  ipc.on(IPC_CHANNELS.entryEditorUpdate, (event, text, selection, generation, fields) => {
     const editor = getEditor()
     if (editor === null || !editor.isSender(event.sender) || !editor.acceptsGeneration(generation)) return
     if (typeof text !== 'string' || !isPlainObject(selection) ||
       !Number.isSafeInteger(selection.anchor) || !Number.isSafeInteger(selection.head)) return
-    editor.update(text, { anchor: selection.anchor as number, head: selection.head as number })
+    const metadata = entryMetadataFields(fields)
+    if (metadata === null) return
+    editor.update(text, { anchor: selection.anchor as number, head: selection.head as number }, metadata)
   })
-  ipc.on(IPC_CHANNELS.entryEditorPrepared, (event, id, generation, text, selection) => {
+  ipc.on(IPC_CHANNELS.entryEditorPrepared, (event, id, generation, text, selection, fields) => {
     const editor = getEditor()
     if (editor === null || !editor.isSender(event.sender) || !editor.acceptsGeneration(generation)) return
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || typeof text !== 'string' || !isPlainObject(selection) ||
       !Number.isSafeInteger(selection.anchor) || !Number.isSafeInteger(selection.head)) return
-    editor.prepared(id, generation as number, text, { anchor: selection.anchor as number, head: selection.head as number })
+    const metadata = entryMetadataFields(fields)
+    if (metadata === null) return
+    editor.prepared(id, generation as number, text, { anchor: selection.anchor as number, head: selection.head as number }, metadata)
   })
+}
+
+function entryMetadataFields(value: unknown): EntryMetadataFields | undefined | null {
+  if (value === undefined) return undefined
+  if (!isPlainObject(value) || typeof value.title !== 'string' || typeof value.tags !== 'string') return null
+  return { title: value.title, tags: value.tags }
 }

@@ -67,20 +67,18 @@ function escape(): void {
 }
 
 describe('对话框（需求 5.8，技术方案 5.5）', () => {
-  it('在小窗内居中显示，打开时焦点在默认按钮上，并通知主进程（失焦时不自动隐藏）', async () => {
-    const { bridge, controller } = await mountApp()
+  it('在小窗内居中显示，打开时焦点在默认按钮上', async () => {
+    const { controller } = await mountApp()
     const choice = open(controller, UNSAVED)
     const dialog = screen.getByRole('dialog', { name: '当前编辑器有未保存的内容' })
     expect(dialog.getAttribute('aria-modal')).toBe('true')
     expect(screen.getByText('载入「代码审查清单」会替换当前编辑器内容，要先怎么处理？')).toBeTruthy()
     expect(document.activeElement).toBe(dialogButton('保存'))
-    expect(bridge.window.setModalOpen).toHaveBeenLastCalledWith(true)
     // 按钮顺序跟随 dsh：取消在左，主要动作在右。
     expect([...dialog.querySelectorAll('.px-dialog-buttons button')].map(button => button.textContent)).toEqual(['取消', '放弃', '保存'])
     fireEvent.click(dialogButton('放弃'))
     expect(await choice).toEqual({ button: 'discard' })
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(bridge.window.setModalOpen).toHaveBeenLastCalledWith(false)
   })
 
   it('Esc 等于「取消」；O-04 的对话框没有「取消」，Esc 等于「保持当前内容」', async () => {

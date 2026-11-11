@@ -158,10 +158,11 @@ try {
   // 3. 保存到库
   const saved = await api('e2e', { command: { action: 'save-to-library' } })
   check('save to library', saved.ok === true, JSON.stringify(saved.data))
-  check('save <= 500 ms', typeof saved.data.ms === 'number' && saved.data.ms <= 500, `${saved.data.ms} ms`)
+  check('manual fallback and confirmed save <= 500 ms', saved.data.metadataFallback === true && typeof saved.data.ms === 'number' && saved.data.ms <= 500, `${saved.data.ms} ms`)
   if (typeof saved.data.relPath === 'string') {
     const file = readFileSync(join(status.effectiveLibraryDir, saved.data.relPath), 'utf8')
     check('new file has front matter fields', ['id:', 'title:', 'tags:', 'favorite:', 'created:', 'updated:'].every(k => file.includes(`\n${k}`)), saved.data.relPath)
+    check('confirmed title and phrase tag are persisted', file.includes('E2E Prompt ') && file.includes('E2E Save'))
 
     // 主窗口每次独立保存均新建；未改动的前两条必须逐字节保留。
     const snapshots = new Map([[saved.data.relPath, file]])
@@ -178,9 +179,12 @@ try {
 
     // 子窗实际加载并请求状态；测试模式模拟编辑，原生manager沿正式保存链只更新指定文件。
     const editedBody = '# 独立条目编辑\n\n修改已有条目，主窗口草稿保持原样。'
-    const edited = await api('e2e', { command: { action: 'edit-entry', relPath: saved.data.relPath, text: editedBody } })
+    const metadata = { title: '独立条目编辑', tags: ['Entry Editing', '复核'] }
+    const edited = await api('e2e', { command: { action: 'edit-entry', relPath: saved.data.relPath, text: editedBody, metadata } })
+    const updatedFile = readFileSync(join(status.effectiveLibraryDir, saved.data.relPath), 'utf8')
     check('entry editor loads and edits through its renderer', edited.ok === true && edited.data.windowCreated === true && edited.data.stateRequested === true && edited.data.rendererEchoed === true)
-    check('entry editor saves only its target', edited.data.targetRelPath === saved.data.relPath && edited.data.savedBodyMatches === true && readFileSync(join(status.effectiveLibraryDir, saved.data.relPath), 'utf8').endsWith(editedBody))
+    check('entry editor saves only its target', edited.data.targetRelPath === saved.data.relPath && edited.data.savedBodyMatches === true && updatedFile.endsWith(editedBody))
+    check('entry editor saves custom title and phrase tags', edited.data.metadataMatches === true && [metadata.title, ...metadata.tags].every(value => updatedFile.includes(value)))
     check('other entries unchanged after entry editing', [...snapshots].filter(([path]) => path !== saved.data.relPath).every(([path, bytes]) => readFileSync(join(status.effectiveLibraryDir, path), 'utf8') === bytes))
     await sleep(800)
     const afterEdit = await api('e2e', { command: { action: 'state' } })

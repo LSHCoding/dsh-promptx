@@ -24,6 +24,7 @@ import { CompanionSupervisor } from './companion/supervisor.ts'
 import { type ConfigRefs, DEFAULT_SHORTCUT, readConfig, resolveLibraryDir } from './config.ts'
 import { createDraftService } from './draft/service.ts'
 import { LibraryService } from './library/service.ts'
+import { suggestPromptMetadata } from './library/suggest-metadata.ts'
 import { OptimizeService } from './optimize/service.ts'
 import { profileHash, promptxPaths, resolveDshHome } from './paths.ts'
 import type { HostPeer, LlmLike, ModelSelection } from './services.ts'
@@ -178,11 +179,14 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
   })
   const draft = createDraftService({ facility: ctx.storageDomain, profile })
   const entryDraft = createDraftService({ facility: ctx.storageDomain, profile, scope: 'entry' })
+  const getLlm = () => optional(ctx, 'llm') as LlmLike | undefined
+  const getModel = () => (optional(ctx, 'agentDefaultModel') as { currentSelection(): ModelSelection } | undefined)?.currentSelection()
+  const metadataAbort = new AbortController()
   // supervisor 在下面才创建；这些闭包只在它创建之后才会被调用。
   const peer = (): HostPeer | null => supervisor.peer()
   const optimize = new OptimizeService({
-    getLlm: () => (optional(ctx, 'llm') as LlmLike | undefined),
-    getModel: () => (optional(ctx, 'agentDefaultModel') as { currentSelection(): ModelSelection } | undefined)?.currentSelection(),
+    getLlm,
+    getModel,
     getInstruction: () => config.optimizeInstruction.get(),
     getLocale: instructionLocale,
     emit: (event) => {
@@ -238,6 +242,10 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
         entryDraft,
         library,
         optimize,
+        // 隔离端到端测试走手填路径，避免调用维护者配置的模型。
+        suggestMetadata: text => e2e ? Promise.resolve(null) : suggestPromptMetadata(text, {
+          getLlm, getModel, hasTitle: title => library.hasTitle(title), signal: metadataAbort.signal,
+        }),
         openSettings,
         onStatus: (status) => {
           companionLocale = status.locale
@@ -449,6 +457,7 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
     background(logger, 'instance lock', acquire())
     return async () => {
       abort.abort()
+      metadataAbort.abort()
       clearInterval(heartbeat)
       offRuntime()
       await supervisor.close('host-closing').catch(() => {})

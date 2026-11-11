@@ -18,7 +18,7 @@ import { Dialogs } from './dialogs.ts'
 import { Draft } from './draft.ts'
 import { PaneLayout } from './layout.ts'
 import { Library } from './library.ts'
-import { LibrarySave, type SaveOutcome } from './library-save.ts'
+import { CONFIRM_METADATA_BUTTON, LibrarySave, type SaveOutcome } from './library-save.ts'
 import { Optimize } from './optimize.ts'
 import { Toasts } from './toasts.ts'
 
@@ -98,12 +98,12 @@ export class AppController {
     })
     this.ctx = { store: this.store, bridge: this.bridge, editor: this.editor }
     this.toasts = new Toasts(this.store)
-    this.dialogs = new Dialogs(this.store, this.bridge)
+    this.dialogs = new Dialogs(this.store)
     this.layout = new PaneLayout(this.ctx)
     this.draft = new Draft(this.ctx, (loaded) => {
       this.onDraftLoaded(loaded)
     })
-    this.saver = new LibrarySave(this.ctx, this.draft, this.toasts, () => {
+    this.saver = new LibrarySave(this.ctx, this.draft, this.toasts, this.dialogs, () => {
       if (this.store.getState().library.open) runTask(this.library.refresh(false))
     })
     this.library = new Library(this.ctx, this.draft, this.toasts, this.dialogs, this.layout, () => {
@@ -160,6 +160,7 @@ export class AppController {
 
   dispose(): void {
     for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe()
+    this.saver.dispose()
     this.dialogs.dispose()
     this.toasts.dispose()
     this.draft.dispose()
@@ -331,22 +332,10 @@ export class AppController {
     if (result.value.navigated) this.toasts.success(text(this.ctx, 'toast.settingsOpened'))
   }
 
-  /**
-   * ⌘L（L-02）：焦点在侧栏里时收起侧栏、焦点回到编辑区；其他情况展开侧栏（已展开则不变）并把焦点放进搜索框。
-   */
+  /** ⌘L 和工具栏按钮共用库侧栏的开合行为。 */
   async libraryShortcut(): Promise<void> {
-    this.toasts.beginAction()
     this.closeMenu()
-    if (this.store.getState().library.open && focusWithin('library')) {
-      await this.library.close()
-      this.editor.focus()
-      return
-    }
-    if (!this.store.getState().library.open) {
-      await this.layout.open('library')
-      runTask(this.library.reload())
-    }
-    this.requestFocus('search')
+    await this.library.toggle()
   }
 
   // ───────────────────────────── 窗口级快捷键 ─────────────────────────────
@@ -475,12 +464,8 @@ export class AppController {
           data: { copyMs, error: outcome.error?.code ?? null, draftSaveError: this.store.getState().draft.saveError?.code ?? null },
         }
       }
-      case 'save-to-library': {
-        const started = performance.now()
-        const outcome = await this.save()
-        const ms = performance.now() - started
-        return { ok: outcome === 'saved', data: { outcome, ms, relPath: this.saver.lastSavedRelPath } }
-      }
+      case 'save-to-library':
+        return this.e2eSave(command.id)
       case 'typing-latency':
         return this.measureTyping(e2eSize(command))
       case 'state':
@@ -497,6 +482,36 @@ export class AppController {
         }
       default:
         return { ok: false, data: { error: 'unknown-action' } }
+    }
+  }
+
+  /** 隔离测试可用手填路径保存，不依赖真实模型。 */
+  private async e2eSave(id: number): Promise<E2eReply> {
+    let metadataFallback = false
+    let handledDialog: number | undefined
+    const stop = this.store.subscribe(() => {
+      const { dialog } = this.store.getState()
+      if (dialog?.defaultButton !== CONFIRM_METADATA_BUTTON || dialog.form === undefined || dialog.id === handledDialog) return
+      handledDialog = dialog.id
+      const { form } = dialog
+      const fallback = form.title === ''
+      metadataFallback ||= fallback
+      queueMicrotask(() => {
+        this.resolveDialog(dialog.id, dialog.error !== undefined
+          ? { button: dialog.escapeButton }
+          : {
+            button: CONFIRM_METADATA_BUTTON,
+            form: fallback ? { title: `E2E Prompt ${id}`, tags: 'E2E Save' } : form,
+          })
+      })
+    })
+    const started = performance.now()
+    try {
+      const outcome = await this.save()
+      const ms = performance.now() - started
+      return { ok: outcome === 'saved', data: { outcome, ms, relPath: this.saver.lastSavedRelPath, metadataFallback } }
+    } finally {
+      stop()
     }
   }
 

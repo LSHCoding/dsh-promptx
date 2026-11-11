@@ -26,7 +26,6 @@ export const IPC_CHANNELS = {
   ready: 'promptx:ready',
   flushed: 'promptx:flushed',
   e2eDone: 'promptx:e2eDone',
-  windowSetModalOpen: 'promptx:window.setModalOpen',
   windowSetMinWidth: 'promptx:window.setMinWidth',
   prefsSet: 'promptx:prefs.set',
   /** 主进程 → 渲染进程：webContents.send(event, 事件名, 载荷)。 */

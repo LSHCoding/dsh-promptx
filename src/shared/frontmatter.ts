@@ -58,6 +58,7 @@ export type PatchResult =
 export interface NewFrontMatterFields {
   id: string
   title: string
+  tags?: string[]
   created: string
   updated: string
 }
@@ -893,19 +894,25 @@ function renderFrontMatter(lines: readonly string[], eol: string): string {
   return ['---', ...lines, '---', ''].join(eol)
 }
 
+function renderTags(tags: readonly string[], eol: string): string {
+  return tags.length === 0 ? 'tags: []' : `tags:${eol}${blockItems(tags, eol)}`
+}
+
 /**
- * 给没有 front matter 的文件补上 id、title、created、updated（L-08「补上并保存」）。
+ * 给没有 front matter 的文件补上 id、title、可选的 tags、created、updated（L-08「补上并保存」）。
  * 换行沿用文件原来的风格，BOM 留在最前面，原来的内容逐字节接在后面。文件已经有完整的 front matter 时抛错。
  */
 export function addFrontMatter(text: string, fields: NewFrontMatterFields): string {
   const { bom, eol, contentStart, frontMatter } = scanFile(text)
   if ((frontMatter?.close ?? null) !== null) throw new Error('addFrontMatter: the text already starts with a front matter block')
+  const newline = eolText(eol)
   const block = renderFrontMatter([
     `id: ${formatYamlString(fields.id)}`,
     `title: ${formatYamlString(fields.title)}`,
+    ...(fields.tags === undefined ? [] : [renderTags(fields.tags, newline)]),
     `created: ${formatTimestamp(fields.created)}`,
     `updated: ${formatTimestamp(fields.updated)}`,
-  ], eolText(eol))
+  ], newline)
   return (bom ? '\ufeff' : '') + block + text.slice(contentStart)
 }
 
@@ -914,7 +921,7 @@ export function renderNewPromptFile(fields: NewFrontMatterFields, bodyLF: string
   return renderFrontMatter([
     `id: ${formatYamlString(fields.id)}`,
     `title: ${formatYamlString(fields.title)}`,
-    'tags: []',
+    renderTags(fields.tags ?? [], '\n'),
     'favorite: false',
     `created: ${formatTimestamp(fields.created)}`,
     `updated: ${formatTimestamp(fields.updated)}`,

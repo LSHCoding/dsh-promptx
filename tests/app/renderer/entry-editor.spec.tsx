@@ -20,12 +20,14 @@ afterEach(() => {
 })
 
 function snapshot(overrides: Partial<EntryEditorSnapshot> = {}): EntryEditorSnapshot {
+  const entryBinding = overrides.binding ?? binding('写作/评审.md', '原正文', { title: '评审助手' })
   return {
     generation: 1,
     freezeId: null,
-    binding: binding('写作/评审.md', '原正文', { title: '评审助手' }),
+    binding: entryBinding,
     text: '原正文',
     selection: { anchor: 3, head: 3 },
+    metadata: { title: entryBinding.title, tags: '', savedTags: [] },
     config: config(),
     saving: false,
     error: null,
@@ -117,6 +119,44 @@ describe('独立库条目编辑窗口', () => {
     act(() => { controller.editor.runCommand(redo) })
     expect(controller.editor.getText()).toBe('原正文修改')
     expect(bridge.calls).toEqual([])
+  })
+
+  it('预填标题和多词标签，只编辑元数据也能保存，旧快照不会覆盖继续输入', async () => {
+    const initial = snapshot({ metadata: { title: '评审助手', tags: 'Code Review', savedTags: ['Code Review'] } })
+    const { controller, bridge } = await mount(new FakeBridge(), initial)
+    const title = screen.getByRole<HTMLInputElement>('textbox', { name: '标题' })
+    const tags = screen.getByRole<HTMLInputElement>('textbox', { name: /^标签/ })
+    expect(title.value).toBe('评审助手')
+    expect(tags.value).toBe('Code Review')
+    fireEvent.change(title, { target: { value: '代码审查' } })
+    fireEvent.change(tags, { target: { value: 'Code Review, 风格检查' } })
+    expect(bridge.entryEditor.update).toHaveBeenLastCalledWith(
+      '原正文', { anchor: 3, head: 3 }, 1, { title: '代码审查', tags: 'Code Review, 风格检查' },
+    )
+    expect(screen.getByText('有未保存的修改')).toBeTruthy()
+    await act(async () => { await controller.save() })
+    expect(bridge.entryEditor.save).toHaveBeenCalledWith(1)
+    act(() => { bridge.emit('entryEditor.state', initial) })
+    expect(title.value).toBe('代码审查')
+    expect(tags.value).toBe('Code Review, 风格检查')
+    act(() => { bridge.emit('entryEditor.state', { ...initial, freezeId: 7 }) })
+    expect(title.readOnly).toBe(true)
+    expect(tags.readOnly).toBe(true)
+    expect(bridge.entryEditor.prepared).toHaveBeenLastCalledWith(
+      7, 1, '原正文', { anchor: 3, head: 3 }, { title: '代码审查', tags: 'Code Review, 风格检查' },
+    )
+  })
+
+  it('正文保存后让未编辑的标题跟随旧文件的新推导标题', async () => {
+    const { controller, bridge } = await mount()
+    act(() => { type(controller, '修改') })
+    act(() => { bridge.emit('entryEditor.state', snapshot({ saving: true })) })
+    act(() => { bridge.emit('entryEditor.state', snapshot({
+      binding: binding('写作/评审.md', '原正文修改', { title: '新推导标题' }),
+      metadata: { title: '新推导标题', tags: '', savedTags: [] },
+    })) })
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '标题' }).value).toBe('新推导标题')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(true)
   })
 
   it('保存期间继续输入，旧正文的状态推送不覆盖新内容和撤销栈', async () => {
@@ -296,7 +336,7 @@ describe('独立库条目编辑窗口', () => {
     act(() => { bridge.emit('entryEditor.state', snapshot({ freezeId: 7, conflict: 'modified' })) })
     expect(controller.editor.getText()).toBe('原正文最后输入')
     expect(document.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false')
-    expect(bridge.entryEditor.prepared).toHaveBeenCalledExactlyOnceWith(7, 1, '原正文最后输入', { anchor: 7, head: 7 })
+    expect(bridge.entryEditor.prepared).toHaveBeenCalledExactlyOnceWith(7, 1, '原正文最后输入', { anchor: 7, head: 7 }, { title: '评审助手', tags: '' })
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(true)
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '关闭' }).disabled).toBe(true)
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '重新载入' }).disabled).toBe(true)
@@ -335,7 +375,7 @@ describe('独立库条目编辑窗口', () => {
       bridge.emit('entryEditor.state', snapshot({ freezeId: 2 }))
       bridge.emit('entryEditor.state', snapshot({ generation: 2, text: 'B正文', binding: binding('B.md', 'B正文') }))
     })
-    expect(bridge.entryEditor.prepared).toHaveBeenCalledExactlyOnceWith(2, 1, '原正文最后输入', { anchor: 7, head: 7 })
+    expect(bridge.entryEditor.prepared).toHaveBeenCalledExactlyOnceWith(2, 1, '原正文最后输入', { anchor: 7, head: 7 }, { title: '评审助手', tags: '' })
     expect(controller.editor.getText()).toBe('B正文')
     expect(document.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('true')
     expect(controller.editor.runCommand(undo)).toBe(false)
@@ -346,7 +386,7 @@ describe('独立库条目编辑窗口', () => {
   it('初始状态带冻结屏障时确认，显式重新载入界面状态可再次确认', async () => {
     const { controller, bridge } = await mount(new FakeBridge(), snapshot({ freezeId: 9, text: '恢复中的修改' }))
     expect(document.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false')
-    expect(bridge.entryEditor.prepared).toHaveBeenCalledExactlyOnceWith(9, 1, '恢复中的修改', { anchor: 3, head: 3 })
+    expect(bridge.entryEditor.prepared).toHaveBeenCalledExactlyOnceWith(9, 1, '恢复中的修改', { anchor: 3, head: 3 }, { title: '评审助手', tags: '' })
     await act(async () => { await controller.load() })
     expect(bridge.entryEditor.prepared).toHaveBeenCalledTimes(2)
     expect(controller.editor.getText()).toBe('恢复中的修改')

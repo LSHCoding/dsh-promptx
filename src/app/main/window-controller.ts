@@ -1,4 +1,4 @@
-// 小窗的显示、隐藏、切换与失焦隐藏（需求 F-01、F-02、Q19，design-spec 5.4、D10）。
+// 小窗的显示、隐藏与切换（需求 F-01、F-02、Q19，design-spec 5.4、D10）。
 // 窗口和 app 都通过接口传进来，测试用假对象记录调用顺序；主进程里传 BrowserWindow 和 app 的适配。
 //
 // macOS 显示序列（不用 type: 'panel'，它会让窗口出现在所有桌面空间）：
@@ -44,18 +44,9 @@ export interface WindowControllerOptions {
   onShown: (reason: string) => void
   onHidden: (reason: string) => void
   logger: CompanionLogger
-  now?: () => number
   /** show 事件之后多久把「所有空间可见」关掉。 */
   workspaceResetDelayMs?: number
-  /** 失焦后多久判断要不要隐藏。 */
-  blurCheckDelayMs?: number
-  /** 拖动、缩放窗口也会触发 blur：最近这么久内有过 will-move / will-resize 时不因失焦隐藏。 */
-  moveGuardMs?: number
-  /** 非模态条目编辑子窗拿到焦点时，父窗失焦不能触发自动隐藏。 */
-  isRelatedFocused?: () => boolean
 }
-
-export type ToggleResult = 'shown' | 'focused' | 'hidden'
 
 const MAC_WORKSPACE_OPTIONS: WorkspaceOptions = { visibleOnFullScreen: true, skipTransformProcessType: true }
 
@@ -70,21 +61,13 @@ export class WindowController {
   readonly #onShown: (reason: string) => void
   readonly #onHidden: (reason: string) => void
   readonly #logger: CompanionLogger
-  readonly #now: () => number
   readonly #workspaceResetDelayMs: number
-  readonly #blurCheckDelayMs: number
-  readonly #moveGuardMs: number
-  readonly #isRelatedFocused: () => boolean
 
-  #hideOnBlur = false
-  #modalOpen = false
-  #lastMoveAt = Number.NEGATIVE_INFINITY
   #showToken = 0
   /** 已经排过「关闭所有空间可见」的那一次显示的代号。 */
   #scheduledToken = 0
   #workspaceTimer: ReturnType<typeof setTimeout> | null = null
   #workspaceFallback: ReturnType<typeof setTimeout> | null = null
-  #blurTimer: ReturnType<typeof setTimeout> | null = null
   #disposed = false
 
   constructor(options: WindowControllerOptions) {
@@ -95,11 +78,7 @@ export class WindowController {
     this.#onShown = options.onShown
     this.#onHidden = options.onHidden
     this.#logger = options.logger
-    this.#now = options.now ?? (() => performance.now())
     this.#workspaceResetDelayMs = options.workspaceResetDelayMs ?? 50
-    this.#blurCheckDelayMs = options.blurCheckDelayMs ?? 100
-    this.#moveGuardMs = options.moveGuardMs ?? 500
-    this.#isRelatedFocused = options.isRelatedFocused ?? (() => false)
   }
 
   get visible(): boolean {
@@ -113,7 +92,6 @@ export class WindowController {
   /** 显示并把焦点给小窗。已经可见时同样走一遍：可见但没焦点、或在别的桌面空间时，把它带到当前空间并拿回焦点。 */
   show(reason: string): void {
     if (this.#disposed) return
-    this.#cancelBlurCheck()
     const wasVisible = this.#window.isVisible()
     if (!wasVisible) {
       try {
@@ -134,7 +112,6 @@ export class WindowController {
 
   hide(reason: string): void {
     if (this.#disposed) return
-    this.#cancelBlurCheck()
     if (!this.#window.isVisible()) return
     this.#window.hide()
     if (this.#mac) {
@@ -148,61 +125,15 @@ export class WindowController {
     this.#onHidden(reason)
   }
 
-  /** 全局快捷键：可见且有焦点 → 隐藏；可见但没有焦点 → 拿回焦点；不可见 → 显示。 */
-  toggle(reason: string): ToggleResult {
-    if (!this.#window.isVisible()) {
-      this.show(reason)
-      return 'shown'
-    }
-    if (this.#window.isFocused()) {
-      this.hide(reason)
-      return 'hidden'
-    }
-    this.show(reason)
-    return 'focused'
-  }
-
-  setHideOnBlur(on: boolean): void {
-    this.#hideOnBlur = on
-    if (!on) this.#cancelBlurCheck()
-  }
-
-  setModalOpen(open: boolean): void {
-    this.#modalOpen = open
-  }
-
-  /** 窗口 will-move / will-resize。 */
-  noteMoveOrResize(): void {
-    this.#lastMoveAt = this.#now()
-  }
-
-  /**
-   * 窗口 blur。不立即隐藏，稍等一下再判断：拖动窗口时 blur 可能先于 will-move 到达，
-   * 也可能只是焦点在窗口内部的短暂切换（系统菜单弹出又收起）。判断时窗口已经拿回焦点就不隐藏。
-   */
-  handleBlur(): void {
-    if (!this.#hideOnBlur || this.#disposed) return
-    this.#cancelBlurCheck()
-    this.#blurTimer = setTimeout(() => {
-      this.#blurTimer = null
-      if (this.#shouldHideAfterBlur()) this.hide('blur')
-    }, this.#blurCheckDelayMs)
-  }
-
-  handleFocus(): void {
-    this.#cancelBlurCheck()
+  /** 全局快捷键和菜单栏按可见状态切换，失焦后再次按下也能收起小窗。 */
+  toggle(reason: string): void {
+    if (this.visible) this.hide(reason)
+    else this.show(reason)
   }
 
   dispose(): void {
     this.#disposed = true
-    this.#cancelBlurCheck()
     this.#cancelWorkspaceReset()
-  }
-
-  #shouldHideAfterBlur(): boolean {
-    if (!this.#hideOnBlur || this.#modalOpen || this.#isRelatedFocused()) return false
-    if (!this.#window.isVisible() || this.#window.isFocused()) return false
-    return this.#now() - this.#lastMoveAt >= this.#moveGuardMs
   }
 
   #showMac(wasVisible: boolean): void {
@@ -247,10 +178,5 @@ export class WindowController {
     if (this.#workspaceFallback !== null) clearTimeout(this.#workspaceFallback)
     this.#workspaceTimer = null
     this.#workspaceFallback = null
-  }
-
-  #cancelBlurCheck(): void {
-    if (this.#blurTimer !== null) clearTimeout(this.#blurTimer)
-    this.#blurTimer = null
   }
 }

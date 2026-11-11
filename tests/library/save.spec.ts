@@ -1,4 +1,4 @@
-import { chmod, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { LibraryService } from '../../src/library/service.ts'
@@ -173,6 +173,140 @@ describe('saving a new prompt (L-08)', () => {
     const listed = await listAll(service, { refresh: false, query: 'brand' })
     expect(listed.entries.map(entry => entry.relPath)).toEqual(['Brand new.md'])
     expect(listed.total).toBe(2)
+  })
+})
+
+describe('saving confirmed prompt metadata', () => {
+  const create = { binding: null, folder: null, mode: 'normal', requestId: '' } as const
+
+  it('round-trips confirmed title and tag phrases and retries by request id before checking duplicates', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    const text = '# Draft heading\n\nPrompt content.'
+    const params = {
+      ...create,
+      libraryDir: root,
+      text,
+      requestId: 'confirmed',
+      metadata: { title: '  Code Review  ', tags: ['Code Review', '边界条件', 'Test Case', 'code review'] },
+    }
+    const result = saved(await service.save(params))
+    expect(result.entry).toMatchObject({ title: 'Code Review', relPath: 'Code Review.md', tags: ['Code Review', '边界条件', 'Test Case'] })
+    expect(await service.read(result.binding.relPath)).toMatchObject({ body: text, entry: result.entry })
+    expect(await service.save(params)).toEqual(result)
+  })
+
+  it('rejects titles already displayed anywhere in the library, including plain Markdown headings', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    expect(await service.hasTitle('Café Review')).toBe(false)
+    await writeTree(root, { 'archive/plain.md': '# Café Review\n\nExisting content' })
+    expect(await service.hasTitle('  CAFE\u0301 REVIEW ')).toBe(true)
+    await expect(service.save({ ...create, text: 'new body', metadata: { title: 'café review', tags: [] } }))
+      .rejects.toMatchObject({ code: 'promptx/library/duplicate-title' })
+    expect(await readdir(root)).toEqual(['archive'])
+  })
+
+  it('refreshes a title after a same-size atomic file replacement with unchanged mtime', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    const stamp = new Date('2026-11-08T12:00:00Z')
+    const path = join(root, 'prompt.md')
+    await writeFile(path, '# Old title\n')
+    await utimes(path, stamp, stamp)
+    expect(await service.hasTitle('Old title')).toBe(true)
+    const incoming = join(root, '.incoming')
+    await writeFile(incoming, '# New title\n')
+    await utimes(incoming, stamp, stamp)
+    await rename(incoming, path)
+    expect(await service.hasTitle('New title')).toBe(true)
+    expect(await service.hasTitle('Old title')).toBe(false)
+  })
+
+  it.each(['', 'First\nSecond'])('rejects an invalid title %j before creating the file', async (title) => {
+    const root = await temp.make()
+    await expect(makeService(root).save({ ...create, text: 'body', metadata: { title, tags: [] } }))
+      .rejects.toMatchObject({ code: 'promptx/library/invalid-title' })
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('rejects saving into a different library than the one shown at confirmation', async () => {
+    const root = await temp.make()
+    const current = await temp.make()
+    await expect(makeService(current).save({
+      ...create, text: 'body', libraryDir: root, metadata: { title: 'Confirmed', tags: [] },
+    })).rejects.toMatchObject({ code: 'promptx/library/unavailable' })
+    expect(await readdir(root)).toEqual([])
+    expect(await readdir(current)).toEqual([])
+  })
+
+  it('updates the title, tag phrases, and body in the same bound write while preserving comments and layout', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    await writeTree(root, {
+      'existing.md': '\ufeff---\r\nid: example\r\ntitle: Old # comment\r\ntags: [First, Second] # tags\r\ncustom: keep\r\n---\r\nold body\r\n',
+    })
+    const binding = await bindingFor(service, root, 'existing.md')
+    const result = saved(await service.save({
+      ...create, binding, text: 'new body\n', metadata: { title: 'New title', tags: ['Code Review', 'Test Case'] },
+    }))
+    expect(result.entry).toMatchObject({ title: 'New title', tags: ['Code Review', 'Test Case'] })
+    expect(await readText(root, 'existing.md')).toBe([
+      '\ufeff---', 'id: example', 'title: New title # comment', 'tags: [Code Review, Test Case] # tags',
+      'custom: keep', `updated: ${NOW_STAMP}`, '---', 'new body', '',
+    ].join('\r\n'))
+  })
+
+  it('allows edits with a pre-existing duplicate title but rejects a change to a different duplicate', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    await writeTree(root, {
+      'editing.md': '---\nid: example\ntitle: Existing\n---\nold',
+      'other.md': '# Existing\n',
+      'archive/taken.md': '# Taken\n',
+    })
+    const binding = await bindingFor(service, root, 'editing.md')
+    const result = saved(await service.save({
+      ...create, binding, text: 'new', metadata: { title: 'Existing', tags: ['Code Review'] },
+    }))
+    await expect(service.save({ ...create, binding: result.binding, text: 'unsaved', metadata: { title: 'Taken' } }))
+      .rejects.toMatchObject({ code: 'promptx/library/duplicate-title' })
+    expect(await service.read('editing.md')).toMatchObject({ body: 'new', entry: { title: 'Existing', tags: ['Code Review'] } })
+  })
+
+  it('keeps the front matter confirmation for legacy Markdown and adds confirmed phrase tags on approval', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    await writeTree(root, { 'plain.md': '# Legacy\n\nold' })
+    const binding = await bindingFor(service, root, 'plain.md')
+    const params = { ...create, binding, text: 'edited', metadata: { title: 'Legacy Guide', tags: ['Quick Start'] } }
+    expect(await service.save(params)).toEqual({ kind: 'conflict', conflict: 'noFrontMatter' })
+    expect(await readText(root, 'plain.md')).toBe('# Legacy\n\nold')
+    const result = saved(await service.save({ ...params, mode: 'addFrontMatter' }))
+    expect(result.entry).toMatchObject({ title: 'Legacy Guide', tags: ['Quick Start'] })
+  })
+
+  it('allows metadata-only edits of a legacy empty entry while rejecting a cleared body', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    await writeTree(root, { 'empty.md': '---\ntitle: Empty\n---\n', 'full.md': '---\ntitle: Full\n---\nbody' })
+    const empty = await bindingFor(service, root, 'empty.md')
+    const full = await bindingFor(service, root, 'full.md')
+    const result = saved(await service.save({ ...create, binding: empty, text: '', metadata: { title: 'New title' } }))
+    expect(result.entry.title).toBe('New title')
+    await expect(service.save({ ...create, binding: full, text: '', metadata: { title: 'New title 2' } }))
+      .rejects.toMatchObject({ code: 'promptx/library/empty' })
+    expect((await service.read('full.md')).body).toBe('body')
+  })
+
+  it('leaves the exact body bytes in place on a metadata-only save with mixed line endings', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    const rawBody = 'line one\nline two\r\nline three\rline four'
+    await writeTree(root, { 'mixed.md': `---\r\nid: mixed\r\ntitle: Old\r\n---\r\n${rawBody}` })
+    const binding = await bindingFor(service, root, 'mixed.md')
+    saved(await service.save({ ...create, binding, text: binding.savedBody, metadata: { title: 'New' } }))
+    expect((await readText(root, 'mixed.md')).endsWith(rawBody)).toBe(true)
   })
 })
 

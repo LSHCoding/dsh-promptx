@@ -165,6 +165,10 @@ export class Draft {
     return this.generationValue
   }
 
+  get libraryDir(): string | undefined {
+    return this.libraryDirValue
+  }
+
   get ready(): boolean {
     return this.state.load === 'ready'
   }

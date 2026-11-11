@@ -1,7 +1,5 @@
-// 对话框（需求 5.8，技术方案 5.5）：同一时间只显示一个，后来的排队。打开时通知主进程，
-// 让「失焦时自动隐藏」在对话框打开期间不生效（bridge.window.setModalOpen）。
+// 对话框（需求 5.8，技术方案 5.5）：同一时间只显示一个，后来的排队。
 
-import type { PromptxBridge } from '../../../shared/bridge.ts'
 import type { AppState, DialogResult, DialogSpec } from '../state/state.ts'
 import type { Store } from '../state/store.ts'
 
@@ -16,7 +14,7 @@ export class Dialogs {
   private current: Pending | null = null
   private readonly queue: Pending[] = []
 
-  constructor(private readonly store: Store<AppState>, private readonly bridge: PromptxBridge) {}
+  constructor(private readonly store: Store<AppState>) {}
 
   open(spec: DialogSpec): Promise<DialogResult> {
     return new Promise((resolve) => {
@@ -52,12 +50,8 @@ export class Dialogs {
 
   private showNext(): void {
     const next = this.queue.shift()
-    if (next === undefined) {
-      this.bridge.window.setModalOpen(false)
-      return
-    }
+    if (next === undefined) return
     this.current = next
     this.store.update(state => ({ ...state, dialog: { ...next.spec, id: next.id }, menu: null }))
-    this.bridge.window.setModalOpen(true)
   }
 }

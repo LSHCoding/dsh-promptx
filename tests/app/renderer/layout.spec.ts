@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import { DEFAULT_PREFS } from '../../../src/shared/bridge.ts'
 import { PANE_LIMITS } from '../../../src/shared/layout.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { clampPaneSizes } from '../../../src/app/renderer/controller/app.ts'
@@ -67,6 +68,71 @@ describe('窗口最小宽度跟随打开的栏位（5.7，审查 COV-13）', () 
 })
 
 describe('打开和关闭可选栏时的窗口宽度（5.7 规则 1–4）', () => {
+  it('首次启动默认打开库，第一次收起也只收回两列宽度', async () => {
+    const bridge = new FakeBridge()
+    bridge.storedPrefs = structuredClone(DEFAULT_PREFS)
+    const controller = await start(bridge)
+    expect(controller.store.getState().library.open).toBe(true)
+    expect(bridge.window.setWidth).not.toHaveBeenCalled()
+    await controller.libraryShortcut()
+    expect(controller.store.getState().library.open).toBe(false)
+    expect(bridge.bounds.width).toBe(528)
+    await controller.libraryShortcut()
+    expect(bridge.bounds.width).toBe(980)
+  })
+
+  it('恢复已打开库的偏好后，用手动调整后的编辑区宽度收起侧栏', async () => {
+    const bridge = new FakeBridge()
+    bridge.storedPrefs.panes = { ...bridge.storedPrefs.panes, library: true, folderWidth: 180, listWidth: 340 }
+    bridge.bounds = { ...bridge.bounds, width: 1100 }
+    const controller = await start(bridge)
+    controller.resizePanes({ listWidth: 350 })
+    bridge.bounds = { ...bridge.bounds, width: 1150 }
+    await controller.layout.close('library')
+    expect(bridge.bounds.width).toBe(618)
+    await controller.layout.open('library')
+    expect(bridge.bounds.width).toBe(1150)
+  })
+
+  it('收起库时用实际显示的编辑区宽度，保留同时打开的会话栏', async () => {
+    const bridge = withSession(new FakeBridge())
+    bridge.storedPrefs.panes.library = true
+    bridge.bounds = { ...bridge.bounds, x: 0, width: 1000, workArea: { x: 0, y: 0, width: 1000, height: 800 } }
+    const controller = await start(bridge)
+    await controller.layout.open('session')
+    controller.layout.setEditorElement({ offsetWidth: 330 })
+    expect(controller.store.getState().library.open).toBe(true)
+    expect(controller.store.getState().optimize.paneOpen).toBe(true)
+    await controller.layout.close('library')
+    expect(bridge.bounds.width).toBe(330 + 421)
+    expect(controller.store.getState().optimize.paneOpen).toBe(true)
+  })
+
+  it('屏幕空间不足时只暂时压缩编辑区，收起库后恢复原宽度', async () => {
+    const bridge = new FakeBridge()
+    bridge.bounds = { ...bridge.bounds, x: 100, width: 780, workArea: { x: 0, y: 0, width: 1000, height: 800 } }
+    const controller = await start(bridge)
+    await controller.layout.open('library')
+    expect(bridge.bounds.width).toBe(1000)
+    await controller.layout.close('library')
+    expect(bridge.bounds.width).toBe(780)
+  })
+
+  it('收起时受 520 最小宽度限制，重新打开库后恢复手动缩窄的编辑区', async () => {
+    const bridge = new FakeBridge()
+    bridge.storedPrefs.panes.library = true
+    bridge.bounds = { ...bridge.bounds, width: 920 }
+    const controller = await start(bridge)
+    await controller.layout.close('library')
+    expect(bridge.bounds.width).toBe(520)
+    await controller.layout.open('library')
+    expect(bridge.bounds.width).toBe(920)
+    await controller.layout.close('library')
+    bridge.bounds = { ...bridge.bounds, width: 600 }
+    await controller.layout.open('library')
+    expect(bridge.bounds.width).toBe(1052)
+  })
+
   it('库侧栏先向左加宽，关闭后回到打开之前的位置和宽度', async () => {
     const bridge = new FakeBridge()
     bridge.bounds = { x: 600, y: 100, width: 980, height: 600, workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
@@ -116,11 +182,12 @@ describe('打开和关闭可选栏时的窗口宽度（5.7 规则 1–4）', () 
   it('连续点击按顺序执行，不会两次都基于同一个旧位置计算', async () => {
     const bridge = new FakeBridge()
     const controller = await start(bridge)
-    const first = controller.layout.toggle('library')
-    const second = controller.layout.toggle('library')
+    // 模拟 Chromium 收到新窗口宽度时还没排版刚出现的库侧栏。
+    controller.layout.setEditorElement({ get offsetWidth() { return bridge.bounds.width } })
+    const first = controller.library.toggle()
+    const second = controller.library.toggle()
     await Promise.all([first, second])
-    expect(controller.store.getState().library.open).toBe(true)
-    await controller.layout.toggle('library')
+    expect(controller.store.getState().library.open).toBe(false)
     expect(bridge.bounds).toMatchObject({ x: 400, width: 980 })
   })
 

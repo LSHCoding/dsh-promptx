@@ -1,6 +1,6 @@
 // 库条目的独立编辑会话。只用 entryEditor 白名单，不接入主窗口的草稿、库保存或模型会话。
 
-import type { EntryEditorSnapshot, PromptxBridge, ResolvedConfig } from '../../../shared/bridge.ts'
+import { isEntryDirty, type EntryEditorSnapshot, type EntryMetadataFields, type PromptxBridge, type ResolvedConfig } from '../../../shared/bridge.ts'
 import { translate, type Locale } from '../../../shared/i18n/index.ts'
 import type { ErrorInfo } from '../../../shared/types.ts'
 import { isComposingKey } from '../appearance.ts'
@@ -10,6 +10,7 @@ import { createStore, type Store } from '../state/store.ts'
 
 export interface EntryEditorState {
   snapshot: EntryEditorSnapshot | null
+  metadata: EntryMetadataFields
   load: 'loading' | 'ready' | 'error'
   error: ErrorInfo | null
   dirty: boolean
@@ -31,7 +32,9 @@ export class EntryEditorController {
   private preparedFreeze: { id: number; generation: number } | null = null
 
   constructor(readonly bridge: PromptxBridge, locale: Locale = 'en') {
-    this.store = createStore<EntryEditorState>({ snapshot: null, load: 'loading', error: null, dirty: false, action: null, locale, theme: 'light' })
+    this.store = createStore<EntryEditorState>({
+      snapshot: null, metadata: { title: '', tags: '' }, load: 'loading', error: null, dirty: false, action: null, locale, theme: 'light',
+    })
     this.editor = createEditorController({
       platform: bridge.platform,
       placeholder: translate(locale, 'editor.placeholder'),
@@ -43,8 +46,10 @@ export class EntryEditorController {
       if (snapshot === null || snapshot.freezeId !== null) return
       const text = this.editor.getText()
       this.bridge.entryEditor.update(text, this.editor.getSelection(), snapshot.generation)
-      const dirty = text !== snapshot.binding.savedBody
-      this.store.update(state => state.dirty === dirty ? state : { ...state, dirty })
+      this.store.update((state) => {
+        const dirty = isEntryDirty(snapshot, text, state.metadata)
+        return state.dirty === dirty ? state : { ...state, dirty }
+      })
     }))
   }
 
@@ -57,9 +62,14 @@ export class EntryEditorController {
       this.bridge.on('window.shown', () => { this.editor.focus() }),
       this.bridge.on('e2e', (command) => {
         const state = this.store.getState()
-        // 此事件只由主进程经测试模式的 Host 入口发送；仍走正常正文变更与镜像通道。
-        if (command.action === 'entry-edit-text' && typeof command.text === 'string' &&
-          state.load === 'ready' && state.snapshot?.freezeId === null) this.editor.replaceAll(command.text)
+        // 测试事件仍走与手动输入相同的正文和元数据镜像通道。
+        if (command.action !== 'entry-edit-text' || typeof command.text !== 'string' ||
+          state.load !== 'ready' || state.snapshot?.freezeId !== null) return
+        this.editor.replaceAll(command.text)
+        if (command.metadata !== undefined) {
+          this.updateMetadata('title', command.metadata.title)
+          this.updateMetadata('tags', command.metadata.tags.join(', '))
+        }
       }),
     )
     await this.load()
@@ -97,20 +107,28 @@ export class EntryEditorController {
     } finally {
       this.applying = false
     }
-    this.store.update(state => ({
-      ...state,
-      snapshot,
-      load: 'ready',
-      error: snapshot.error,
-      dirty: this.editor.getText() !== snapshot.binding.savedBody,
-      action: replacing ? null : state.action,
-    }))
+    this.store.update((state) => {
+      const metadata = replacing
+        ? { title: snapshot.metadata.title, tags: snapshot.metadata.tags }
+        : followSavedMetadata(state.metadata, previous, snapshot)
+      return {
+        ...state,
+        snapshot,
+        metadata,
+        load: 'ready',
+        error: snapshot.error,
+        dirty: isEntryDirty(snapshot, this.editor.getText(), metadata),
+        action: replacing ? null : state.action,
+      }
+    })
     if (snapshot.freezeId !== null) {
       const { id, generation } = this.preparedFreeze ?? { id: null, generation: null }
       if (id !== snapshot.freezeId || generation !== snapshot.generation) {
         this.preparedFreeze = { id: snapshot.freezeId, generation: snapshot.generation }
         // 先变为只读，再回传实际状态；相同代次的过期 snapshot.text 不能覆盖最后输入。
-        this.bridge.entryEditor.prepared(snapshot.freezeId, snapshot.generation, this.editor.getText(), this.editor.getSelection())
+        this.bridge.entryEditor.prepared(
+          snapshot.freezeId, snapshot.generation, this.editor.getText(), this.editor.getSelection(), this.store.getState().metadata,
+        )
       }
     } else {
       this.preparedFreeze = null
@@ -125,6 +143,15 @@ export class EntryEditorController {
       ariaLabel: translate(config.resolvedLocale, 'entryEditor.editorLabel'),
     })
     this.store.update(state => ({ ...state, locale: config.resolvedLocale, theme: config.resolvedTheme }))
+  }
+
+  updateMetadata(field: keyof EntryMetadataFields, value: string): void {
+    const { load, snapshot, metadata: previous } = this.store.getState()
+    if (load !== 'ready' || snapshot?.freezeId !== null || previous[field] === value) return
+    const metadata = { ...previous, [field]: value }
+    const text = this.editor.getText()
+    this.store.update(state => ({ ...state, metadata, dirty: isEntryDirty(snapshot, text, metadata) }))
+    this.bridge.entryEditor.update(text, this.editor.getSelection(), snapshot.generation, metadata)
   }
 
   async save(): Promise<void> {
@@ -186,5 +213,20 @@ export class EntryEditorController {
     this.loadToken++
     for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe()
     this.editor.unmount()
+  }
+}
+
+function followSavedMetadata(
+  fields: EntryMetadataFields, previous: EntryEditorSnapshot, snapshot: EntryEditorSnapshot,
+): EntryMetadataFields {
+  const previousTags = previous.metadata.savedTags.join(', ')
+  const savedTags = snapshot.metadata.savedTags.join(', ')
+  // 旧文件正文改动后可能改变推导出的标题，只有从旧基线到新基线都没有编辑时才跟随。
+  return {
+    title: previous.binding.title !== snapshot.binding.title && fields.title.trim() === previous.binding.title &&
+      previous.metadata.title.trim() === previous.binding.title &&
+      snapshot.metadata.title === snapshot.binding.title ? snapshot.metadata.title : fields.title,
+    tags: previousTags !== savedTags && fields.tags === previousTags && previous.metadata.tags === previousTags &&
+      snapshot.metadata.tags === savedTags ? snapshot.metadata.tags : fields.tags,
   }
 }

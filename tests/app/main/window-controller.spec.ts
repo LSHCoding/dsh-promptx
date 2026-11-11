@@ -71,7 +71,6 @@ interface Setup {
   shown: string[]
   hidden: string[]
   logger: MemoryLogger
-  clock: { now: number }
 }
 
 function setup(platform = 'darwin', options: { beforeShow?: () => void } = {}): Setup {
@@ -85,7 +84,6 @@ function setup(platform = 'darwin', options: { beforeShow?: () => void } = {}): 
   const shown: string[] = []
   const hidden: string[] = []
   const logger = new MemoryLogger()
-  const clock = { now: 10_000 }
   const controller = new WindowController({
     platform,
     window: win,
@@ -94,9 +92,8 @@ function setup(platform = 'darwin', options: { beforeShow?: () => void } = {}): 
     onShown: reason => shown.push(reason),
     onHidden: reason => hidden.push(reason),
     logger,
-    now: () => clock.now,
   })
-  return { controller, win, calls, shown, hidden, logger, clock }
+  return { controller, win, calls, shown, hidden, logger }
 }
 
 const ALL_SPACES = 'workspaces(true, visibleOnFullScreen=true, skip=true)'
@@ -174,12 +171,12 @@ describe('WindowController on macOS (design-spec 5.4, D10, TC-03)', () => {
     vi.advanceTimersByTime(100)
     win.focused = false
     calls.length = 0
-    expect(controller.toggle('shortcut')).toBe('focused')
+    controller.show('host')
     // 已经可见：不重新摆放位置，也不会再收到 show 事件，直接排上第二次 workspace 调用。
     expect(calls).toEqual([ALL_SPACES, 'app.show', 'win.show', 'win.focus', 'app.focus(steal)'])
     vi.advanceTimersByTime(50)
     expect(calls.at(-1)).toBe(THIS_SPACE)
-    expect(shown).toEqual(['shortcut', 'shortcut'])
+    expect(shown).toEqual(['shortcut', 'host'])
   })
 
   it('ignores a show event left over from an earlier sequence', () => {
@@ -200,16 +197,16 @@ describe('WindowController on macOS (design-spec 5.4, D10, TC-03)', () => {
 })
 
 describe('WindowController toggle (F-01)', () => {
-  it('shows when hidden, hides when visible and focused, focuses when visible but unfocused', () => {
+  it('shows when hidden and hides when visible with or without focus', () => {
     const { controller, win } = setup()
-    expect(controller.toggle('shortcut')).toBe('shown')
+    controller.toggle('shortcut')
     expect(win.visible && win.focused).toBe(true)
-    expect(controller.toggle('shortcut')).toBe('hidden')
+    controller.toggle('shortcut')
     expect(win.visible).toBe(false)
     controller.toggle('shortcut')
     win.focused = false
-    expect(controller.toggle('shortcut')).toBe('focused')
-    expect(win.visible && win.focused).toBe(true)
+    controller.toggle('shortcut')
+    expect(win.visible).toBe(false)
   })
 
   it('exposes the visible and focused state of the window', () => {
@@ -255,88 +252,10 @@ describe('WindowController placement', () => {
   })
 })
 
-describe('WindowController hide on blur (Q20)', () => {
-  function shownWithHideOnBlur(): Setup {
-    const context = setup()
-    context.controller.setHideOnBlur(true)
-    context.controller.show('shortcut')
-    vi.advanceTimersByTime(100)
-    return context
-  }
-
-  it('hides shortly after the window loses focus', () => {
-    const { controller, win, hidden } = shownWithHideOnBlur()
-    win.focused = false
-    controller.handleBlur()
-    vi.advanceTimersByTime(99)
-    expect(hidden).toEqual([])
-    vi.advanceTimersByTime(1)
-    expect(hidden).toEqual(['blur'])
-  })
-
-  it('does not hide when the option is off (default)', () => {
-    const { controller, win, hidden } = setup()
-    controller.show('shortcut')
-    win.focused = false
-    controller.handleBlur()
-    vi.advanceTimersByTime(1000)
-    expect(hidden).toEqual([])
-  })
-
-  it('does not hide while a dialog is open', () => {
-    const { controller, win, hidden } = shownWithHideOnBlur()
-    controller.setModalOpen(true)
-    win.focused = false
-    controller.handleBlur()
-    vi.advanceTimersByTime(1000)
-    expect(hidden).toEqual([])
-    controller.setModalOpen(false)
-    controller.handleBlur()
-    vi.advanceTimersByTime(100)
-    expect(hidden).toEqual(['blur'])
-  })
-
-  it('does not hide within 500 ms of a move or resize (dragging also blurs)', () => {
-    const { controller, win, hidden, clock } = shownWithHideOnBlur()
-    controller.noteMoveOrResize()
-    win.focused = false
-    clock.now += 400
-    controller.handleBlur()
-    vi.advanceTimersByTime(100)
-    expect(hidden).toEqual([])
-    clock.now += 500
-    controller.handleBlur()
-    vi.advanceTimersByTime(100)
-    expect(hidden).toEqual(['blur'])
-  })
-
-  it('does not hide when focus came back before the check', () => {
-    const { controller, win, hidden } = shownWithHideOnBlur()
-    win.focused = false
-    controller.handleBlur()
-    win.focused = true
-    controller.handleFocus()
-    vi.advanceTimersByTime(1000)
-    expect(hidden).toEqual([])
-  })
-
-  it('cancels a pending check when the option is turned off', () => {
-    const { controller, win, hidden } = shownWithHideOnBlur()
-    win.focused = false
-    controller.handleBlur()
-    controller.setHideOnBlur(false)
-    vi.advanceTimersByTime(1000)
-    expect(hidden).toEqual([])
-  })
-})
-
 describe('WindowController dispose', () => {
   it('cancels every timer and ignores later calls', () => {
-    const { controller, win, calls } = setup()
-    controller.setHideOnBlur(true)
+    const { controller, calls } = setup()
     controller.show('shortcut')
-    win.focused = false
-    controller.handleBlur()
     controller.dispose()
     expect(vi.getTimerCount()).toBe(0)
     calls.length = 0

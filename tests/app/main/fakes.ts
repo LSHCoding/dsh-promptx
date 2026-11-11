@@ -186,7 +186,6 @@ export class FakeWindow implements MainWindow {
 
   /** 用户拖动了窗口。 */
   moveTo(x: number, y: number): void {
-    this.emit('will-move')
     this.bounds = { ...this.bounds, x, y }
     this.emit('moved')
   }

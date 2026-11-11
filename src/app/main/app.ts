@@ -96,7 +96,7 @@ export const DEFAULT_TIMINGS: CompanionTimings = {
 
 /** 读写大文件、扫描库的请求给更长的超时（protocol.ts LONG_REQUEST_TIMEOUT_MS）。 */
 const LONG_METHODS: ReadonlySet<RendererForwardedMethod> = new Set([
-  'library.list', 'library.read', 'library.save', 'library.updateMeta', 'library.delete',
+  'library.list', 'library.read', 'library.suggestMetadata', 'library.save', 'library.updateMeta', 'library.delete',
   'trash.list', 'trash.read', 'trash.restore',
 ])
 
@@ -208,10 +208,7 @@ export class CompanionApp {
       locks,
       ...(options.platform.readSystemHotkeys === undefined ? {} : { readSystemHotkeys: options.platform.readSystemHotkeys }),
       locale: () => this.#locale(),
-      onTrigger: () => {
-        if (this.#entryEditor?.focused === true) this.#controller?.hide('shortcut')
-        else this.#controller?.toggle('shortcut')
-      },
+      onTrigger: () => { this.#controller?.toggle('shortcut') },
       onStatus: () => {
         this.#scheduleTrayUpdate()
         this.#reportStatus()
@@ -280,9 +277,6 @@ export class CompanionApp {
         e2eDone: (id, result) => {
           this.#e2eReplies.resolve(id, result)
         },
-        setModalOpen: (open) => {
-          this.#controller?.setModalOpen(open)
-        },
         setMinWidth: (width) => {
           this.#requestedMinWidth = width
           this.#applyMinimumSize()
@@ -344,23 +338,31 @@ export class CompanionApp {
         const stateRequested = editor.stateRequested
         // getState 表示子窗实际请求初始文档，不把它记作 OS 输入法或DOM挂载验收。
         await new Promise(resolve => setTimeout(resolve, 100))
-        editor.sendE2eText(command.text)
+        const { metadata } = command
+        editor.sendE2eText(command.text, metadata)
         const textDeadline = this.#platform.now() + 3000
         let echoed = editor.getState()
-        while ((!echoed.ok || echoed.value.text !== command.text) && this.#platform.now() < textDeadline) {
+        const rendererMatches = () => echoed.ok && echoed.value.text === command.text && (
+          metadata === undefined || (echoed.value.metadata.title === metadata.title && echoed.value.metadata.tags === metadata.tags.join(', '))
+        )
+        while (!rendererMatches() && this.#platform.now() < textDeadline) {
           await new Promise(resolve => setTimeout(resolve, 10))
           echoed = editor.getState()
         }
-        if (!echoed.ok || echoed.value.text !== command.text) return { ok: false, data: { stateRequested, rendererEchoed: false } }
+        if (!rendererMatches()) return { ok: false, data: { stateRequested, rendererEchoed: false } }
         const saved = await editor.save()
         const snapshot = editor.getState()
+        const metadataMatches = metadata === undefined || (snapshot.ok && snapshot.value.binding.title === metadata.title &&
+          snapshot.value.metadata.savedTags.length === metadata.tags.length &&
+          metadata.tags.every((tag, index) => tag === snapshot.value.metadata.savedTags[index]))
         const result = {
-          ok: saved.ok && stateRequested,
+          ok: saved.ok && stateRequested && metadataMatches,
           data: {
             windowCreated: editor.windowCreated, stateRequested,
             rendererEchoed: true,
             targetRelPath: snapshot.ok ? snapshot.value.binding.relPath : null,
             savedBodyMatches: snapshot.ok && snapshot.value.binding.savedBody === command.text,
+            metadataMatches,
           },
         }
         if (saved.ok) await editor.close()
@@ -459,7 +461,6 @@ export class CompanionApp {
     if (!this.#booted) return
     this.#applyThemeSource(config.theme)
     this.#refreshAppearance()
-    this.#controller?.setHideOnBlur(config.hideOnBlur)
     this.#shortcuts.apply(config.globalShortcut)
   }
 
@@ -505,10 +506,10 @@ export class CompanionApp {
       this.#pendingCommand = command
       return
     }
+    // 保留 Host toggle 命令的语义：可见但失焦时把焦点交回小窗。
     if (command === 'show') controller.show('host')
-    else if (command === 'hide') controller.hide('host')
-    else if (this.#entryEditor?.focused === true) controller.hide('host')
-    else controller.toggle('host')
+    else if (command === 'hide' || controller.focused || this.#entryEditor?.focused === true) controller.hide('host')
+    else controller.show('host')
   }
 
   /**
@@ -570,7 +571,6 @@ export class CompanionApp {
           return this.#peer.request(method, params)
         },
         changed: (libraryDir) => { window.send('library.entriesChanged', { libraryDir }) },
-        onBlur: () => { this.#controller?.handleBlur() },
         logger: this.#logger,
       })
       runTask(this.#logger, 'entry-editor-initialize', () => this.#entryEditor?.initialize() ?? Promise.resolve())
@@ -604,10 +604,7 @@ export class CompanionApp {
           this.#onVisibility('window.hidden', reason)
         },
         logger: this.#logger,
-        now: () => this.#platform.now(),
-        isRelatedFocused: () => this.#entryEditor?.protectingFocus ?? false,
       })
-      this.#controller.setHideOnBlur(this.#config?.hideOnBlur ?? false)
       this.#wireWindow(window)
     } catch (error) {
       // 没有窗口小程序就没有用处：退出码非零，交给 Host 的重启策略。
@@ -656,16 +653,6 @@ export class CompanionApp {
     })
     window.on('focus', () => {
       this.#events.emit('focus')
-      this.#controller?.handleFocus()
-    })
-    window.on('blur', () => {
-      this.#controller?.handleBlur()
-    })
-    window.on('will-move', () => {
-      this.#controller?.noteMoveOrResize()
-    })
-    window.on('will-resize', () => {
-      this.#controller?.noteMoveOrResize()
     })
     // 只记录用户在可见窗口上的拖动和缩放；隐藏时程序摆放的位置由摆放的地方自己记。
     // 否则窗口刚建好时的默认位置也会被记下来，第一次显示就不会出现在鼠标所在的屏幕上了。
@@ -698,8 +685,6 @@ export class CompanionApp {
       if (decision !== 'reload') return
       // 重新加载期间界面没有草稿：flush 跳过，等界面重新报告就绪（草稿重新读回之前编辑区不可编辑，由界面保证）。
       this.#rendererReady = false
-      // 崩溃时开着的对话框随界面一起没了，界面不会再发 setModalOpen(false)：这里清掉，否则失焦隐藏一直不生效（审查 CR-02）。
-      this.#controller?.setModalOpen(false)
       this.#rendererError = { code: 'promptx/companion/renderer-gone', detail: reason }
       this.#reportStatus()
       this.#scheduleTrayUpdate()
@@ -878,9 +863,7 @@ export class CompanionApp {
     const controller = this.#controller
     switch (action) {
       case 'toggle':
-        if (controller === null) return
-        if (controller.visible) controller.hide('tray')
-        else controller.show('tray')
+        controller?.toggle('tray')
         return
       case 'reset-position':
         this.#applyBounds(boundsForReset(this.#platform.primaryWorkArea()))

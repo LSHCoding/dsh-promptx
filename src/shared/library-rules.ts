@@ -293,9 +293,18 @@ function trimTagEdges(tag: string): string {
  */
 export function normalizeTags(input: string | readonly string[]): string[] {
   const parts = typeof input === 'string' ? [input] : input
+  return normalizeTagParts(parts.flatMap(part => part.split(TAG_SEPARATORS)))
+}
+
+/** 标题和标签表单使用逗号、分号或换行分隔，保留英文词组中间的空格。 */
+export function normalizeTagPhrases(input: readonly string[]): string[] {
+  return normalizeTagParts(input.flatMap(part => part.split(/[,，;；\r\n]+/)))
+}
+
+function normalizeTagParts(parts: readonly string[]): string[] {
   const seen = new Set<string>()
   const tags: string[] = []
-  for (const piece of parts.flatMap(part => part.split(TAG_SEPARATORS))) {
+  for (const piece of parts) {
     const tag = trimTagEdges(piece.trim()).trim()
     if (tag === '') continue
     const key = tagKey(tag)

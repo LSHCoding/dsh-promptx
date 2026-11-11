@@ -50,6 +50,7 @@ function withoutPid(status: PanelStatus): PanelStatus {
 const saveButton = (name = '保存'): HTMLButtonElement => screen.getByRole<HTMLButtonElement>('button', { name })
 const input = (label: string): HTMLInputElement => screen.getByLabelText<HTMLInputElement>(label)
 const switchOf = (label: string): HTMLButtonElement => screen.getByRole<HTMLButtonElement>('switch', { name: label })
+const middleDotLabel = '连打「·」转反引号 / 代码块'
 const statusLine = (container: HTMLElement): string => container.querySelector('[data-promptx-status]')?.textContent ?? ''
 const runtimeLine = (container: HTMLElement): string => container.querySelector('[data-promptx-runtime]')?.textContent ?? ''
 
@@ -66,7 +67,7 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     expect(saveButton().disabled).toBe(true)
 
     fireEvent.change(input('库目录'), { target: { value: '/Users/me/Prompts' } })
-    fireEvent.click(switchOf('失焦时隐藏'))
+    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
     // 改了又改回去的字段不算改动。
     fireEvent.click(switchOf('删除前确认'))
@@ -76,13 +77,13 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
 
     fireEvent.click(saveButton())
     expect(api.saveConfig).toHaveBeenCalledTimes(1)
-    expect(api.saveConfig).toHaveBeenCalledWith({ libraryDir: '/Users/me/Prompts', hideOnBlur: true, runtimeSource: 'mirror' })
+    expect(api.saveConfig).toHaveBeenCalledWith({ libraryDir: '/Users/me/Prompts', convertMiddleDot: false, runtimeSource: 'mirror' })
     await flush()
   })
 
   it('两个输入转换默认开启，各自暂存并随保存一次提交', async () => {
     const { api } = renderPage(makeStatus())
-    const dot = switchOf('连打「·」转反引号 / 代码块')
+    const dot = switchOf(middleDotLabel)
     const yen = switchOf('输入「¥」转「$」/ 行间公式')
     expect(dot.getAttribute('aria-checked')).toBe('true')
     expect(yen.getAttribute('aria-checked')).toBe('true')
@@ -114,7 +115,7 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     const saving = saveButton('保存中…')
     expect(saving.disabled).toBe(true)
     expect(input('库目录').disabled).toBe(true)
-    expect(switchOf('失焦时隐藏').disabled).toBe(true)
+    expect(switchOf(middleDotLabel).disabled).toBe(true)
     // 提交规范化后的值，输入框也换成它。
     expect(api.saveConfig).toHaveBeenCalledWith({ libraryDir: '/Users/me/Prompts' })
     expect(input('库目录').value).toBe('/Users/me/Prompts')
@@ -139,7 +140,7 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     api.saveConfig.mockResolvedValue({ ok: false, errors: { libraryDir: 'library-dir-reserved' } })
     renderPage(makeStatus(), { api })
     fireEvent.change(input('库目录'), { target: { value: '/Users/me/.dsh/sessions' } })
-    fireEvent.click(switchOf('失焦时隐藏'))
+    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.click(saveButton())
     await flush()
 
@@ -148,7 +149,7 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     expect(field.getAttribute('aria-invalid')).toBe('true')
     const message = document.getElementById(field.getAttribute('aria-describedby') ?? '')
     expect(message?.textContent).toBe('库目录不能放在 dsh 的数据目录里（默认的 promptx/library 除外）。')
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('false')
     expect(screen.getByRole('status').textContent).toBe('有设置没有通过检查，改动已保留，改好后再保存。')
     expect(saveButton().disabled).toBe(true)
 
@@ -160,9 +161,9 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
 
   it('Host 的其他字段错误也显示在各自下面', async () => {
     const api = fakeApi()
-    api.saveConfig.mockResolvedValue({ ok: false, errors: { hideOnBlur: 'value-invalid', globalShortcut: 'shortcut-invalid' } })
+    api.saveConfig.mockResolvedValue({ ok: false, errors: { convertMiddleDot: 'value-invalid', globalShortcut: 'shortcut-invalid' } })
     renderPage(makeStatus(), { api })
-    fireEvent.click(switchOf('失焦时隐藏'))
+    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
     fireEvent.click(saveButton())
     await flush()
@@ -276,12 +277,12 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
   it('保存成功后、Host 的新配置还没到：字段显示刚保存的值，「保存」不可用，不会把同样的改动再提交一遍', async () => {
     const { api, store } = renderPage(makeStatus())
     fireEvent.change(input('库目录'), { target: { value: '/Users/me/Prompts' } })
-    fireEvent.click(switchOf('失焦时隐藏'))
+    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.click(saveButton())
     await flush()
     expect(api.saveConfig).toHaveBeenCalledTimes(1)
     expect(input('库目录').value).toBe('/Users/me/Prompts')
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('false')
     expect(saveButton().disabled).toBe(true)
 
     // 期间来了一次配置没变的状态（例如下载进度）：仍按刚保存的值显示。
@@ -294,10 +295,10 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     // 新配置到了：和刚保存的一样，页面不跳动。
     act(() => {
       const next = makeStatus({ seq: 3 })
-      store.set({ status: { ...next, config: { ...next.config, libraryDir: '/Users/me/Prompts', hideOnBlur: true } }, error: null })
+      store.set({ status: { ...next, config: { ...next.config, libraryDir: '/Users/me/Prompts', convertMiddleDot: false } }, error: null })
     })
     expect(input('库目录').value).toBe('/Users/me/Prompts')
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('false')
     expect(saveButton().disabled).toBe(true)
 
     // 之后配置又被改回保存前的样子（别的页面改的）：照 Host 显示，刚才那次保存的值不会又冒出来。
@@ -305,7 +306,7 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
       store.set({ status: makeStatus({ seq: 4 }), error: null })
     })
     expect(input('库目录').value).toBe('')
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('false')
+    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('true')
     expect(saveButton().disabled).toBe(true)
   })
 
@@ -324,14 +325,14 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
 
   it('保存成功、新配置还没到时又改回原值：算改动，提交原值', async () => {
     const { api } = renderPage(makeStatus())
-    fireEvent.click(switchOf('失焦时隐藏'))
+    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.click(saveButton())
     await flush()
-    fireEvent.click(switchOf('失焦时隐藏'))
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(switchOf(middleDotLabel))
+    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('true')
     expect(saveButton().disabled).toBe(false)
     fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenLastCalledWith({ hideOnBlur: false })
+    expect(api.saveConfig).toHaveBeenLastCalledWith({ convertMiddleDot: true })
     await flush()
   })
 
@@ -391,11 +392,11 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const { unmount } = renderPage(makeStatus(), { api })
-      fireEvent.click(switchOf('失焦时隐藏'))
+      fireEvent.click(switchOf(middleDotLabel))
       fireEvent.click(saveButton())
       unmount()
       await act(async () => {
-        reply.resolve({ ok: false, errors: { hideOnBlur: 'value-invalid' } })
+        reply.resolve({ ok: false, errors: { convertMiddleDot: 'value-invalid' } })
         await reply.promise
       })
       expect(errors).not.toHaveBeenCalled()
@@ -414,14 +415,20 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
 })
 
 describe('开关', () => {
+  it('旧配置启用了失焦隐藏时，设置页也不显示该开关', () => {
+    const { config } = makeStatus()
+    renderPage(makeStatus({ config: { ...config, hideOnBlur: true } }))
+    expect(screen.queryByRole('switch', { name: '失焦时隐藏' })).toBeNull()
+  })
+
   it('role="switch" 和 aria-checked 跟着切换；点标签文字也能切换', () => {
     renderPage(makeStatus())
-    const hide = switchOf('失焦时隐藏')
-    expect(hide.getAttribute('aria-checked')).toBe('false')
-    fireEvent.click(hide)
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(screen.getByText('失焦时隐藏'))
-    expect(switchOf('失焦时隐藏').getAttribute('aria-checked')).toBe('false')
+    const dot = switchOf(middleDotLabel)
+    expect(dot.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(dot)
+    expect(dot.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(screen.getByText(middleDotLabel))
+    expect(dot.getAttribute('aria-checked')).toBe('true')
 
     const confirm = switchOf('删除前确认')
     expect(confirm.getAttribute('aria-checked')).toBe('true')
@@ -432,7 +439,7 @@ describe('开关', () => {
   it('每个控件都有可见的名字，可以用键盘到达', () => {
     renderPage(makeStatus())
     for (const label of ['库目录', '全局快捷键', '优化指令', '下载源']) expect(input(label).tabIndex).toBe(0)
-    for (const label of ['失焦时隐藏', '删除前确认']) expect(switchOf(label).tagName).toBe('BUTTON')
+    for (const label of [middleDotLabel, '删除前确认']) expect(switchOf(label).tagName).toBe('BUTTON')
     for (const name of ['录制', '重启小窗', '显示小窗', '删除运行时', '恢复默认指令', '保存']) {
       expect(screen.getByRole('button', { name }).tagName).toBe('BUTTON')
     }
@@ -482,7 +489,7 @@ describe('快捷键录制', () => {
     const api = fakeApi()
     api.saveConfig.mockImplementation(() => reply.promise)
     renderPage(makeStatus(), { api })
-    fireEvent.click(switchOf('失焦时隐藏'))
+    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.click(saveButton())
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '录制' }).disabled).toBe(true)
     await act(async () => {
@@ -899,7 +906,7 @@ describe('整页状态', () => {
     const { container } = renderPage(makeStatus(), { t: tEn, language: 'en' })
     expect(statusLine(container)).toBe('Running · Global shortcut ⌃P is active · Runtime 44.10.2')
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
-    expect(switchOf('Hide when inactive').getAttribute('aria-checked')).toBe('false')
+    expect(screen.queryByRole('switch', { name: 'Hide when inactive' })).toBeNull()
     expect(screen.getByRole('heading', { name: 'Prompt library' })).toBeTruthy()
   })
 })

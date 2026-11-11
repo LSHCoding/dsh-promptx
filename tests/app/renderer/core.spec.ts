@@ -5,6 +5,7 @@ import { SUCCESS_TOAST_MS } from '../../../src/app/renderer/controller/toasts.ts
 import {
   binding,
   chooseDialog,
+  confirmSaveForm,
   draftRecord,
   entry,
   fail,
@@ -14,6 +15,7 @@ import {
   ok,
   openDialog,
   round,
+  saveAndConfirm,
   session,
   settle,
   startController,
@@ -248,7 +250,7 @@ describe('清空（E-04）', () => {
     const controller = await start(bridge)
     controller.clear()
     type(controller, '新内容')
-    await controller.save()
+    await saveAndConfirm(controller)
     const [params] = bridge.callsTo('library.save')
     expect(params?.binding).toBeNull()
     expect(params?.text).toBe('新内容')
@@ -306,6 +308,7 @@ describe('其他窗口级快捷键（技术方案 5.5）', () => {
     const controller = await start(bridge)
     type(controller, '正文')
     controller.handleKeydown(keyEvent({ key: 's', code: 'KeyS', metaKey: true }))
+    await confirmSaveForm(controller)
     await settle()
     expect(bridge.callsTo('library.save')).toHaveLength(1)
   })
@@ -380,6 +383,7 @@ describe('端到端测试命令', () => {
 
   it('save-to-library：走真实的保存，回复耗时和相对路径', async () => {
     const bridge = new FakeBridge()
+    bridge.handle('library.suggestMetadata', () => ok({ metadata: null }))
     bridge.handle('library.save', params => ok({ kind: 'saved', binding: binding('e2e.md', params.text), entry: entry('e2e.md'), created: true }))
     const controller = await start(bridge)
     type(controller, '要保存的内容')
@@ -388,6 +392,8 @@ describe('端到端测试命令', () => {
     const [, result] = bridge.e2eDone.mock.calls[0] ?? []
     expect(result?.ok).toBe(true)
     expect(result?.data.relPath).toBe('e2e.md')
+    expect(result?.data.metadataFallback).toBe(true)
+    expect(bridge.callsTo('library.save')[0]?.metadata).toEqual({ title: 'E2E Prompt 6', tags: ['E2E Save'] })
     expect(typeof result?.data.ms).toBe('number')
   })
 
@@ -440,20 +446,18 @@ describe('读取失败的原因', () => {
 })
 
 describe('对话框的排队', () => {
-  it('同一时间只显示一个，后来的排队；打开和关闭都通知主进程', async () => {
+  it('同一时间只显示一个，后来的排队', async () => {
     const bridge = new FakeBridge()
     const controller = await start(bridge)
     const first = controller.dialogs.open({ title: '一', buttons: [{ id: 'a', label: 'A' }], defaultButton: 'a', escapeButton: 'a' })
     const second = controller.dialogs.open({ title: '二', buttons: [{ id: 'b', label: 'B' }], defaultButton: 'b', escapeButton: 'b' })
     expect(openDialog(controller).title).toBe('一')
-    expect(bridge.window.setModalOpen).toHaveBeenLastCalledWith(true)
     chooseDialog(controller, 'a')
     expect(await first).toEqual({ button: 'a' })
     expect(openDialog(controller).title).toBe('二')
     chooseDialog(controller, 'b')
     expect(await second).toEqual({ button: 'b' })
     expect(controller.store.getState().dialog).toBeNull()
-    expect(bridge.window.setModalOpen).toHaveBeenLastCalledWith(false)
   })
 
   it('id 对不上当前对话框的点击（重复点击）被忽略', async () => {

@@ -11,6 +11,7 @@ import type {
   FolderSel,
   LibraryScope,
   MetaPatch,
+  PromptMetadata,
   RestoreTarget,
   SaveMode,
   TextSelection,
@@ -21,6 +22,7 @@ export interface CompanionHandlerDeps {
   entryDraft: DraftApi
   library: LibraryApi
   optimize: OptimizeApi
+  suggestMetadata: (text: string) => Promise<PromptMetadata | null>
   openSettings: () => { open: string | null; navigated: boolean }
   onStatus: (status: CompanionStatus) => void
   onRestartRequest: () => void
@@ -51,7 +53,17 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
   peer.handle('entryDraft.save', (params) => {
     if (!entryDraftLoaded) return Promise.reject(new PromptxError('promptx/draft/unreadable', 'entry draft not loaded on this connection'))
     const p = record(params)
-    return deps.entryDraft.save({ text: str(p.text, 'text'), selection: selection(p.selection), binding: binding(p.binding) })
+    const draft = { text: str(p.text, 'text'), selection: selection(p.selection), binding: binding(p.binding) }
+    if (p.entryMetadata === undefined) return deps.entryDraft.save(draft)
+    const metadata = record(p.entryMetadata)
+    return deps.entryDraft.save({
+      ...draft,
+      entryMetadata: {
+        title: str(metadata.title, 'entryMetadata.title'),
+        tags: str(metadata.tags, 'entryMetadata.tags'),
+        savedTags: strings(metadata.savedTags, 'entryMetadata.savedTags'),
+      },
+    })
   })
 
   peer.handle('library.list', (params) => {
@@ -65,6 +77,9 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
     })
   })
   peer.handle('library.read', params => deps.library.read(str(record(params).relPath, 'relPath')))
+  peer.handle('library.suggestMetadata', async params => ({
+    metadata: await deps.suggestMetadata(str(record(params).text, 'text')),
+  }))
   peer.handle('library.save', (params) => {
     const p = record(params)
     return deps.library.save({
@@ -73,11 +88,18 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
       folder: nullableStr(p.folder, 'folder'),
       mode: oneOf<SaveMode>(p.mode, ['normal', 'saveAsNew', 'addFrontMatter'], 'mode'),
       requestId: str(p.requestId, 'requestId'),
+      ...(p.metadata === undefined ? {} : { metadata: metadataPatch(record(p.metadata), 'metadata') }),
+      ...(p.libraryDir === undefined ? {} : { libraryDir: str(p.libraryDir, 'libraryDir') }),
     })
   })
   peer.handle('library.updateMeta', (params) => {
     const p = record(params)
-    return deps.library.updateMeta({ relPath: str(p.relPath, 'relPath'), patch: metaPatch(p.patch), addFrontMatter: bool(p.addFrontMatter, 'addFrontMatter') })
+    return deps.library.updateMeta({
+      relPath: str(p.relPath, 'relPath'),
+      patch: metaPatch(p.patch),
+      addFrontMatter: bool(p.addFrontMatter, 'addFrontMatter'),
+      ...(p.tagPhrases === undefined ? {} : { tagPhrases: bool(p.tagPhrases, 'tagPhrases') }),
+    })
   })
   peer.handle('library.delete', params => deps.library.delete(str(record(params).relPath, 'relPath')))
   peer.handle('trash.list', params => deps.library.trashList(str(record(params).query, 'query')))
@@ -132,6 +154,11 @@ function record(value: unknown): Record<string, unknown> {
 function str(value: unknown, field: string): string {
   if (typeof value !== 'string') throw invalid(field)
   return value
+}
+
+function strings(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) throw invalid(field)
+  return value as string[]
 }
 
 function nullableStr(value: unknown, field: string): string | null {
@@ -203,12 +230,14 @@ export function companionStatus(value: unknown): CompanionStatus | null {
 
 function metaPatch(value: unknown): MetaPatch {
   const v = record(value)
-  const patch: MetaPatch = {}
-  if (v.title !== undefined) patch.title = str(v.title, 'patch.title')
-  if (v.tags !== undefined) {
-    if (!Array.isArray(v.tags) || v.tags.some(tag => typeof tag !== 'string')) throw invalid('patch.tags')
-    patch.tags = v.tags as string[]
-  }
+  const patch: MetaPatch = metadataPatch(v, 'patch')
   if (v.favorite !== undefined) patch.favorite = bool(v.favorite, 'patch.favorite')
+  return patch
+}
+
+function metadataPatch(value: Record<string, unknown>, field: string): Partial<PromptMetadata> {
+  const patch: Partial<PromptMetadata> = {}
+  if (value.title !== undefined) patch.title = str(value.title, `${field}.title`)
+  if (value.tags !== undefined) patch.tags = strings(value.tags, `${field}.tags`)
   return patch
 }

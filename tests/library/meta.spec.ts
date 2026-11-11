@@ -96,6 +96,19 @@ describe('rename and tags (L-09)', () => {
     expect(await readText(root, 'a.md')).toBe('---\ntitle: T\ntags: a, b\nfavorite: true\n---\nbody')
   })
 
+  it('preserves tag phrases on sidebar renames and rejects a different duplicate title', async () => {
+    const root = await temp.make()
+    const service = makeService(root)
+    await writeTree(root, { 'a.md': '---\ntitle: Old\ntags: [Code Review, Test Cases] # keep\n---\nbody', 'b.md': '# Taken\n' })
+    const params = { relPath: 'a.md', addFrontMatter: false, tagPhrases: true }
+    await expect(service.updateMeta({ ...params, patch: { title: 'Taken' } })).rejects
+      .toMatchObject({ code: 'promptx/library/duplicate-title' })
+    savedMeta(await service.updateMeta({ ...params, patch: { title: 'New' } }))
+    expect(await readText(root, 'a.md')).toContain('tags: [Code Review, Test Cases] # keep')
+    const result = savedMeta(await service.updateMeta({ ...params, patch: { tags: ['Quick Start', '边界情况'] } }))
+    expect(result.entry.tags).toEqual(['Quick Start', '边界情况'])
+  })
+
   it('does not touch the file when nothing changes', async () => {
     const root = await temp.make()
     await writeTree(root, { 'a.md': BASE })

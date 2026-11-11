@@ -6,6 +6,7 @@ import type {
   CompanionConfig,
   CompanionStatus,
   DraftRecord,
+  EntryMetadataDraft,
   ErrorInfo,
   LibraryListParams,
   LibraryListResult,
@@ -14,6 +15,7 @@ import type {
   MetaResult,
   OptimizeEvent,
   OptimizeSession,
+  PromptMetadata,
   RestoreResult,
   RestoreTarget,
   SaveMode,
@@ -26,7 +28,8 @@ import type {
 // 2：status 加了 locale 和 rendererError（审查 F5、CR-03）。
 // 3：CompanionConfig 增加两个中文输入转换开关。
 // 4：独立条目编辑恢复草稿，与主窗口草稿隔离。
-export const PROTOCOL_VERSION = 4
+// 5：新条目生成与确认元数据，独立编辑器可恢复未保存的标题和标签。
+export const PROTOCOL_VERSION = 5
 
 type Empty = Record<string, never>
 
@@ -54,7 +57,7 @@ export type E2eCommand =
   | { action: 'core-path'; text: string }
   | { action: 'save-to-library' }
   /** 测试模式：经过真实子窗载入、编辑和保存，不能由普通运行模式调用。 */
-  | { action: 'edit-entry'; relPath: string; text: string }
+  | { action: 'edit-entry'; relPath: string; text: string; metadata?: PromptMetadata }
   | { action: 'state' }
   /** Host 自己处理：计时读取一条库条目（N-01 的 256 KiB 读取）。 */
   | { action: 'host-read'; relPath: string }
@@ -87,12 +90,13 @@ export interface CompanionRequests {
   'draft.load': { params: Empty; result: { record: DraftRecord | null } }
   'draft.save': { params: { text: string; selection: TextSelection | null; binding: Binding | null }; result: { updatedAt: string } }
   'entryDraft.load': { params: Empty; result: { record: DraftRecord | null } }
-  'entryDraft.save': { params: { text: string; selection: TextSelection | null; binding: Binding | null }; result: { updatedAt: string } }
+  'entryDraft.save': { params: { text: string; selection: TextSelection | null; binding: Binding | null; entryMetadata?: EntryMetadataDraft }; result: { updatedAt: string } }
   'library.list': { params: LibraryListParams; result: LibraryListResult }
   'library.read': { params: { relPath: string }; result: LibraryReadResult }
+  'library.suggestMetadata': { params: { text: string }; result: { metadata: PromptMetadata | null } }
   /** requestId 用于新建文件去重：同一个 requestId 重发时返回已经建好的文件，不再建第二个。 */
-  'library.save': { params: { text: string; binding: Binding | null; folder: string | null; mode: SaveMode; requestId: string }; result: SaveResult }
-  'library.updateMeta': { params: { relPath: string; patch: MetaPatch; addFrontMatter: boolean }; result: MetaResult }
+  'library.save': { params: { text: string; binding: Binding | null; folder: string | null; mode: SaveMode; requestId: string; metadata?: Partial<PromptMetadata>; libraryDir?: string }; result: SaveResult }
+  'library.updateMeta': { params: { relPath: string; patch: MetaPatch; addFrontMatter: boolean; tagPhrases?: boolean }; result: MetaResult }
   'library.delete': { params: { relPath: string }; result: { trashFile: string } }
   'trash.list': { params: { query: string }; result: TrashListResult }
   'trash.read': { params: { file: string }; result: { entry: TrashEntry; body: string } }
@@ -142,7 +146,7 @@ export type HostNotificationMethod = keyof HostNotifications
 export const COMPANION_REQUEST_METHODS = [
   'hello', 'draft.load', 'draft.save',
   'entryDraft.load', 'entryDraft.save',
-  'library.list', 'library.read', 'library.save', 'library.updateMeta', 'library.delete',
+  'library.list', 'library.read', 'library.suggestMetadata', 'library.save', 'library.updateMeta', 'library.delete',
   'trash.list', 'trash.read', 'trash.restore',
   'optimize.start', 'optimize.followup', 'optimize.retry', 'optimize.cancel', 'optimize.clear', 'optimize.state',
   'host.openSettings',
@@ -161,7 +165,7 @@ export const HOST_NOTIFICATION_METHODS = [
 /** 渲染进程可以经主进程转给 Host 的请求（白名单）。hello 由主进程自己发。 */
 export const RENDERER_FORWARDED_METHODS = [
   'draft.load', 'draft.save',
-  'library.list', 'library.read', 'library.save', 'library.updateMeta', 'library.delete',
+  'library.list', 'library.read', 'library.suggestMetadata', 'library.save', 'library.updateMeta', 'library.delete',
   'trash.list', 'trash.read', 'trash.restore',
   'optimize.start', 'optimize.followup', 'optimize.retry', 'optimize.cancel', 'optimize.clear', 'optimize.state',
 ] as const satisfies readonly CompanionRequestMethod[]

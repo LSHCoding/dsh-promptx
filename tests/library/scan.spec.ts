@@ -200,16 +200,16 @@ describe('library scan (L-01, L-03, design-spec 7.2)', () => {
 })
 
 describe('library index cache (N-01)', () => {
-  it('rereads only files whose mtime or size changed', async () => {
+  it('rereads an edited file even when the editor preserves mtime and size', async () => {
     const root = await temp.make()
     await writeTree(root, { 'a.md': '# AAAA\n', 'b.md': '# BBBB\n' })
     await utimes(join(root, 'a.md'), TIME, TIME)
     const service = makeService(root)
     expect(byPath((await listAll(service)).entries).get('a.md')?.title).toBe('AAAA')
-    // 同样大小、同样修改时间：缓存命中，不会重读，看到的仍是旧标题
+    // 外部编辑器保持 mtime 和文件大小时，ctime 仍能反映写入。
     await writeFile(join(root, 'a.md'), '# CCCC\n')
     await utimes(join(root, 'a.md'), TIME, TIME)
-    expect(byPath((await listAll(service)).entries).get('a.md')?.title).toBe('AAAA')
+    expect(byPath((await listAll(service)).entries).get('a.md')?.title).toBe('CCCC')
     // 大小变了：重读
     await writeFile(join(root, 'a.md'), '# DDDDDD\n')
     expect(byPath((await listAll(service)).entries).get('a.md')?.title).toBe('DDDDDD')

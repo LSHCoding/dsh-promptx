@@ -24,6 +24,7 @@ import type {
   OptimizeSession,
 } from '../../../src/shared/types.ts'
 import { AppController } from '../../../src/app/renderer/controller/app.ts'
+import { CONFIRM_METADATA_BUTTON, type SaveOutcome } from '../../../src/app/renderer/controller/library-save.ts'
 
 type Params<M extends RendererForwardedMethod> = CompanionRequests[M]['params']
 type Result<M extends RendererForwardedMethod> = CompanionRequests[M]['result']
@@ -142,7 +143,8 @@ export class FakeBridge implements PromptxBridge {
   readonly listeners = new Map<BridgeEventName, Set<(payload: never) => void>>()
   bounds: WindowBounds = { x: 400, y: 100, width: 980, height: 600, workArea: { x: 0, y: 0, width: 1920, height: 1080 } }
   configValue: ResolvedConfig | null = config()
-  storedPrefs: Prefs = structuredClone(DEFAULT_PREFS)
+  // 多数控制器用例从用户上次收起库的偏好开始；首次启动的用例显式使用 DEFAULT_PREFS。
+  storedPrefs: Prefs = { ...structuredClone(DEFAULT_PREFS), panes: { ...DEFAULT_PREFS.panes, library: false } }
 
   readonly ready = vi.fn<PromptxBridge['ready']>()
   readonly flushed = vi.fn<PromptxBridge['flushed']>()
@@ -165,7 +167,6 @@ export class FakeBridge implements PromptxBridge {
     getBounds: vi.fn(async (): Promise<WindowBounds> => ({ ...this.bounds })),
     setWidth: vi.fn(async (width: number, anchor: 'left' | 'right'): Promise<WindowBounds> => this.applyWidth(width, anchor)),
     openSettings: vi.fn(async (): Promise<BridgeResult<{ navigated: boolean }>> => ok({ navigated: true })),
-    setModalOpen: vi.fn<(open: boolean) => void>(),
     setMinWidth: vi.fn<(width: number) => void>(),
   }
 
@@ -182,6 +183,7 @@ export class FakeBridge implements PromptxBridge {
     this.handle('draft.save', () => ok({ updatedAt: '2026-11-08T00:00:00Z' }))
     this.handle('optimize.state', () => ok({ session: null }))
     this.handle('library.list', () => ok(listResult([])))
+    this.handle('library.suggestMetadata', () => ok({ metadata: { title: '建议标题', tags: ['Writing Guide', '示例'] } }))
   }
 
   handle<M extends RendererForwardedMethod>(method: M, handler: Handler<M>): void {
@@ -264,6 +266,21 @@ export function openDialog(controller: AppController): NonNullable<ReturnType<Ap
 /** 点对话框的某个按钮。 */
 export function chooseDialog(controller: AppController, button: string): void {
   controller.resolveDialog(openDialog(controller).id, { button })
+}
+
+/** 测试只关注写入结果时，确认模型预填的标题和标签。 */
+export async function confirmSaveForm(controller: AppController): Promise<void> {
+  await settle()
+  const { dialog } = controller.store.getState()
+  if (dialog?.defaultButton === CONFIRM_METADATA_BUTTON && dialog.form !== undefined) {
+    controller.resolveDialog(dialog.id, { button: CONFIRM_METADATA_BUTTON, form: dialog.form })
+  }
+}
+
+export async function saveAndConfirm(controller: AppController): Promise<SaveOutcome> {
+  const saving = controller.save()
+  await confirmSaveForm(controller)
+  return saving
 }
 
 /**

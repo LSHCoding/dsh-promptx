@@ -62,7 +62,6 @@ function createMocks() {
     ready: vi.fn((_info: { editorMounted: boolean; draftLoaded: boolean }) => {}),
     flushed: vi.fn((_id: number) => {}),
     e2eDone: vi.fn((_id: number, _result: { ok: boolean; data: Record<string, unknown> }) => {}),
-    setModalOpen: vi.fn((_open: boolean) => {}),
     setMinWidth: vi.fn((_width: number) => {}),
     setPrefs: vi.fn((_patch: Record<string, unknown>) => {}),
   }
@@ -147,16 +146,16 @@ describe('registerIpcHandlers: sender check', () => {
     ipc.send(IPC_CHANNELS.ready, OTHER, { editorMounted: true, draftLoaded: true })
     ipc.send(IPC_CHANNELS.flushed, OTHER, 1)
     ipc.send(IPC_CHANNELS.prefsSet, OTHER, { panes: {} })
-    ipc.send(IPC_CHANNELS.windowSetModalOpen, null, true)
+    ipc.send(IPC_CHANNELS.windowSetMinWidth, null, 850)
     expect(handlers.ready).not.toHaveBeenCalled()
     expect(handlers.flushed).not.toHaveBeenCalled()
     expect(handlers.setPrefs).not.toHaveBeenCalled()
-    expect(handlers.setModalOpen).not.toHaveBeenCalled()
+    expect(handlers.setMinWidth).not.toHaveBeenCalled()
     expect(rejected).toEqual([
       [IPC_CHANNELS.ready, 'sender'],
       [IPC_CHANNELS.flushed, 'sender'],
       [IPC_CHANNELS.prefsSet, 'sender'],
-      [IPC_CHANNELS.windowSetModalOpen, 'sender'],
+      [IPC_CHANNELS.windowSetMinWidth, 'sender'],
     ])
   })
 })
@@ -243,9 +242,6 @@ describe('registerIpcHandlers: window and prefs', () => {
     expect(handlers.e2eDone).toHaveBeenNthCalledWith(1, 4, { ok: true, data: { ms: 3 } })
     expect(handlers.e2eDone).toHaveBeenNthCalledWith(2, 5, { ok: false, data: {} })
     expect(handlers.e2eDone).toHaveBeenCalledTimes(2)
-    ipc.send(IPC_CHANNELS.windowSetModalOpen, OWN, true)
-    ipc.send(IPC_CHANNELS.windowSetModalOpen, OWN, 1)
-    expect(handlers.setModalOpen).toHaveBeenCalledTimes(1)
     ipc.send(IPC_CHANNELS.windowSetMinWidth, OWN, 850)
     ipc.send(IPC_CHANNELS.windowSetMinWidth, OWN, Number.POSITIVE_INFINITY)
     expect(handlers.setMinWidth).toHaveBeenCalledTimes(1)
@@ -253,7 +249,7 @@ describe('registerIpcHandlers: window and prefs', () => {
     ipc.send(IPC_CHANNELS.prefsSet, OWN, ['panes'])
     expect(handlers.setPrefs).toHaveBeenCalledTimes(1)
     expect(rejected.map(([, why]) => why).every(why => why === 'arguments')).toBe(true)
-    expect(rejected).toHaveLength(7)
+    expect(rejected).toHaveLength(6)
   })
 })
 

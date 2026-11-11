@@ -129,7 +129,7 @@ describe('planPaneOpen：最后收起另一侧', () => {
     expect(plan.editorWidth).toBe(1024 - LIBRARY)
   })
 
-  it('打开会话栏时收起的是库侧栏', () => {
+  it('打开会话栏时保留库侧栏', () => {
     const plan = planPaneOpen(input({
       window: { x: 0, width: 1024 },
       workArea: { x: 0, width: 1024 },
@@ -137,8 +137,8 @@ describe('planPaneOpen：最后收起另一侧', () => {
       opening: 'session',
     }))
     expect(plan.window).toEqual({ x: 0, width: 1024 })
-    expect(plan.collapse).toBe('library')
-    expect(plan.editorWidth).toBe(1024 - SESSION)
+    expect(plan.collapse).toBeNull()
+    expect(plan.editorWidth).toBe(1024 - LIBRARY - SESSION)
   })
 
   it('编辑区本来就比最小宽度窄时，不再压，直接收起另一侧', () => {

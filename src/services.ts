@@ -5,14 +5,12 @@ import type { Logger } from '@deepseek-ai/cordis'
 import type { CompanionNotifications, CompanionRequests, HelloResult, HostNotifications, HostRequests } from './shared/protocol.ts'
 import type { RpcPeer } from './shared/rpc.ts'
 import type {
-  Binding,
   CompanionState,
   DraftRecord,
   ErrorInfo,
   LibraryListParams,
   LibraryListResult,
   LibraryReadResult,
-  MetaPatch,
   MetaResult,
   OptimizeEvent,
   OptimizeSession,
@@ -20,9 +18,7 @@ import type {
   RestoreTarget,
   RuntimeSource,
   RuntimeStatus,
-  SaveMode,
   SaveResult,
-  TextSelection,
   TrashEntry,
   TrashListResult,
 } from './shared/types.ts'
@@ -63,8 +59,8 @@ export interface LibraryApi {
   list(params: LibraryListParams): Promise<LibraryListResult>
   read(relPath: string): Promise<LibraryReadResult>
   /** requestId：新建文件时用于去重，同一个 requestId 重发返回已经建好的文件（Host 进程内记住最近的 100 个）。 */
-  save(params: { text: string; binding: Binding | null; folder: string | null; mode: SaveMode; requestId: string }): Promise<SaveResult>
-  updateMeta(params: { relPath: string; patch: MetaPatch; addFrontMatter: boolean }): Promise<MetaResult>
+  save(params: CompanionRequests['library.save']['params']): Promise<SaveResult>
+  updateMeta(params: CompanionRequests['library.updateMeta']['params']): Promise<MetaResult>
   delete(relPath: string): Promise<{ trashFile: string }>
   trashList(query: string): Promise<TrashListResult>
   trashRead(file: string): Promise<{ entry: TrashEntry; body: string }>
@@ -84,7 +80,7 @@ export interface DraftApi {
   /** 没有记录时返回 null；打不开或记录不合法时抛 PromptxError('promptx/draft/unreadable')。成功后才允许 save。 */
   load(): Promise<DraftRecord | null>
   /** 还没有成功 load 过、或存储单元不可用时抛 promptx/draft/unreadable；写入失败抛 promptx/draft/write-failed。 */
-  save(input: { text: string; selection: TextSelection | null; binding: Binding | null }): Promise<{ updatedAt: string }>
+  save(input: CompanionRequests['entryDraft.save']['params']): Promise<{ updatedAt: string }>
   /** 等在途写入完成后关闭。 */
   close(): Promise<void>
 }

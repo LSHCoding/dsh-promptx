@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import type { BridgeResult } from '../../../src/shared/bridge.ts'
-import type { LibraryListResult, SaveResult } from '../../../src/shared/types.ts'
+import type { LibraryListResult, PromptMetadata, SaveResult } from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import {
   binding,
+  confirmSaveForm,
   config,
   deferred,
   draftRecord,
@@ -12,7 +13,9 @@ import {
   FakeBridge,
   listResult,
   ok,
+  openDialog,
   readResult,
+  saveAndConfirm,
   settle,
   startController,
   toastText,
@@ -47,13 +50,83 @@ function created(relPath: string, text: string): BridgeResult<SaveResult> {
 }
 
 describe('主窗口保存始终新建', () => {
+  it('先生成并预填标题和标签，取消确认时保留正文与选区', async () => {
+    const bridge = new FakeBridge()
+    const suggestion = deferred<BridgeResult<{ metadata: PromptMetadata | null }>>()
+    bridge.handle('library.suggestMetadata', () => suggestion.promise)
+    const controller = await start(bridge)
+    type(controller, '待保存的正文')
+    const selection = controller.editor.getSelection()
+    const saving = controller.save()
+    expect(controller.store.getState().draft.librarySuggesting).toBe(true)
+    expect(bridge.callsTo('library.suggestMetadata')).toEqual([{ text: '待保存的正文' }])
+    expect(bridge.callsTo('library.save')).toEqual([])
+    expect(await controller.copyAndHide()).toEqual({ ok: true })
+    expect(bridge.window.copyAndHide).toHaveBeenCalledWith('待保存的正文')
+
+    suggestion.resolve(ok({ metadata: { title: '写作方案', tags: ['Writing Guide', '复盘'] } }))
+    await settle()
+    const dialog = openDialog(controller)
+    expect(dialog.form).toEqual({ title: '写作方案', tags: 'Writing Guide, 复盘' })
+    expect(controller.store.getState().draft.librarySuggesting).toBe(false)
+    expect(bridge.callsTo('library.save')).toEqual([])
+    controller.escapeDialog()
+    expect(await saving).toBe('cancelled')
+    expect(controller.editor.getText()).toBe('待保存的正文')
+    expect(controller.editor.getSelection()).toEqual(selection)
+    expect(bridge.callsTo('library.save')).toEqual([])
+  })
+
+  it.each(['no-result', 'timeout'] as const)('生成失败（%s）可手填保存，重名时保留输入供修正', async (outcome) => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.suggestMetadata', () => outcome === 'no-result' ? ok({ metadata: null }) : fail('promptx/channel/timeout'))
+    bridge.handle('library.save', params => params.metadata?.title === '重名'
+      ? fail('promptx/library/duplicate-title')
+      : created('新的标题.md', params.text))
+    const controller = await start(bridge)
+    type(controller, '原始草稿')
+    const saving = controller.save()
+    await settle()
+    const first = openDialog(controller)
+    expect(first.form).toEqual({ title: '', tags: '' })
+    expect(first.message).toBeTruthy()
+    controller.resolveDialog(first.id, { button: first.defaultButton, form: { title: '重名', tags: ' Writing Guide，复盘 ' } })
+    await settle()
+    const correction = openDialog(controller)
+    expect(correction.error).toBeTruthy()
+    expect(correction.form).toEqual({ title: '重名', tags: ' Writing Guide，复盘 ' })
+    controller.resolveDialog(correction.id, { button: correction.defaultButton, form: { title: ' 新的标题 ', tags: ' Writing Guide，复盘 ' } })
+    expect(await saving).toBe('saved')
+    expect(bridge.callsTo('library.save')[1]).toMatchObject({
+      text: '原始草稿',
+      libraryDir: config().libraryDir,
+      metadata: { title: '新的标题', tags: ['Writing Guide', '复盘'] },
+    })
+    expect(bridge.callsTo('library.suggestMetadata')).toHaveLength(1)
+  })
+
+  it.each(['new-library', 'dispose'] as const)('生成中%s，结束后不显示过时的确认界面', async (action) => {
+    const bridge = new FakeBridge()
+    const suggestion = deferred<BridgeResult<{ metadata: PromptMetadata | null }>>()
+    bridge.handle('library.suggestMetadata', () => suggestion.promise)
+    const controller = await start(bridge)
+    type(controller, '待保存')
+    const saving = controller.save()
+    if (action === 'dispose') controller.dispose()
+    else bridge.emit('config', config({ libraryDir: '/new-library' }))
+    suggestion.resolve(ok({ metadata: null }))
+    expect(await saving).toBe('cancelled')
+    expect(controller.store.getState().dialog).toBeNull()
+    expect(bridge.callsTo('library.save')).toEqual([])
+  })
+
   it('新建后保持无绑定，保留正文选区，底栏标记已保存', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.save', params => created('写作助手.md', params.text))
     const controller = await start(bridge)
     type(controller, '# 写作助手\n\n正文')
     const selection = controller.editor.getSelection()
-    expect(await controller.save()).toBe('saved')
+    expect(await saveAndConfirm(controller)).toBe('saved')
     expect(bridge.callsTo('library.save')[0]).toMatchObject({ text: '# 写作助手\n\n正文', binding: null, folder: null, mode: 'normal' })
     expect(bridge.callsTo('library.save')[0]?.requestId).toMatch(/^[0-9a-f]{32}$/)
     expect(controller.draft.binding).toBeNull()
@@ -69,11 +142,11 @@ describe('主窗口保存始终新建', () => {
     let count = 0
     bridge.handle('library.save', params => created(`${++count}.md`, params.text))
     const controller = await start(bridge)
-    await controller.save()
+    await saveAndConfirm(controller)
     type(controller, 'B')
-    await controller.save()
+    await saveAndConfirm(controller)
     type(controller, 'C')
-    await controller.save()
+    await saveAndConfirm(controller)
     const calls = bridge.callsTo('library.save')
     expect(calls.map(call => call.text)).toEqual(['A', 'AB', 'ABC'])
     expect(calls.every(call => call.binding === null && call.mode === 'normal')).toBe(true)
@@ -87,8 +160,8 @@ describe('主窗口保存始终新建', () => {
     bridge.handle('library.save', params => created('同名.md', params.text))
     const controller = await start(bridge)
     type(controller, '内容')
-    await controller.save()
-    await controller.save()
+    await saveAndConfirm(controller)
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save')).toHaveLength(2)
     expect(bridge.callsTo('library.save')[0]?.requestId).not.toBe(bridge.callsTo('library.save')[1]?.requestId)
   })
@@ -98,7 +171,7 @@ describe('主窗口保存始终新建', () => {
       const bridge = new FakeBridge()
       const controller = await start(bridge)
       type(controller, body)
-      expect(await controller.save()).toBe('blank')
+      expect(await saveAndConfirm(controller)).toBe('blank')
       expect(bridge.callsTo('library.save')).toEqual([])
       expect(toastText(controller)).toBe('没有可保存的内容。')
     }
@@ -109,7 +182,7 @@ describe('主窗口保存始终新建', () => {
     bridge.handle('draft.load', () => fail('promptx/draft/unreadable'))
     const controller = await start(bridge)
     type(controller, '不应保存')
-    expect(await controller.save()).toBe('failed')
+    expect(await saveAndConfirm(controller)).toBe('failed')
     expect(bridge.callsTo('library.save')).toEqual([])
   })
 
@@ -121,6 +194,7 @@ describe('主窗口保存始终新建', () => {
     type(controller, 'A')
     const saving = controller.save()
     type(controller, 'B')
+    await confirmSaveForm(controller)
     result.resolve(created('A.md', 'A'))
     await saving
     expect(bridge.callsTo('library.save')[0]?.text).toBe('A')
@@ -136,12 +210,12 @@ describe('主窗口保存始终新建', () => {
     const controller = await start(bridge)
     type(controller, '正文')
     controller.editor.dispatch({ selection: { anchor: 1 } })
-    expect(await controller.save()).toBe('failed')
+    expect(await saveAndConfirm(controller)).toBe('failed')
     const selection = controller.editor.getSelection()
     expect(controller.editor.getText()).toBe('正文')
     expect(controller.draft.binding).toBeNull()
     expect(toastText(controller)).toMatch(/^保存失败/)
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(controller.editor.getSelection()).toEqual(selection)
     expect(bridge.callsTo('library.save')[0]?.requestId).not.toBe(bridge.callsTo('library.save')[1]?.requestId)
   })
@@ -157,6 +231,7 @@ describe('主窗口保存始终新建', () => {
     expect(controller.save()).toBe(first)
     expect(controller.saveAsNew()).toBe(first)
     expect(controller.store.getState().draft.librarySaving).toBe(true)
+    await confirmSaveForm(controller)
     result.resolve(created('A.md', 'A'))
     expect(await first).toBe('saved')
     await settle()
@@ -172,6 +247,7 @@ describe('主窗口保存始终新建', () => {
     const controller = await start(bridge)
     type(controller, '旧')
     const saving = controller.save()
+    await confirmSaveForm(controller)
     if (action === 'clear') controller.clear()
     else bridge.emit('library.changed', { libraryDir: '/other' })
     type(controller, '新')
@@ -185,6 +261,24 @@ describe('主窗口保存始终新建', () => {
 })
 
 describe('新建的目标文件夹', () => {
+  it('生成期间改选文件夹，已发起的保存仍写入点击保存时的目录', async () => {
+    const bridge = new FakeBridge()
+    const suggestion = deferred<BridgeResult<{ metadata: PromptMetadata | null }>>()
+    bridge.handle('library.list', () => ok(listResult([], { folders: ['写作', '编程'] })))
+    bridge.handle('library.suggestMetadata', () => suggestion.promise)
+    bridge.handle('library.save', params => created('写作/标题.md', params.text))
+    const controller = await start(bridge)
+    type(controller, '正文')
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
+    const saving = controller.save()
+    await controller.library.chooseFolder({ kind: 'folder', path: '编程' })
+    suggestion.resolve(ok({ metadata: { title: '标题', tags: [] } }))
+    await confirmSaveForm(controller)
+    expect(await saving).toBe('saved')
+    expect(bridge.callsTo('library.save')[0]?.folder).toBe('写作')
+  })
+
   it('仅展开真实文件夹时使用该目录，其余存根目录', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.list', () => ok(listResult([], { folders: ['写作'] })))
@@ -194,14 +288,14 @@ describe('新建的目标文件夹', () => {
     type(controller, '正文')
     await controller.library.open()
     await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save').at(-1)?.folder).toBe('写作')
     await controller.library.chooseFolder({ kind: 'all' })
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save').at(-1)?.folder).toBeNull()
     await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
     await controller.library.close()
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save').at(-1)?.folder).toBeNull()
   })
 
@@ -217,7 +311,7 @@ describe('新建的目标文件夹', () => {
     bridge.handle('library.list', () => pending.promise)
     bridge.emit('library.changed', { libraryDir: '/new' })
     await settle()
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save').at(-1)?.folder).toBeNull()
     pending.resolve(ok(listResult([], { root: '/new', state: 'missing' })))
     await settle()
@@ -225,18 +319,36 @@ describe('新建的目标文件夹', () => {
 })
 
 describe('新建超时重试', () => {
+  it('超时后改选文件夹，重新生成确认并使用新的请求 id', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.list', () => ok(listResult([], { folders: ['写作', '编程'] })))
+    bridge.handle('library.save', () => fail('promptx/channel/timeout'))
+    const controller = await start(bridge)
+    type(controller, '正文')
+    await controller.library.open()
+    await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
+    await saveAndConfirm(controller)
+    await controller.library.chooseFolder({ kind: 'folder', path: '编程' })
+    await saveAndConfirm(controller)
+    const [first, second] = bridge.callsTo('library.save')
+    expect(first?.folder).toBe('写作')
+    expect(second?.folder).toBe('编程')
+    expect(second?.requestId).not.toBe(first?.requestId)
+    expect(bridge.callsTo('library.suggestMetadata')).toHaveLength(2)
+  })
+
   it('结果未知时沿用同一 requestId，确认成功后下一次明确保存使用新 id', async () => {
     const bridge = new FakeBridge()
     let attempt = 0
     bridge.handle('library.save', params => ++attempt === 1 ? fail('promptx/channel/timeout') : created('A.md', params.text))
     const controller = await start(bridge)
     type(controller, 'A')
-    expect(await controller.save()).toBe('failed')
+    expect(await saveAndConfirm(controller)).toBe('failed')
     expect(controller.draft.binding).toBeNull()
     expect(toastText(controller)).toMatch(/保存超时/)
-    expect(await controller.save()).toBe('saved')
+    expect(await saveAndConfirm(controller)).toBe('saved')
     expect(bridge.callsTo('library.save')[0]?.requestId).toBe(bridge.callsTo('library.save')[1]?.requestId)
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save')[2]?.requestId).not.toBe(bridge.callsTo('library.save')[1]?.requestId)
   })
 
@@ -246,9 +358,11 @@ describe('新建超时重试', () => {
     bridge.handle('library.save', () => ++attempt === 1 ? fail('promptx/channel/timeout') : created('A.md', 'A'))
     const controller = await start(bridge)
     type(controller, 'A')
-    await controller.save()
+    await saveAndConfirm(controller)
     type(controller, 'B')
-    await controller.save()
+    await saveAndConfirm(controller)
+    expect(bridge.callsTo('library.save')[1]).toEqual(bridge.callsTo('library.save')[0])
+    expect(bridge.callsTo('library.suggestMetadata')).toHaveLength(1)
     expect(controller.editor.getText()).toBe('AB')
     expect(controller.store.getState().editor.status).toBe('unsaved')
     expect(controller.draft.binding).toBeNull()
@@ -259,9 +373,9 @@ describe('新建超时重试', () => {
     bridge.handle('library.save', () => fail('promptx/channel/timeout'))
     const controller = await start(bridge)
     type(controller, '正文')
-    await controller.save()
+    await saveAndConfirm(controller)
     bridge.emit('config', config({ libraryDir: '/new-library' }))
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save')[0]?.requestId).not.toBe(bridge.callsTo('library.save')[1]?.requestId)
     expect(controller.editor.getText()).toBe('正文')
   })
@@ -271,13 +385,13 @@ describe('新建超时重试', () => {
     bridge.handle('library.save', () => fail('promptx/channel/timeout'))
     const controller = await start(bridge)
     type(controller, 'A')
-    await controller.save()
+    await saveAndConfirm(controller)
     controller.clear()
     type(controller, 'B')
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save')[0]?.requestId).not.toBe(bridge.callsTo('library.save')[1]?.requestId)
     bridge.emit('library.changed', { libraryDir: '/new' })
-    await controller.save()
+    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save')[1]?.requestId).not.toBe(bridge.callsTo('library.save')[2]?.requestId)
   })
 })
@@ -293,7 +407,7 @@ describe('独立条目编辑完成的内容通知', () => {
     bridge.handle('library.save', params => created('主草稿.md', params.text))
     const controller = await start(bridge)
     type(controller, '主草稿')
-    await controller.save()
+    await saveAndConfirm(controller)
     controller.editor.dispatch({ selection: { anchor: 1, head: 2 } })
     await controller.library.open()
     await controller.library.select(meta.relPath)
@@ -322,12 +436,12 @@ describe('独立条目编辑完成的内容通知', () => {
     const controller = await start(bridge)
     type(controller, '草稿')
     await controller.library.open()
-    expect(await controller.save()).toBe('failed')
+    expect(await saveAndConfirm(controller)).toBe('failed')
     const generation = controller.draft.generation
     bridge.emit('library.entriesChanged', { libraryDir: config().libraryDir })
     await settle()
     expect(controller.draft.generation).toBe(generation)
-    expect(await controller.save()).toBe('saved')
+    expect(await saveAndConfirm(controller)).toBe('saved')
     const requests = bridge.callsTo('library.save')
     expect(requests[0]?.requestId).toBe(requests[1]?.requestId)
     expect(controller.draft.binding).toBeNull()
@@ -341,7 +455,7 @@ describe('独立条目编辑完成的内容通知', () => {
     bridge.handle('library.save', params => created('主草稿.md', params.text))
     const controller = await start(bridge)
     type(controller, '主草稿')
-    await controller.save()
+    await saveAndConfirm(controller)
     await controller.library.open()
     await controller.library.select(meta.relPath)
     const generation = controller.draft.generation

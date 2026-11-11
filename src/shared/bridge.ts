@@ -3,7 +3,8 @@
 // 数据类请求转给 Host（见 protocol.ts 的 RENDERER_FORWARDED_METHODS）。
 
 import type { CompanionRequests, RendererForwardedMethod } from './protocol.ts'
-import type { Binding, CompanionConfig, ErrorInfo, FolderSel, LibraryScope, OptimizeEvent, SaveConflict, TextSelection } from './types.ts'
+import { normalizeTagPhrases } from './library-rules.ts'
+import type { Binding, CompanionConfig, EntryMetadataDraft, ErrorInfo, FolderSel, LibraryScope, OptimizeEvent, PromptMetadata, SaveConflict, TextSelection } from './types.ts'
 
 /** 小窗偏好，存在 `<dsh 数据目录>/promptx/prefs.json`，由主进程写入。 */
 export interface Prefs {
@@ -26,7 +27,7 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = {
   version: 1,
   window: null,
-  panes: { library: false, folderWidth: 150, listWidth: 300, previewHeight: 232, sessionWidth: 420 },
+  panes: { library: true, folderWidth: 150, listWidth: 300, previewHeight: 232, sessionWidth: 420 },
   library: { folder: { kind: 'all' }, scope: 'all', tag: null },
 }
 
@@ -47,7 +48,7 @@ export interface BridgeEvents {
   /** 主进程要退出或隐藏前请求立即写回草稿；渲染进程写完后调用 flushed(id)。 */
   'flush': { id: number }
   /** 端到端测试命令（只在 e2e 模式下发送），渲染进程处理后调用 e2eDone。 */
-  'e2e': { id: number; action: string; text?: string; size?: number }
+  'e2e': { id: number; action: string; text?: string; size?: number; metadata?: PromptMetadata }
 }
 
 export type BridgeEventName = keyof BridgeEvents
@@ -69,6 +70,7 @@ export interface EntryEditorSnapshot {
   binding: Binding
   text: string
   selection: TextSelection | null
+  metadata: EntryMetadataDraft
   config: ResolvedConfig | null
   saving: boolean
   error: ErrorInfo | null
@@ -76,13 +78,32 @@ export interface EntryEditorSnapshot {
   recovered: boolean
 }
 
+export type EntryMetadataFields = Pick<EntryMetadataDraft, 'title' | 'tags'>
+
+/** 正文保存只带实际改动的元数据，保留历史标签和原来的 front matter 写法。 */
+export function entryMetadataPatch(snapshot: EntryEditorSnapshot, fields: EntryMetadataFields): Partial<PromptMetadata> {
+  const patch: Partial<PromptMetadata> = {}
+  const title = fields.title.trim()
+  if (title !== snapshot.binding.title) patch.title = title
+  if (fields.tags !== snapshot.metadata.savedTags.join(', ')) {
+    const tags = normalizeTagPhrases([fields.tags])
+    const savedTags = snapshot.metadata.savedTags
+    if (tags.length !== savedTags.length || tags.some((tag, index) => tag !== savedTags[index])) patch.tags = tags
+  }
+  return patch
+}
+
+export function isEntryDirty(snapshot: EntryEditorSnapshot, text: string, metadata: EntryMetadataFields): boolean {
+  return text !== snapshot.binding.savedBody || Object.keys(entryMetadataPatch(snapshot, metadata)).length > 0
+}
+
 export interface EntryEditorBridge {
   /** 仅主窗口可调用。已有未保存编辑时先确认，再切换条目。 */
   open(relPath: string): Promise<BridgeResult<null>>
   /** 以下方法只接受独立编辑窗口的 sender。 */
   getState(): Promise<BridgeResult<EntryEditorSnapshot>>
-  update(text: string, selection: TextSelection, generation: number): void
-  prepared(id: number, generation: number, text: string, selection: TextSelection): void
+  update(text: string, selection: TextSelection, generation: number, metadata?: EntryMetadataFields): void
+  prepared(id: number, generation: number, text: string, selection: TextSelection, metadata?: EntryMetadataFields): void
   save(generation: number): Promise<BridgeResult<null>>
   /** 外部版本冲突时，由用户明确操作后重新载入，载入前确认放弃修改。 */
   reload(generation: number): Promise<BridgeResult<null>>
@@ -127,8 +148,6 @@ export interface PromptxBridge {
     setWidth(width: number, anchor: 'left' | 'right'): Promise<WindowBounds>
     /** 打开 dsh 插件页里 PromptX 的配置页，然后隐藏小窗。 */
     openSettings(): Promise<BridgeResult<{ navigated: boolean }>>
-    /** 对话框打开或关闭；打开期间失焦不自动隐藏。 */
-    setModalOpen(open: boolean): void
     /** 按打开的栏位调整窗口的最小宽度（5.7：打开的栏位最小宽度之和，不超过屏幕可用区域）。 */
     setMinWidth(width: number): void
   }

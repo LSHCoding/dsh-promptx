@@ -46,9 +46,9 @@ import type {
   LibraryReadResult,
   MetaConflict,
   MetaResult,
+  PromptMetadata,
   RestoreResult,
   SaveConflict,
-  SaveMode,
   SaveResult,
   TrashEntry,
   TrashListResult,
@@ -70,6 +70,7 @@ import {
   removeStaleTemps,
   replaceFile,
   sameVersion,
+  sha256Hex,
   systemErrorDetail,
   versionOf,
 } from './fs-safe.ts'
@@ -77,7 +78,7 @@ import type { FsHooks, FsOps, FsOptions } from './fs-safe.ts'
 import { IndexCache, deriveIndex } from './index-cache.ts'
 import type { LibraryIndex } from './index-cache.ts'
 import { isObject, parseBinding, parseListParams, parseMetaUpdate, parseRestoreRequest, parseSaveRequest } from './params.ts'
-import type { MetaRequest } from './params.ts'
+import type { MetaRequest, SaveRequest } from './params.ts'
 import { KeyedQueue } from './queue.ts'
 import { TRASH_DIR, folderRelPath, isTrashFileName, promptRelPath } from './rel-path.ts'
 import { READ_CONCURRENCY, STALE_TEMP_MS, decodeUtf8, entryFromText, foldPath, indexFile, indexedFromText, mapPool } from './scan.ts'
@@ -89,10 +90,10 @@ import type { TrashItem } from './trash.ts'
 const REMEMBERED_REQUESTS = 100
 
 /**
- * 等回收站记录锁最多多久。默认的 2 秒按「只做文件操作」估算，删除在持锁期间还要移动文件、fsync，
- * 慢速的网络盘或同步盘上会超时；10 秒仍在小程序请求的超时（15 秒）以内。
+ * 等库写入锁最多多久。持锁期间可能扫描库，或移动回收站文件并 fsync。
+ * 10 秒仍在小程序请求超时（15 秒）以内。
  */
-const RECORD_LOCK_WAIT_MS = 10_000
+const LOCK_WAIT_MS = 10_000
 
 /** 替代名字最多试多少个。 */
 const MAX_ALTERNATIVES = 10_000
@@ -297,7 +298,7 @@ export class LibraryService implements LibraryApi {
     this.#ops = internals.ops
     this.#hooks = internals.hooks ?? {}
     this.#platform = internals.platform ?? process.platform
-    this.#recordLockWaitMs = internals.recordLockWaitMs ?? RECORD_LOCK_WAIT_MS
+    this.#recordLockWaitMs = internals.recordLockWaitMs ?? LOCK_WAIT_MS
   }
 
   // ───────────── 读 ─────────────
@@ -347,32 +348,72 @@ export class LibraryService implements LibraryApi {
     }
   }
 
+  async hasTitle(title: string): Promise<boolean> {
+    try {
+      const root = this.#rootOrThrow(await this.#resolveRoot(this.#options.getRoot()))
+      return root !== null && await this.#hasTitle(root, title)
+    } catch (error) {
+      throw asPromptxError(error, 'promptx/library/unavailable')
+    }
+  }
+
+  async #hasTitle(root: OkRoot, title: string, except?: string): Promise<boolean> {
+    const key = nameKey(title.trim())
+    const index = await this.#cache.refresh(root.real, { skipRealpaths: root.skipList, platform: this.#platform })
+    for (const { doc: { meta } } of index.files.values()) {
+      if (meta.relPath !== except && nameKey(meta.title.trim()) === key) return true
+    }
+    return false
+  }
+
+  async #assertUniqueTitle(root: OkRoot, title: string, except?: string): Promise<void> {
+    if (await this.#hasTitle(root, title, except)) throw new PromptxError('promptx/library/duplicate-title')
+  }
+
+  /** 同一个 dsh 数据目录下的多个 profile 共用这把锁。锁在库外，库里的文件不能占住它。 */
+  async #withTitleLock<T>(root: OkRoot, title: string | undefined, operation: () => Promise<T>): Promise<T> {
+    if (title === undefined) return await operation()
+    const lockDir = this.#options.lockDir
+    await mkdir(lockDir, { recursive: true })
+    const key = sha256Hex(Buffer.from(foldPath(root.real, this.#platform), 'utf8')).slice(0, 16)
+    return await withFileLock(join(lockDir, `titles-${key}`), operation, { waitMs: LOCK_WAIT_MS })
+  }
+
   // ───────────── 保存 ─────────────
 
   async save(params: SaveParams): Promise<SaveResult> {
     const request = parseSaveRequest(params)
-    // 草稿为空或只有空白：「没有可保存的内容。」（L-08）
-    if (request.text.trim() === '') throw new PromptxError('promptx/library/empty')
     // 另存为新 Prompt 一律存到库根目录（L-12），不看所选文件夹
     const asNew = request.binding === null || request.mode === 'saveAsNew'
+    // 新建仍要求正文。已有的空文件可以单独改元数据，正文必须与磁盘版本一致。
+    const editingMetadata = !asNew && (request.metadata?.title !== undefined || request.metadata?.tags !== undefined)
+    if (request.text.trim() === '' && !editingMetadata) throw new PromptxError('promptx/library/empty')
     const folder = asNew && request.mode !== 'saveAsNew' ? folderRelPath(request.folder, this.#platform) : ''
     if (folder === null) throw new PromptxError('promptx/library/invalid-path')
     const configured = this.#options.getRoot()
+    if (request.libraryDir !== undefined && request.libraryDir !== configured) throw new PromptxError('promptx/library/unavailable')
     return await this.#mutate(configured, async () => {
       try {
-        if (asNew) return await this.#saveNew(configured, request.text, folder, request.requestId)
-        return await this.#saveBound(configured, request.text, request.binding, request.mode)
+        if (request.libraryDir !== undefined && request.libraryDir !== this.#options.getRoot()) {
+          throw new PromptxError('promptx/library/unavailable')
+        }
+        if (asNew) return await this.#saveNew(configured, request, folder)
+        return await this.#saveBound(configured, request)
       } catch (error) {
         throw asPromptxError(error, 'promptx/library/write-failed')
       }
     })
   }
 
-  async #saveNew(configured: string, text: string, folder: string, requestId: string): Promise<SaveResult> {
+  async #saveNew(configured: string, request: SaveRequest, folder: string): Promise<SaveResult> {
     // 保存请求超时后小窗会带同一个 requestId 重发：返回已经建好的文件，不建第二个（design-spec 6.1，审查意见 S05）
-    const key = requestId === '' ? null : requestId
+    const key = request.requestId === '' ? null : JSON.stringify([configured, request.requestId])
     const remembered = key === null ? undefined : this.#created.get(key)
     if (remembered !== undefined) return remembered
+    const metadata = request.metadata
+    if (metadata !== undefined && (metadata.title === undefined || metadata.tags === undefined)) {
+      throw new PromptxError('promptx/internal', 'invalid-params')
+    }
     let state = await this.#resolveRoot(configured)
     if (state.kind === 'missing') {
       // 库目录不存在：第一次保存时建立，包括缺少的上级目录（L-01）
@@ -382,13 +423,30 @@ export class LibraryService implements LibraryApi {
     const root = this.#rootOrThrow(state)
     if (root === null) throw new PromptxError('promptx/library/write-failed', 'ENOENT: library directory missing')
     this.#assertNotSkipped(root, folder)
+    return await this.#withTitleLock(root, metadata?.title, async () => {
+      if (metadata?.title !== undefined) await this.#assertUniqueTitle(root, metadata.title)
+      if (request.libraryDir !== undefined && request.libraryDir !== this.#options.getRoot()) {
+        throw new PromptxError('promptx/library/unavailable')
+      }
+      return await this.#createPrompt(root, request.text, folder, key, metadata)
+    })
+  }
+
+  async #createPrompt(
+    root: OkRoot,
+    text: string,
+    folder: string,
+    key: string | null,
+    metadata: Partial<PromptMetadata> | undefined,
+  ): Promise<SaveResult> {
     await ensureFolder(root.real, folder)
     const now = this.#now()
     const stamp = formatIsoUtc(now)
     const id = generatePromptId(now, this.#randomBytes(4))
-    const title = newPromptTitle(text, this.#options.untitledTitle())
-    const content = renderNewPromptFile({ id, title, created: stamp, updated: stamp }, text)
-    const check = readBack(content, { id, title, tags: [], favorite: false, created: stamp, updated: stamp }, { bom: false, eol: 'lf' })
+    const title = metadata?.title ?? newPromptTitle(text, this.#options.untitledTitle())
+    const fields = { id, title, tags: metadata?.tags ?? [], created: stamp, updated: stamp }
+    const content = renderNewPromptFile(fields, text)
+    const check = readBack(content, { ...fields, favorite: false }, { bom: false, eol: 'lf' })
     if (check === null || check.body !== text) return saveConflict('invalidFrontMatter')
     const bytes = Buffer.from(content, 'utf8')
     assertWritableSize(bytes)
@@ -401,15 +459,15 @@ export class LibraryService implements LibraryApi {
       kind: 'saved',
       created: true,
       entry: indexed.doc.meta,
-      binding: { libraryDir: configured, relPath, id, title, sha256: version.sha256, size: version.size, savedBody: text },
+      binding: { libraryDir: root.configured, relPath, id, title, sha256: version.sha256, size: version.size, savedBody: text },
     }
     this.#remember(key, result)
     this.#cache.record(root.real, relPath, indexed)
     return result
   }
 
-  async #saveBound(configured: string, text: string, bindingInput: unknown, mode: SaveMode): Promise<SaveResult> {
-    const binding = parseBinding(bindingInput)
+  async #saveBound(configured: string, request: SaveRequest): Promise<SaveResult> {
+    const binding = parseBinding(request.binding)
     if (binding === null) throw new PromptxError('promptx/internal', 'invalid-binding')
     const relPath = promptRelPath(binding.relPath, this.#platform)
     if (relPath === null) throw new PromptxError('promptx/library/invalid-path')
@@ -417,6 +475,11 @@ export class LibraryService implements LibraryApi {
     // 插件按文件位置绑定：库目录变了，原来的文件就不在这个库里，按「原文件已不存在」处理（L-01、L-12）
     if (root === null || binding.libraryDir !== configured) return saveConflict('missing')
     this.#assertNotSkipped(root, folderOf(relPath))
+    return await this.#withTitleLock(root, request.metadata?.title, () => this.#replacePrompt(root, relPath, binding, request))
+  }
+
+  async #replacePrompt(root: OkRoot, relPath: string, binding: Binding, request: SaveRequest): Promise<SaveResult> {
+    const { text, mode, metadata } = request
     const located = await locate(root.real, relPath)
     if (located.kind !== 'file') return saveConflict('missing')
     const current = await readRegularFile(located.abs, MAX_PROMPT_BYTES)
@@ -430,33 +493,50 @@ export class LibraryService implements LibraryApi {
     const original = decodeUtf8(current.bytes)
     if (original === null) throw new PromptxError('promptx/library/unreadable', 'not-utf8')
     const parsed = parsePromptFile(original)
+    const oldBody = editorBody(parsed)
+    const bodyChanged = text !== oldBody
+    if (text.trim() === '' && bodyChanged) throw new PromptxError('promptx/library/empty')
     const now = this.#now()
     const stamp = formatIsoUtc(now)
     const frontMatter = parsed.frontMatter
+    const title = metadata?.title
+    const tags = metadata?.tags
+    const titleChanged = title !== undefined && title !== displayTitle(frontMatter?.fields.title, oldBody, relPath)
     let next: string
     let expected: FrontMatterFields
     if (frontMatter === null) {
       // 没有 front matter 的文件，用户在对话框里选「补上并保存」之前一个字节都不改（L-08、7.3）
       if (mode !== 'addFrontMatter') return saveConflict('noFrontMatter')
-      const fields = { id: generatePromptId(now, this.#randomBytes(4)), title: binding.title, created: stamp, updated: stamp }
+      const fields = {
+        id: generatePromptId(now, this.#randomBytes(4)),
+        title: title ?? binding.title,
+        ...(tags === undefined ? {} : { tags }),
+        created: stamp,
+        updated: stamp,
+      }
       expected = fields
-      next = replaceBody(addFrontMatter(original, fields), text)
+      next = addFrontMatter(original, fields)
     } else if (frontMatter.state !== 'ok') {
       // 写坏了、布局不认识或没有结尾行：不改写，提示先修好或另存为新 Prompt（L-01，审查意见 S12）
       return saveConflict('invalidFrontMatter')
     } else {
-      // 只替换正文、改 updated；缺 id 时只补 id（L-08）。其他字段、注释、顺序、引号一个字节都不动
+      // 按编辑窗口明确提交的字段改标题或标签，其余字段、注释、顺序和引号保持原样。
       const patch: FrontMatterPatch = { updated: stamp }
       if ((frontMatter.fields.id ?? '').trim() === '') patch.id = generatePromptId(now, this.#randomBytes(4))
+      if (titleChanged) patch.title = title
+      if (tags !== undefined && !sameTags(frontMatter.fields.tags ?? [], tags)) patch.tags = tags
       const patched = patchFrontMatter(original, patch)
       if (!patched.ok) return saveConflict(patched.reason === 'no-front-matter' ? 'noFrontMatter' : 'invalidFrontMatter')
       expected = { ...frontMatter.fields, ...patch }
-      next = replaceBody(patched.text, text)
+      next = patched.text
     }
+    // 仅编辑元数据时保持磁盘正文原样，包括来自外部编辑器的混合换行。
+    if (bodyChanged) next = replaceBody(next, text)
     const check = readBack(next, expected, parsed)
     if (check === null || toLf(check.body) !== toLf(text)) return saveConflict('invalidFrontMatter')
     const bytes = Buffer.from(next, 'utf8')
     assertWritableSize(bytes)
+    if (titleChanged) await this.#assertUniqueTitle(root, title, relPath)
     const outcome = await replaceFile(located.abs, bytes, { ...this.#fsOptions(), expected: before, mode: modeToKeep(current.stats) })
     if (outcome.kind !== 'replaced') return saveConflict(outcome.kind)
     const indexed = indexedFromText(relPath, next, outcome.stats)
@@ -484,16 +564,18 @@ export class LibraryService implements LibraryApi {
     const configured = this.#options.getRoot()
     return await this.#mutate(configured, async () => {
       try {
-        return await this.#updateMeta(configured, relPath, update.patch, update.addFrontMatter)
+        const root = this.#rootOrThrow(await this.#resolveRoot(configured))
+        if (root === null) return metaConflict('missing')
+        return await this.#withTitleLock(root, update.patch.title, () => (
+          this.#updateMeta(root, relPath, update.patch, update.addFrontMatter)
+        ))
       } catch (error) {
         throw asPromptxError(error, 'promptx/library/write-failed')
       }
     })
   }
 
-  async #updateMeta(configured: string, relPath: string, request: MetaRequest, add: boolean): Promise<MetaResult> {
-    const root = this.#rootOrThrow(await this.#resolveRoot(configured))
-    if (root === null) return metaConflict('missing')
+  async #updateMeta(root: OkRoot, relPath: string, request: MetaRequest, add: boolean): Promise<MetaResult> {
     this.#assertNotSkipped(root, folderOf(relPath))
     const located = await locate(root.real, relPath)
     if (located.kind !== 'file') return metaConflict('missing')
@@ -555,6 +637,9 @@ export class LibraryService implements LibraryApi {
     const bytes = Buffer.from(patched.text, 'utf8')
     // 补 front matter、加一行 favorite 都会让文件变大；贴着上限的文件改完就超过上限，之后插件再也打不开它（外部审查第 5 条）
     assertWritableSize(bytes)
+    if (request.title !== undefined && request.title !== displayTitle(parsed.frontMatter?.fields.title, editorBody(parsed), relPath)) {
+      await this.#assertUniqueTitle(root, request.title, relPath)
+    }
     // 写入那一刻文件又变了：不写入，返回 modified（L-09「刷新后可以重新操作」）
     const outcome = await replaceFile(located.abs, bytes, { ...this.#fsOptions(), expected: before, mode: modeToKeep(file.stats) })
     if (outcome.kind !== 'replaced') return metaConflict(outcome.kind)

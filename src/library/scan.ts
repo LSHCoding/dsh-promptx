@@ -24,6 +24,8 @@ export const STALE_TEMP_MS = 60 * 60 * 1000
 export interface IndexedFile {
   doc: SearchDoc
   mtimeMs: number
+  ctimeMs: number
+  ino: number
   size: number
   /** 读取失败（权限等）的结果不缓存：修好权限不会改变修改时间和大小，下次扫描要重读。 */
   cacheable: boolean
@@ -37,7 +39,7 @@ export interface ScanResult {
 
 export interface ScanOptions {
   rootReal: string
-  /** 上一次的索引，按修改时间和大小复用。 */
+  /** 上一次的索引，文件状态未变时复用。 */
   previous: ReadonlyMap<string, IndexedFile> | undefined
   /** 要跳过的目录（realpath）：dsh 数据目录、技能目录、`<dsh>/promptx`（design-spec 7.4）。 */
   skipRealpaths: readonly string[]
@@ -96,15 +98,17 @@ export function entryFromText(relPath: string, text: string, mtimeMs: number): P
   return { meta, body, parsed }
 }
 
-export function indexedFromText(relPath: string, text: string, stats: Pick<Stats, 'mtimeMs' | 'size'>): IndexedFile {
-  const { meta, body } = entryFromText(relPath, text, stats.mtimeMs)
-  return { doc: { meta, body, searchBody: normalizeSearchText(body) }, mtimeMs: stats.mtimeMs, size: stats.size, cacheable: true }
+type IndexStats = Pick<Stats, 'mtimeMs' | 'ctimeMs' | 'ino' | 'size'>
+
+export function indexedFromText(relPath: string, text: string, { mtimeMs, ctimeMs, ino, size }: IndexStats): IndexedFile {
+  const { meta, body } = entryFromText(relPath, text, mtimeMs)
+  return { doc: { meta, body, searchBody: normalizeSearchText(body) }, mtimeMs, ctimeMs, ino, size, cacheable: true }
 }
 
 type UnreadableReason = NonNullable<EntryMeta['unreadableReason']>
 
 /** 不能打开的文件（L-01：大于 2 MiB、不是 UTF-8、读取失败）：列表里显示文件名，不能打开、插入、复制。 */
-export function unreadableEntry(relPath: string, stats: Pick<Stats, 'mtimeMs' | 'size'>, reason: UnreadableReason): IndexedFile {
+export function unreadableEntry(relPath: string, { mtimeMs, ctimeMs, ino, size }: IndexStats, reason: UnreadableReason): IndexedFile {
   const meta: EntryMeta = {
     relPath,
     folder: folderOf(relPath),
@@ -112,17 +116,17 @@ export function unreadableEntry(relPath: string, stats: Pick<Stats, 'mtimeMs' | 
     title: displayTitle(null, '', relPath),
     tags: [],
     favorite: false,
-    updatedAt: stats.mtimeMs,
+    updatedAt: mtimeMs,
     createdAt: null,
     status: 'unreadable',
     unreadableReason: reason,
     hasFrontMatter: false,
   }
-  return { doc: { meta, body: '', searchBody: '' }, mtimeMs: stats.mtimeMs, size: stats.size, cacheable: reason !== 'read-failed' }
+  return { doc: { meta, body: '', searchBody: '' }, mtimeMs, ctimeMs, ino, size, cacheable: reason !== 'read-failed' }
 }
 
 /** 读一个文件并建索引项。文件不在了或不是普通文件时返回 null。 */
-export async function indexFile(abs: string, relPath: string, stats: Pick<Stats, 'mtimeMs' | 'size'>): Promise<IndexedFile | null> {
+export async function indexFile(abs: string, relPath: string, stats: IndexStats): Promise<IndexedFile | null> {
   // 超过上限的文件不读（design-spec 7.2）
   if (stats.size > MAX_PROMPT_BYTES) return unreadableEntry(relPath, stats, 'too-large')
   let read: FileRead
@@ -146,7 +150,7 @@ export async function indexFile(abs: string, relPath: string, stats: Pick<Stats,
   }
 }
 
-/** lstat 后再建索引；缓存里有同样修改时间和大小的结果时直接复用。 */
+/** 外部工具保留 mtime 或替换同样大小的文件时，ctime 或 inode 仍能让刷新发现新标题。 */
 export async function indexPath(
   abs: string,
   relPath: string,
@@ -161,7 +165,8 @@ export async function indexPath(
   }
   if (!stats.isFile()) return null
   const cached = previous?.get(relPath)
-  if (cached !== undefined && cached.cacheable && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) return cached
+  if (cached?.cacheable === true && cached.mtimeMs === stats.mtimeMs && cached.ctimeMs === stats.ctimeMs
+    && cached.ino === stats.ino && cached.size === stats.size) return cached
   return await indexFile(abs, relPath, stats)
 }
 

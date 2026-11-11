@@ -1,5 +1,5 @@
 // 库侧栏和会话栏的开合与窗口宽度（需求 5.7、F-02，技术方案 5.4、5.5，审查 COV-13）。
-// 计算交给 shared/layout.ts 的纯函数，这里只负责问主进程要窗口位置、请它加宽或收回，以及更新窗口的最小宽度。
+// 用编辑区实际宽度切换库侧栏；会话栏继续用 shared/layout.ts 的空间分配。
 
 import { MIN_WINDOW, PANE_LIMITS, planPaneClose, planPaneOpen, type OptionalPane } from '../../../shared/layout.ts'
 import type { WindowBounds } from '../../../shared/bridge.ts'
@@ -39,47 +39,40 @@ export function isPaneOpen(state: AppState, pane: OptionalPane): boolean {
 }
 
 export class PaneLayout {
-  /** 每块栏打开时让窗口向左、向右各加宽了多少；关闭时只收回自己加的那部分（规则 4）。 */
-  private readonly grown: Record<OptionalPane, Grown> = { library: NO_GROWTH, session: NO_GROWTH }
+  /** 会话栏关闭时收回它打开时加的宽度。库侧栏关闭时用编辑区当前宽度计算。 */
+  private sessionGrowth = NO_GROWTH
+  /** 靠近屏幕左边时，展开库会借用右边的空间，收起时先归还这部分。 */
+  private libraryGrowthRight = 0
+  private editorElement: Pick<HTMLElement, 'offsetWidth'> | null = null
+  /** 保留切换前的编辑区宽度，供连续切换和窗口受限时恢复。手动调整窗口或栏宽后改用实际宽度。 */
+  private libraryEditor: { width: number; windowWidth: number; panes: PaneSizes; sessionOpen: boolean } | null = null
   /** 开合要先问主进程窗口位置，连续点击时按顺序一个个做，避免两次计算用到同一个旧位置。 */
   private queue: Promise<void> = Promise.resolve()
 
   constructor(private readonly ctx: Context) {}
 
-  /** 打开一块栏（规则 1–3）。收起另一侧的栏时只改界面，它占的宽度留给编辑区和新打开的栏。 */
+  setEditorElement(element: Pick<HTMLElement, 'offsetWidth'> | null): void {
+    this.editorElement = element
+  }
+
   open(pane: OptionalPane): Promise<void> {
-    return this.enqueue(async () => {
-      if (isPaneOpen(this.ctx.store.getState(), pane)) return
-      try {
-        this.grown[pane] = await this.makeRoom(pane)
-      } finally {
-        // 调整窗口失败（主进程没回应）也照常打开，栏宽不够时由编辑区让出空间。
-        this.setOpen(pane, true)
-        this.syncMinWidth()
-      }
-    })
+    return this.enqueue(() => this.openPane(pane))
   }
 
-  /** 关闭一块栏：先降低最小宽度，再收回它打开时加的宽度（规则 4）。 */
   close(pane: OptionalPane): Promise<void> {
-    return this.enqueue(async () => {
-      if (!isPaneOpen(this.ctx.store.getState(), pane)) return
-      this.setOpen(pane, false)
-      this.syncMinWidth()
-      const grown = this.grown[pane]
-      this.grown[pane] = NO_GROWTH
-      if (grown.left === 0 && grown.right === 0) return
-      const bounds = await this.ctx.bridge.window.getBounds()
-      const target = planPaneClose({ window: { x: bounds.x, width: bounds.width }, grown })
-      // 主进程的接口一次只能固定一条边：先固定右边沿收回左边加宽的部分，再固定左边沿收回右边的。
-      let current = bounds
-      if (target.x !== current.x) current = await this.ctx.bridge.window.setWidth(current.x + current.width - target.x, 'right')
-      if (target.width !== current.width) await this.ctx.bridge.window.setWidth(target.width, 'left')
-    })
+    return this.enqueue(() => this.closePane(pane))
   }
 
-  toggle(pane: OptionalPane): Promise<void> {
-    return isPaneOpen(this.ctx.store.getState(), pane) ? this.close(pane) : this.open(pane)
+  toggleLibrary(onClose: () => void): Promise<boolean> {
+    return this.enqueue(async () => {
+      if (this.ctx.store.getState().library.open) {
+        onClose()
+        await this.closePane('library')
+        return false
+      }
+      await this.openPane('library')
+      return true
+    })
   }
 
   /** 启动时按偏好直接显示库侧栏：窗口大小是上次关窗时记下的，已经包含侧栏，不再加宽。 */
@@ -99,11 +92,88 @@ export class PaneLayout {
     return this.queue
   }
 
-  /** 按规则 1–3 加宽窗口或收起另一侧的栏，返回窗口实际向两侧加宽了多少。 */
-  private async makeRoom(pane: OptionalPane): Promise<Grown> {
+  private async openPane(pane: OptionalPane): Promise<void> {
+    if (isPaneOpen(this.ctx.store.getState(), pane)) return
+    if (pane === 'library') return this.resizeLibrary(true)
+    try {
+      const bounds = await this.ctx.bridge.window.getBounds()
+      const plan = this.planOpen(bounds, this.ctx.store.getState(), pane)
+      if (plan.window.width !== bounds.width) {
+        const after = await this.ctx.bridge.window.setWidth(plan.window.width, 'left')
+        this.sessionGrowth = growthBetween(bounds, after)
+      }
+    } finally {
+      // 调整窗口失败也照常打开，栏宽不足时由布局分配现有空间。
+      this.setOpen(pane, true)
+      this.syncMinWidth()
+    }
+  }
+
+  private async closePane(pane: OptionalPane): Promise<void> {
+    if (!isPaneOpen(this.ctx.store.getState(), pane)) return
+    if (pane === 'library') return this.resizeLibrary(false)
+    this.setOpen(pane, false)
+    this.syncMinWidth()
+    const grown = this.sessionGrowth
+    this.sessionGrowth = NO_GROWTH
+    if (grown.left === 0 && grown.right === 0) return
     const bounds = await this.ctx.bridge.window.getBounds()
-    const state = this.ctx.store.getState()
-    const plan = planPaneOpen({
+    const target = planPaneClose({ window: { x: bounds.x, width: bounds.width }, grown })
+    // 先固定右边沿收回左边加宽的部分，再固定左边沿收回右边的。
+    let current = bounds
+    if (target.x !== current.x) current = await this.ctx.bridge.window.setWidth(current.x + current.width - target.x, 'right')
+    if (target.width !== current.width) await this.ctx.bridge.window.setWidth(target.width, 'left')
+  }
+
+  private async resizeLibrary(open: boolean): Promise<void> {
+    try {
+      const bounds = await this.ctx.bridge.window.getBounds()
+      const state = this.ctx.store.getState()
+      const { panes } = state
+      let sessionOpen = state.optimize.paneOpen
+      const editor = this.libraryToggleEditorWidth(bounds, state)
+      if (open && this.planOpen(bounds, state, 'library').collapse === 'session') {
+        this.sessionGrowth = NO_GROWTH
+        this.setOpen('session', false)
+        sessionOpen = false
+        this.syncMinWidth()
+      }
+      if (!open) {
+        // 收窄前先降低原生窗口的最小宽度。
+        this.setOpen('library', false)
+        this.syncMinWidth()
+      }
+      const wanted = editor + (open ? libraryWidth(panes) : 0) + (sessionOpen ? sessionWidth(panes) : 0)
+      const width = Math.min(bounds.workArea.width, Math.max(minimumWindowWidth(open, sessionOpen), wanted))
+      const shrinkRight = open ? 0 : Math.min(this.libraryGrowthRight, Math.max(0, bounds.width - width))
+      let after = bounds
+      if (width + shrinkRight !== bounds.width) after = await this.ctx.bridge.window.setWidth(width + shrinkRight, 'right')
+      if (shrinkRight > 0) after = await this.ctx.bridge.window.setWidth(width, 'left')
+      this.libraryGrowthRight = open ? growthBetween(bounds, after).right : 0
+      this.libraryEditor = { width: editor, windowWidth: after.width, panes, sessionOpen }
+    } finally {
+      if (this.ctx.store.getState().library.open !== open) {
+        this.setOpen('library', open)
+        this.syncMinWidth()
+      }
+    }
+  }
+
+  private libraryToggleEditorWidth(bounds: WindowBounds, state: AppState): number {
+    const previous = this.libraryEditor
+    if (previous?.windowWidth === bounds.width && previous.panes === state.panes && previous.sessionOpen === state.optimize.paneOpen) {
+      return previous.width
+    }
+    const measured = this.editorElement?.offsetWidth ?? 0
+    // 原生窗口改宽后，Chromium 的视口有时仍是旧尺寸。
+    if (measured > 0 && (typeof window === 'undefined' || Math.abs(window.innerWidth - bounds.width) <= 1)) return measured
+    const library = state.library.open ? libraryWidth(state.panes) : 0
+    const session = state.optimize.paneOpen ? sessionWidth(state.panes) : 0
+    return Math.max(PANE_LIMITS.editor.min, bounds.width - library - session)
+  }
+
+  private planOpen(bounds: WindowBounds, state: AppState, pane: OptionalPane) {
+    return planPaneOpen({
       window: { x: bounds.x, width: bounds.width },
       workArea: { x: bounds.workArea.x, width: bounds.workArea.width },
       panes: {
@@ -113,16 +183,6 @@ export class PaneLayout {
       opening: pane,
       editorMin: PANE_LIMITS.editor.min,
     })
-    if (plan.collapse !== null) {
-      // 收起的栏只改界面，它占的宽度留给编辑区和新打开的栏，所以它当初加宽的部分不再由它收回。
-      this.grown[plan.collapse] = NO_GROWTH
-      this.setOpen(plan.collapse, false)
-    }
-    if (plan.window.width === bounds.width && plan.window.x === bounds.x) return NO_GROWTH
-    // 库侧栏在左边，固定右边沿向左长；会话栏在右边，固定左边沿向右长。这一侧没空间时主进程把窗口推回屏幕内，
-    // 结果和 planPaneOpen「先向这一侧、不够再向另一侧」一致。
-    const after = await this.ctx.bridge.window.setWidth(plan.window.width, pane === 'library' ? 'right' : 'left')
-    return growthBetween(bounds, after)
   }
 
   private setOpen(pane: OptionalPane, open: boolean): void {
@@ -138,10 +198,10 @@ export class PaneLayout {
     }
   }
 
-  private enqueue(task: () => Promise<void>): Promise<void> {
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
     const run = this.queue.then(task)
     // 一次失败不能卡住后面的开合；失败本身由调用方的 runTask 记录。
-    this.queue = run.catch(() => undefined)
+    this.queue = run.then(() => undefined, () => undefined)
     return run
   }
 }

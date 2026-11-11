@@ -54,6 +54,7 @@ function deps(overrides: Partial<CompanionHandlerDeps> = {}): CompanionHandlerDe
     entryDraft: { load: () => Promise.resolve(null), save: () => Promise.resolve({ updatedAt: 'entry' }), close: () => Promise.resolve() },
     library: {} as LibraryApi,
     optimize: {} as OptimizeApi,
+    suggestMetadata: () => Promise.resolve(null),
     openSettings: () => ({ open: null, navigated: true }),
     onStatus: (status) => {
       statuses.push(status)

@@ -20,8 +20,6 @@ export type WindowEventName =
   | 'blur'
   | 'moved'
   | 'resized'
-  | 'will-move'
-  | 'will-resize'
   | 'unresponsive'
   | 'responsive'
 

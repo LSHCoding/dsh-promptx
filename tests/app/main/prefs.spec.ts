@@ -97,8 +97,8 @@ describe('parsePrefs', () => {
 
   it('does not share the default objects with callers', () => {
     const prefs = parsePrefs(null)
-    prefs.panes.library = true
-    expect(DEFAULT_PREFS.panes.library).toBe(false)
+    prefs.panes.library = false
+    expect(DEFAULT_PREFS.panes.library).toBe(true)
   })
 })
 
@@ -146,7 +146,7 @@ describe('PrefsStore', () => {
     vi.useFakeTimers()
     const prefs = store()
     prefs.load()
-    prefs.set({ panes: { library: true } })
+    prefs.set({ panes: { library: false } })
     prefs.set({ library: { tag: 'x' } })
     prefs.setWindow({ x: 5, y: 6, width: 700, height: 500 })
     vi.advanceTimersByTime(PREFS_WRITE_DELAY_MS - 1)
@@ -156,7 +156,7 @@ describe('PrefsStore', () => {
     expect(written).toEqual({
       ...DEFAULT_PREFS,
       window: { x: 5, y: 6, width: 700, height: 500 },
-      panes: { ...DEFAULT_PREFS.panes, library: true },
+      panes: { ...DEFAULT_PREFS.panes, library: false },
       library: { ...DEFAULT_PREFS.library, tag: 'x' },
     })
     // 临时文件改名成正式文件，目录里不留 .tmp。
@@ -201,8 +201,8 @@ describe('PrefsStore', () => {
   it('returns copies that callers cannot use to change the store', () => {
     const prefs = store()
     const copy = prefs.get()
-    copy.panes.library = true
-    expect(prefs.get().panes.library).toBe(false)
+    copy.panes.library = false
+    expect(prefs.get().panes.library).toBe(true)
   })
 
   it('logs a write failure by error code and keeps running', () => {
@@ -211,7 +211,7 @@ describe('PrefsStore', () => {
     writeFileSync(blocker, 'not a directory')
     const logger = new MemoryLogger()
     const prefs = new PrefsStore({ file: join(blocker, 'prefs.json'), logger, pid: 77 })
-    prefs.set({ panes: { library: true } })
+    prefs.set({ panes: { library: false } })
     vi.advanceTimersByTime(PREFS_WRITE_DELAY_MS)
     expect(logger.find('prefs.write-failed')?.fields).toEqual({ error: expect.stringMatching(/^Error:E[A-Z]+$/) as unknown })
   })
@@ -219,7 +219,7 @@ describe('PrefsStore', () => {
   it('dispose stops the timer without writing', () => {
     vi.useFakeTimers()
     const prefs = store()
-    prefs.set({ panes: { library: true } })
+    prefs.set({ panes: { library: false } })
     prefs.dispose()
     expect(vi.getTimerCount()).toBe(0)
     expect(existsSync(file())).toBe(false)

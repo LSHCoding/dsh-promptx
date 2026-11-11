@@ -172,6 +172,8 @@ async function sweep(secret) {
   await step('bad path', 'library.read', { relPath: `../${secret}.md` })
   await step('bad folder', 'library.save', { text: `${secret} x`, binding: null, folder: `../${secret}`, mode: 'normal', requestId: 'sweep-3' })
   await step('library.list', 'library.list', { folder: { kind: 'all' }, scope: 'all', tag: null, query: secret, refresh: true })
+  const suggestion = await step('library.suggestMetadata', 'library.suggestMetadata', { text: `${secret} metadata` })
+  if (suggestion?.metadata === null) log('metadata manual fallback')
   await step('optimize.start', 'optimize.start', { text: `${secret} optimize` })
   await pause(400)
   await step('optimize.followup', 'optimize.followup', { text: `${secret} again` })

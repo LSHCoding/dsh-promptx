@@ -1,7 +1,6 @@
 // PromptX 在 dsh 插件页里的配置页（需求 S-01、S-02、S-03、F-05、F-06、5.9、6.6、6.8、7.7、7.8；design-spec 4.4、D12）。
 //
-// 页面按需求 5.9 的 P0 部分分三节：小窗（状态、运行时、下载源、全局快捷键、失焦时隐藏）、Prompt 库（库目录、删除前确认）、
-// 优化（优化指令）。
+// 页面分为小窗（状态、运行时、下载源、全局快捷键）、编辑器、Prompt 库和优化设置。
 //
 // 保存方式照 dsh 自己的设置表单（dsh-client-ui-primitives 的 SettingsForm，独立审查 COV-02）：改动先暂存，底部一个「保存」
 // 一次提交所有改动过的字段；没有改动、有字段不合法、正在保存时「保存」不可用，保存中显示「保存中…」；Host 返回的字段错误显示在
@@ -118,17 +117,6 @@ function ConfigForm(props: {
           disabled={saving}
           onChange={(value) => {
             form.stage('globalShortcut', value)
-          }}
-        />
-        <SwitchField
-          t={t}
-          label={t('hideOnBlurLabel')}
-          hint={t('hideOnBlurHint')}
-          checked={values.hideOnBlur}
-          error={errors.hideOnBlur}
-          disabled={saving}
-          onChange={(value) => {
-            form.stage('hideOnBlur', value)
           }}
         />
       </section>

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 — 2026-11-11
+
+- Generate a title and tags with the default dsh model when saving a new prompt. Review or edit the suggestions before saving, or enter metadata manually if generation fails.
+- Edit a saved prompt's title, tags, and body in its separate editor. Keep multi-word tags and recover unfinished metadata edits with the entry draft.
+
+## 0.1.2 — 2026-11-11
+
+- Keep the floating editor visible when it loses focus, including on profiles that previously enabled automatic hiding. Pressing the global shortcut again hides the window even when another app has focus.
+- Show both library columns on first launch. Keep the editor width when toggling the library where display space permits.
+- Replace the toolbar's Settings icon with a gear.
+
 ## 0.1.1 — 2026-11-10
 
 - Insert library entries at the editor cursor by double-clicking a row, preserving selection replacement, undo, and editor focus.

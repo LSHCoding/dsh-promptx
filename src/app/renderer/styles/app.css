@@ -346,6 +346,12 @@ textarea.px-input {
   min-height: 0;
 }
 
+/* 屏幕窄于三栏的最小宽度之和时，可以滚到会话栏，库侧栏仍然展开。 */
+.px-body:has(> .px-library):has(> .px-session) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .px-divider {
   position: relative;
   z-index: 2;
@@ -1077,10 +1083,15 @@ textarea.px-input {
   font: var(--dsw-font-base-strong-16);
 }
 
-.px-dialog-message {
+.px-dialog-message,
+.px-dialog-error {
   margin: 0;
   color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xs-13);
+}
+
+.px-dialog-error {
+  color: var(--dsw-alias-state-error-primary);
 }
 
 .px-dialog-form {

@@ -1,13 +1,26 @@
 // 主窗口的保存始终新建库条目；已有条目的更新只由独立编辑窗口发起。
 // 同一时刻只发一次新建，超时重试沿用 requestId，防止连续按键和未知结果产生重复文件。
 
-import type { Binding, LibraryReadResult } from '../../../shared/types.ts'
+import type { BridgeResult } from '../../../shared/bridge.ts'
+import { normalizeTagPhrases } from '../../../shared/library-rules.ts'
+import type { CompanionRequests } from '../../../shared/protocol.ts'
+import type { Binding, LibraryReadResult, PromptMetadata, SaveResult } from '../../../shared/types.ts'
 import { isBlank } from '../../../shared/text-metrics.ts'
-import { randomId, reason, text, type Context } from './context.ts'
+import type { MetadataForm } from '../state/state.ts'
+import { dialogButton, randomId, reason, text, type Context } from './context.ts'
+import type { Dialogs } from './dialogs.ts'
 import type { Draft } from './draft.ts'
 import type { Toasts } from './toasts.ts'
 
 export type SaveOutcome = 'saved' | 'blank' | 'conflict' | 'cancelled' | 'failed'
+export const CONFIRM_METADATA_BUTTON = 'confirmMetadata'
+
+type SaveRequest = CompanionRequests['library.save']['params'] & { metadata: PromptMetadata }
+
+interface PendingCreate {
+  generation: number
+  request: SaveRequest
+}
 
 export function bindingFromRead(libraryDir: string, read: LibraryReadResult): Binding {
   return {
@@ -23,7 +36,8 @@ export function bindingFromRead(libraryDir: string, read: LibraryReadResult): Bi
 
 export class LibrarySave {
   private current: Promise<SaveOutcome> | null = null
-  private pendingCreate: { requestId: string; generation: number } | null = null
+  private pendingCreate: PendingCreate | null = null
+  private disposed = false
   /** 仅供保存完成提示和端到端结果展示，不作为后续写入的绑定。 */
   lastSavedRelPath: string | null = null
 
@@ -31,10 +45,12 @@ export class LibrarySave {
     private readonly ctx: Context,
     private readonly draft: Draft,
     private readonly toasts: Toasts,
+    private readonly dialogs: Dialogs,
     private readonly afterSave: () => void,
   ) {}
 
   save(): Promise<SaveOutcome> {
+    if (this.disposed) return Promise.resolve('failed')
     if (this.current !== null) return this.current
     const run = this.perform().finally(() => {
       if (this.current !== run) return
@@ -54,6 +70,10 @@ export class LibrarySave {
     return this.current !== null
   }
 
+  dispose(): void {
+    this.disposed = true
+  }
+
   private setSaving(librarySaving: boolean): void {
     this.ctx.store.update(state => (state.draft.librarySaving === librarySaving
       ? state
@@ -68,29 +88,105 @@ export class LibrarySave {
       return 'blank'
     }
     const generation = this.draft.generation
-    if (this.pendingCreate?.generation !== generation) {
-      this.pendingCreate = { requestId: randomId(), generation }
+    const libraryDir = this.draft.libraryDir
+    const folder = this.targetFolder()
+    const pending = this.pendingCreate
+    this.pendingCreate = null
+    const retry = pending?.generation === generation && pending.request.folder === folder && pending.request.libraryDir === libraryDir
+      ? pending.request
+      : null
+    // 超时后的重试提交原来确认过的正文、元数据和目标，Host 可按同一个 id 返回已建好的条目。
+    let request = retry
+    let form: MetadataForm
+    let formError: string | undefined
+    let manual = false
+    if (retry === null) {
+      const metadata = await this.suggestMetadata(body)
+      if (this.cancelled(generation, libraryDir)) return 'cancelled'
+      manual = metadata === null
+      form = { title: metadata?.title ?? '', tags: metadata?.tags.join(', ') ?? '' }
+    } else {
+      form = { title: retry.metadata.title, tags: retry.metadata.tags.join(', ') }
     }
-    const requestId = this.pendingCreate.requestId
-    const result = await this.ctx.bridge.call('library.save', {
-      text: body,
-      binding: null,
-      folder: this.targetFolder(),
-      mode: 'normal',
-      requestId,
-    })
+
+    while (true) {
+      if (request === null) {
+        const choice = await this.dialogs.open({
+          title: text(this.ctx, 'dialog.saveMetadata.title'),
+          ...(manual ? { message: text(this.ctx, 'dialog.saveMetadata.manual') } : {}),
+          ...(formError === undefined ? {} : { error: formError }),
+          buttons: [
+            dialogButton(this.ctx, 'cancel', 'common.cancel'),
+            dialogButton(this.ctx, CONFIRM_METADATA_BUTTON, 'dialog.saveMetadata.confirm', 'primary'),
+          ],
+          defaultButton: CONFIRM_METADATA_BUTTON,
+          escapeButton: 'cancel',
+          focusDefaultButton: formError === undefined,
+          form,
+        })
+        if (choice.button !== CONFIRM_METADATA_BUTTON || choice.form === undefined || this.cancelled(generation, libraryDir)) return 'cancelled'
+        const title = choice.form.title.trim()
+        if (title === '') return 'cancelled'
+        form = choice.form
+        const expectedLibrary = libraryDir ?? this.draft.libraryDir
+        request = {
+          text: retry?.text ?? body,
+          binding: null,
+          folder,
+          mode: 'normal',
+          requestId: randomId(),
+          ...(expectedLibrary === undefined ? {} : { libraryDir: expectedLibrary }),
+          metadata: { title, tags: normalizeTagPhrases([form.tags]) },
+        }
+      }
+
+      const result = await this.ctx.bridge.call('library.save', request)
+      if (this.disposed) return 'cancelled'
+      if (!result.ok && result.error.code === 'promptx/library/duplicate-title') {
+        if (this.cancelled(generation, libraryDir)) return 'cancelled'
+        // 模型检查和确认之间可能有其他写入。把已填字段带回对话框，让用户修正。
+        formError = reason(this.ctx, result.error)
+        request = null
+        continue
+      }
+      return this.finishSave(generation, request, result)
+    }
+  }
+
+  private async suggestMetadata(body: string): Promise<PromptMetadata | null> {
+    this.setSuggesting(true)
+    try {
+      const result = await this.ctx.bridge.call('library.suggestMetadata', { text: body })
+      return result.ok ? result.value.metadata : null
+    } finally {
+      this.setSuggesting(false)
+    }
+  }
+
+  private setSuggesting(librarySuggesting: boolean): void {
+    this.ctx.store.update(state => ({ ...state, draft: { ...state.draft, librarySuggesting } }))
+  }
+
+  private cancelled(generation: number, libraryDir: string | undefined): boolean {
+    if (this.disposed) return true
+    if (libraryDir !== undefined && libraryDir !== this.draft.libraryDir) {
+      this.toasts.error(text(this.ctx, 'toast.libraryChanged'))
+      return true
+    }
+    return generation !== this.draft.generation
+  }
+
+  private finishSave(generation: number, request: SaveRequest, result: BridgeResult<SaveResult>): SaveOutcome {
     if (!result.ok) {
       if (result.error.code === 'promptx/channel/timeout') {
-        // 新建是否完成尚不确定，保留 id；下一次保存让 Host 返回同一次创建的结果。
+        this.pendingCreate = { generation, request }
         this.afterSave()
         this.toasts.error(text(this.ctx, 'toast.saveTimedOut'))
       } else {
-        this.pendingCreate = null
         this.toasts.error(text(this.ctx, 'toast.saveFailed', { reason: reason(this.ctx, result.error) }))
       }
       return 'failed'
     }
-    this.pendingCreate = null
     if (result.value.kind !== 'saved') return 'conflict'
     this.lastSavedRelPath = result.value.entry.relPath
     if (generation === this.draft.generation) {
