@@ -137,6 +137,23 @@ describe('attachCompanionHandlers', () => {
       .rejects.toMatchObject({ detail: 'invalid parameter: selection.anchor' })
   })
 
+  it('forwards an explicit root destination for saving a bound prompt', async () => {
+    const p = fakePeer()
+    const requests: Parameters<LibraryApi['save']>[0][] = []
+    const library = { save: async (params: Parameters<LibraryApi['save']>[0]) => {
+      requests.push(params)
+      return { kind: 'conflict', conflict: 'destinationOccupied' } as const
+    } } as LibraryApi
+    attachCompanionHandlers(p.peer, deps({ library }))
+    const input = {
+      text: 'body', binding: { libraryDir: '/lib', relPath: 'drafts/a.md', id: 'a', title: 'A', sha256: 'hash', size: 4, savedBody: 'body' },
+      folder: null, mode: 'normal', requestId: 'move', libraryDir: '/lib', moveToFolder: '',
+    }
+    expect(await p.call('library.save', input)).toEqual({ kind: 'conflict', conflict: 'destinationOccupied' })
+    expect(requests).toEqual([input])
+    await expect(p.call('library.save', { ...input, moveToFolder: 3 })).rejects.toMatchObject({ detail: 'invalid parameter: moveToFolder' })
+  })
+
   it('passes valid status notifications on and drops malformed ones', () => {
     const d = deps()
     const p = fakePeer()

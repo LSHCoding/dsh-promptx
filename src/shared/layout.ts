@@ -44,6 +44,13 @@ export const PANE_LIMITS = {
   listPart: { min: 96 },
 } as const
 
+/** 库侧栏由文件夹栏、列表栏和两条分隔线组成。 */
+export const DIVIDER_WIDTH = 1
+
+export function libraryWidth(panes: { folderWidth: number; listWidth: number }): number {
+  return panes.folderWidth + panes.listWidth + 2 * DIVIDER_WIDTH
+}
+
 export interface PaneState {
   open: boolean
   /** 这块栏打开时占的总宽度（含分隔线）。库侧栏是文件夹栏和列表栏的宽度之和。 */
@@ -183,8 +190,11 @@ function clamp(value: number, min: number, max: number): number {
  * - 还能拖到时位置不动；只有窗口比所在屏幕的可用区域还大时才缩到可用区域以内，
  *   并把这个方向上的位置挪进可用区域。尺寸不小于 520×360，屏幕比这还小时铺满可用区域。
  */
-export function ensureVisible(bounds: Rect, displays: readonly { workArea: Rect }[], fallbackWorkArea: Rect): Rect {
-  const strip: Rect = { x: bounds.x, y: bounds.y, width: bounds.width, height: TOOLBAR_STRIP.height }
+export function ensureVisible(
+  bounds: Rect, displays: readonly { workArea: Rect }[], fallbackWorkArea: Rect,
+  toolbar: HorizontalSpan = { x: 0, width: bounds.width },
+): Rect {
+  const strip: Rect = { x: bounds.x + toolbar.x, y: bounds.y, width: toolbar.width, height: TOOLBAR_STRIP.height }
   let target: Rect | null = null
   let bestArea = 0
   for (const { workArea } of displays) {

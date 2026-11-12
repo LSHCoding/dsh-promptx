@@ -105,6 +105,60 @@ export class Library {
     await this.refresh(false)
   }
 
+  async createFolder(): Promise<void> {
+    const libraryDir = this.state.list?.root ?? this.draft.libraryDir
+    if (libraryDir === undefined) return
+    this.toasts.beginAction()
+    const generation = this.libraryGeneration
+    const choice = await this.dialogs.open({
+      title: text(this.ctx, 'library.createFolder'),
+      buttons: [
+        dialogButton(this.ctx, 'cancel', 'common.cancel'),
+        dialogButton(this.ctx, 'create', 'library.createFolder', 'primary'),
+      ],
+      defaultButton: 'create',
+      escapeButton: 'cancel',
+      form: { title: '', tags: '' },
+      formKind: 'folderName',
+    })
+    const name = choice.form?.title.trim() ?? ''
+    if (choice.button !== 'create' || name === '' || this.libraryChangedSince(generation)) return
+    const result = await this.ctx.bridge.call('library.createFolder', { name, libraryDir })
+    if (!result.ok) {
+      this.toasts.error(text(this.ctx, 'library.folderCreateFailed', { reason: reason(this.ctx, result.error) }))
+      return
+    }
+    this.toasts.success(text(this.ctx, 'library.folderCreated'))
+    if (generation === this.libraryGeneration) await this.chooseFolder({ kind: 'folder', path: result.value.folder })
+  }
+
+  async removeFolder(folder: string): Promise<void> {
+    const list = this.state.list
+    if (list === null || !list.folders.includes(folder)) return
+    this.toasts.beginAction()
+    const generation = this.libraryGeneration
+    const choice = await this.dialogs.open({
+      title: text(this.ctx, 'dialog.deleteFolder.title'),
+      message: text(this.ctx, 'dialog.deleteFolder.message', { path: folder }),
+      buttons: [dialogButton(this.ctx, 'cancel', 'common.cancel'), dialogButton(this.ctx, 'delete', 'dialog.delete.confirm', 'danger')],
+      defaultButton: 'cancel',
+      escapeButton: 'cancel',
+    })
+    if (choice.button !== 'delete' || this.libraryChangedSince(generation)) return
+    const result = await this.ctx.bridge.call('library.deleteFolder', { folder, libraryDir: list.root })
+    if (!result.ok) {
+      this.toasts.error(text(this.ctx, 'toast.deleteFailed', { reason: reason(this.ctx, result.error) }))
+      return
+    }
+    if (generation === this.libraryGeneration && this.draft.binding?.relPath.startsWith(`${folder}/`) === true) {
+      this.draft.setBinding(null, true)
+      this.draft.flushSoon()
+    }
+    this.toasts.success(text(this.ctx, 'library.folderDeleted'))
+    await this.refresh(false)
+    if (this.state.view === 'trash') await this.refreshTrash()
+  }
+
   async setScope(scope: LibraryScope): Promise<void> {
     this.update(library => ({ ...library, scope }))
     this.savePrefs()
@@ -458,8 +512,9 @@ export class Library {
     this.update(library => ({
       ...library,
       trashSelected: file,
-      trashPreview: { file, status: 'loading', entry, body: '', error: null },
+      trashPreview: { file, status: entry.kind === 'folder' ? 'ready' : 'loading', entry, body: '', error: null },
     }))
+    if (entry.kind === 'folder') return
     const result = await this.ctx.bridge.call('trash.read', { file })
     if (token !== this.trashPreviewToken) return
     this.update(library => ({
@@ -475,7 +530,9 @@ export class Library {
    * 回收站里的文件在删除后被修改过时先提示，确认后仍可恢复。
    */
   async restore(file: string): Promise<void> {
-    await this.restoreFile(file, 'original', null, false, this.libraryGeneration)
+    const isFolder = this.state.trash?.entries.some(entry => entry.file === file && entry.kind === 'folder') === true
+    const libraryDir = isFolder ? this.state.list?.root ?? this.draft.libraryDir : undefined
+    await this.restoreFile(file, 'original', null, false, this.libraryGeneration, libraryDir)
   }
 
   /** generation：用户点「恢复」时的库目录代次；确认替代路径、确认恢复改过的文件之后据此核对，见 libraryGeneration。 */
@@ -485,10 +542,11 @@ export class Library {
     alternative: string | null,
     acceptModified: boolean,
     generation: number,
+    libraryDir: string | undefined,
   ): Promise<void> {
     this.toasts.beginAction()
     if (this.libraryChangedSince(generation)) return
-    const result = await this.ctx.bridge.call('trash.restore', { file, target, alternative, acceptModified })
+    const result = await this.ctx.bridge.call('trash.restore', { file, target, alternative, acceptModified, ...(libraryDir === undefined ? {} : { libraryDir }) })
     if (!result.ok) {
       this.toasts.error(text(this.ctx, 'toast.restoreFailed', { reason: reason(this.ctx, result.error) }))
       return
@@ -509,16 +567,18 @@ export class Library {
         }
         this.toasts.success(text(this.ctx, 'toast.restored', { path: value.relPath }))
         await this.refreshTrash()
+        if (libraryDir !== undefined && current) await this.refresh(false)
         return
       case 'occupied': {
+        const message = libraryDir === undefined ? 'dialog.occupied.message' : 'dialog.occupied.folderMessage'
         const choice = await this.dialogs.open({
           title: text(this.ctx, 'dialog.occupied.title'),
-          message: text(this.ctx, 'dialog.occupied.message', { path: value.alternative }),
+          message: text(this.ctx, message, { path: value.alternative }),
           buttons: [dialogButton(this.ctx, 'cancel', 'common.cancel'), dialogButton(this.ctx, 'alternative', 'dialog.occupied.confirm', 'primary')],
           defaultButton: 'alternative',
           escapeButton: 'cancel',
         })
-        if (choice.button === 'alternative') await this.restoreFile(file, 'alternative', value.alternative, acceptModified, generation)
+        if (choice.button === 'alternative') await this.restoreFile(file, 'alternative', value.alternative, acceptModified, generation, libraryDir)
         return
       }
       case 'modified': {
@@ -530,7 +590,7 @@ export class Library {
           defaultButton: 'cancel',
           escapeButton: 'cancel',
         })
-        if (choice.button === 'restore') await this.restoreFile(file, target, alternative, true, generation)
+        if (choice.button === 'restore') await this.restoreFile(file, target, alternative, true, generation, libraryDir)
         return
       }
       case 'missing':

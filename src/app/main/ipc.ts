@@ -236,5 +236,6 @@ export function registerEntryEditorIpc(
 function entryMetadataFields(value: unknown): EntryMetadataFields | undefined | null {
   if (value === undefined) return undefined
   if (!isPlainObject(value) || typeof value.title !== 'string' || typeof value.tags !== 'string') return null
-  return { title: value.title, tags: value.tags }
+  if (value.folder !== undefined && typeof value.folder !== 'string') return null
+  return { title: value.title, tags: value.tags, ...(value.folder === undefined ? {} : { folder: value.folder }) }
 }

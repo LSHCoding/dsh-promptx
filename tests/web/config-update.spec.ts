@@ -6,7 +6,7 @@ import { PromptxError } from '../../src/shared/errors.ts'
 import type { PromptxConfig } from '../../src/shared/types.ts'
 import { checkLibraryLocation, checkLibraryRoot, createConfigUpdater, MAX_INSTRUCTION_LENGTH } from '../../src/web/config-update.ts'
 import type { LocationContext } from '../../src/web/config-update.ts'
-import { trapUnexpectedErrors } from './fixtures.ts'
+import { statusPieces, trapUnexpectedErrors } from './fixtures.ts'
 
 trapUnexpectedErrors()
 
@@ -148,12 +148,16 @@ describe('checkLibraryRoot', () => {
 function updater(options: { apply?: (patch: Partial<PromptxConfig>) => Promise<void>; context?: () => LocationContext } = {}) {
   const applied: Array<Partial<PromptxConfig>> = []
   const locationContext = vi.fn(options.context ?? (() => ctx()))
+  let config = statusPieces().config
   const update = createConfigUpdater({
     locationContext,
-    apply: options.apply ?? ((patch) => {
+    currentConfig: () => config,
+    platform: 'linux',
+    apply: async (patch) => {
+      await options.apply?.(patch)
       applied.push(patch)
-      return Promise.resolve()
-    }),
+      config = { ...config, ...patch }
+    },
   })
   return { update, applied, locationContext }
 }
@@ -193,6 +197,26 @@ describe('createConfigUpdater', () => {
     const { update, applied } = updater()
     await update({ globalShortcut: 'Control+Alt+Shift+F9' })
     expect(applied).toEqual([{ globalShortcut: 'Control+Alt+Shift+F9' }])
+  })
+
+  it('validates and normalizes toolbar shortcuts with the same platform aliases as the renderer', async () => {
+    const { update, applied } = updater()
+    await expect(update({ shortcutChat: 'ctrl+l', shortcutSettings: 'cmdorctrl+enter' })).resolves.toEqual({
+      ok: false,
+      errors: { shortcutChat: 'shortcut-conflict', shortcutSettings: 'shortcut-conflict' },
+    })
+    await expect(update({ shortcutClose: 'q' })).resolves.toEqual({ ok: false, errors: { shortcutClose: 'window-shortcut-invalid' } })
+    await expect(update({ shortcutChat: 'ctrl+l', shortcutLibrary: ' ' })).resolves.toEqual({ ok: true })
+    expect(applied).toEqual([{ shortcutChat: 'Control+L', shortcutLibrary: '' }])
+  })
+
+  it('validates concurrent settings updates against the last committed shortcut', async () => {
+    const { update, applied } = updater()
+    const first = update({ shortcutChat: 'Control+K' })
+    const second = update({ shortcutSettings: 'CommandOrControl+K' })
+    await expect(first).resolves.toEqual({ ok: true })
+    await expect(second).resolves.toEqual({ ok: false, errors: { shortcutSettings: 'shortcut-conflict' } })
+    expect(applied).toEqual([{ shortcutChat: 'Control+K' }])
   })
 
   it('writes nothing when any field is invalid and reports every invalid field', async () => {

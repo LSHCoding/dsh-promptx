@@ -8,11 +8,9 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DEFAULT_PREFS, type Prefs } from '../../shared/bridge.ts'
-import { PANE_LIMITS, type Rect } from '../../shared/layout.ts'
+import { libraryWidth, PANE_LIMITS, type Rect } from '../../shared/layout.ts'
 import type { FolderSel, LibraryScope } from '../../shared/types.ts'
 import { errorCode, type CompanionLogger } from './logger.ts'
-
-export type PrefsPatch = Partial<Pick<Prefs, 'panes' | 'library'>>
 
 export const PREFS_WRITE_DELAY_MS = 500
 
@@ -91,16 +89,23 @@ export function parsePrefs(raw: unknown): Prefs {
   const prefs = defaults()
   if (!isObject(raw) || raw.version !== 1) return prefs
   prefs.window = parseWindowBounds(raw.window)
+  prefs.editorWidth = parseEditorWidth(raw.editorWidth)
   prefs.panes = parsePanes(raw.panes)
   prefs.library = parseLibrary(raw.library)
   return prefs
 }
 
-/** 合并渲染进程发来的修改。只接受 panes 和 library 两段，其他字段（窗口位置由主进程记）一律忽略。 */
+function parseEditorWidth(value: unknown, fallback: number | null = null): number | null {
+  if (value === null) return null
+  return finite(value) && value >= 1 && value <= COORDINATE_LIMIT ? Math.round(value) : fallback
+}
+
+/** 合并渲染进程发来的修改，原生窗口位置和尺寸由主进程记。 */
 export function mergePrefsPatch(prefs: Prefs, patch: unknown): Prefs {
   if (!isObject(patch)) return prefs
   return {
     ...prefs,
+    editorWidth: parseEditorWidth(patch.editorWidth, prefs.editorWidth),
     panes: 'panes' in patch ? parsePanes(patch.panes, prefs.panes) : prefs.panes,
     library: 'library' in patch ? parseLibrary(patch.library, prefs.library) : prefs.library,
   }
@@ -153,6 +158,14 @@ export class PrefsStore {
   /** 当前偏好的副本：调用方（IPC 回复）拿去改也影响不到存着的那份。 */
   get(): Prefs {
     return structuredClone(this.#prefs)
+  }
+
+  /** 冷启动时聊天栏收起，按退出前实际的编辑区宽度和库宽重建小窗。旧偏好直接沿用原尺寸。 */
+  restoreWithoutSession(): void {
+    const { window, editorWidth, panes } = this.#prefs
+    if (editorWidth === null) return
+    if (window !== null) this.setWindow({ ...window, width: editorWidth + (panes.library ? libraryWidth(panes) : 0) })
+    this.set({ editorWidth: null })
   }
 
   set(patch: unknown): void {

@@ -22,6 +22,7 @@ import type {
   RuntimeSource,
   RuntimeStatus,
 } from '../shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS, SHORTCUT_CONFIG_FIELDS, TOOLBAR_SHORTCUT_FIELDS, type ToolbarShortcutField } from '../shared/window-shortcuts.ts'
 import type { ActionResult, CompanionAction, PromptxApi, RuntimeAction, StatusStore } from './api.ts'
 import { Button, clampPercent, ProgressBar, StatusDot, Switch, type DotState } from './controls.tsx'
 import {
@@ -121,6 +122,25 @@ function ConfigForm(props: {
         />
       </section>
 
+      <section className="promptx-section" aria-labelledby={`${ids}-shortcuts`}>
+        <h4 className="promptx-section-title" id={`${ids}-shortcuts`}>{t('sectionToolbarShortcuts')}</h4>
+        {TOOLBAR_SHORTCUT_FIELDS.map(field => (
+          <ShortcutField
+            key={field}
+            t={t}
+            field={field}
+            value={values[field]}
+            platform={status.platform}
+            defaultShortcut={DEFAULT_TOOLBAR_SHORTCUTS[field]}
+            error={errors[field]}
+            disabled={saving}
+            onChange={(value) => {
+              form.stage(field, value)
+            }}
+          />
+        ))}
+      </section>
+
       <section className="promptx-section" aria-labelledby={`${ids}-editor`}>
         <h4 className="promptx-section-title" id={`${ids}-editor`}>{t('sectionEditor')}</h4>
         <SwitchField
@@ -188,8 +208,6 @@ function ConfigForm(props: {
         />
       </section>
 
-      <p className="promptx-footnote">{t('fixedShortcutsNote')}</p>
-
       <div className="promptx-footer">
         {form.notice === null ? null : <p className="promptx-footer-notice" role="status">{saveNoticeText(t, form.notice)}</p>}
         <button type="button" className="promptx-save" disabled={!form.canSave} onClick={form.save}>
@@ -243,13 +261,21 @@ function useStagedConfig(config: PromptxConfig, platform: string, api: ConfigPag
   }, [base])
 
   const patch = changedPatch(base, draft)
-  const errors: FieldErrors = { ...hostErrors, ...validatePatch(patch, platform) }
+  const errors: FieldErrors = { ...hostErrors, ...validatePatch(patch, platform, base) }
   const canSave = !saving && Object.keys(patch).length > 0 && Object.keys(errors).length === 0
 
   const stage = <K extends ConfigField>(field: K, value: PromptxConfig[K]): void => {
     setDraft(current => withField(current, field, value))
     // Host 报的错针对的是提交时的值，用户改了这个字段，旧错误就不再成立。
-    setHostErrors(current => withoutError(current, field))
+    setHostErrors((current) => {
+      let next = withoutError(current, field)
+      if (SHORTCUT_CONFIG_FIELDS.some(shortcut => field === shortcut)) {
+        for (const shortcut of SHORTCUT_CONFIG_FIELDS) {
+          if (next[shortcut] === 'shortcut-conflict') next = withoutError(next, shortcut)
+        }
+      }
+      return next
+    })
     setNotice(null)
   }
 
@@ -724,8 +750,9 @@ function RuntimeSourceField({ t, value, error, disabled, onChange }: {
   )
 }
 
-function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, onChange }: {
+function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultShortcut, error, disabled, onChange }: {
   t: PromptxTranslate
+  field?: 'globalShortcut' | ToolbarShortcutField
   value: string
   /** 运行 dsh 的电脑的平台：快捷键是注册在那台电脑上的，显示和录制都按它（⌘ 还是 Win）。 */
   platform: string
@@ -737,11 +764,15 @@ function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, o
   const id = useId()
   const [recording, setRecording] = useState(false)
   const recordButton = useRef<HTMLButtonElement>(null)
-  const normalized = normalizeShortcut(value)
-  const preview = normalized !== '' && parseAccelerator(normalized).ok ? formatAccelerator(normalized, platform) : null
+  const scope = field === 'globalShortcut' ? 'global' : 'window'
+  const label = t(field === 'globalShortcut' ? 'shortcutLabel' : field)
+  const normalized = normalizeShortcut(value, scope)
+  const preview = normalized !== '' && parseAccelerator(normalized, scope).ok ? formatAccelerator(normalized, platform, scope) : null
   const hint = recording
     ? t('shortcutRecording')
-    : t('shortcutHint', { default: defaultShortcut === '' ? '—' : formatAccelerator(defaultShortcut, platform) })
+    : t(scope === 'global' ? 'shortcutHint' : 'windowShortcutHint', {
+      default: defaultShortcut === '' ? '—' : formatAccelerator(defaultShortcut, platform, scope),
+    })
 
   // 录制：按下「录制」后监听这个按钮上的一次 keydown，换算成 Electron 加速键写法填进输入框（只是暂存，保存后才生效）。
   const onRecordKey = (event: KeyboardEvent<HTMLButtonElement>): void => {
@@ -756,7 +787,7 @@ function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, o
       setRecording(false)
       return
     }
-    const accelerator = acceleratorFromKeyEvent(event, platform)
+    const accelerator = acceleratorFromKeyEvent(event, platform, scope)
     // 只按了修饰键，或者组合不合法（没有修饰键、只有 Shift）：继续等。
     if (accelerator === null) return
     onChange(accelerator)
@@ -764,9 +795,9 @@ function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, o
   }
 
   return (
-    <div className="promptx-field" data-promptx-field="globalShortcut">
+    <div className="promptx-field" data-promptx-field={field}>
       <div className="promptx-field-head">
-        <label className="promptx-label" htmlFor={id}>{t('shortcutLabel')}</label>
+        <label className="promptx-label" htmlFor={id}>{label}</label>
       </div>
       <div className="promptx-control-row">
         <input
@@ -774,7 +805,7 @@ function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, o
           className="promptx-input"
           type="text"
           value={value}
-          placeholder={t('shortcutPlaceholder')}
+          placeholder={t(scope === 'global' ? 'shortcutPlaceholder' : 'windowShortcutPlaceholder')}
           disabled={disabled}
           spellCheck={false}
           autoComplete="off"
@@ -787,6 +818,7 @@ function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, o
         {preview === null ? null : <kbd className="promptx-kbd" title={t('shortcutPreview', { shortcut: preview })}>{preview}</kbd>}
         <Button
           ref={recordButton}
+          aria-label={scope === 'window' ? t('recordWindowShortcut', { action: label }) : undefined}
           aria-pressed={recording}
           aria-describedby={`${id}-message`}
           disabled={disabled}

@@ -12,8 +12,8 @@
 import { randomBytes as cryptoRandomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
 import type { Stats } from 'node:fs'
-import { access, lstat, mkdir, readdir, realpath, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { access, lstat, mkdir, readdir, realpath, rename, stat } from 'node:fs/promises'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { PromptxError } from '../shared/errors.ts'
 import type { ErrorCode } from '../shared/errors.ts'
@@ -60,6 +60,7 @@ import {
   ensureFolder,
   errnoCode,
   folderAbs,
+  fsyncDir,
   hashFile,
   isPromptxTempName,
   locate,
@@ -68,6 +69,7 @@ import {
   nameKeysOf,
   readRegularFile,
   removeStaleTemps,
+  replaceAndMoveFile,
   replaceFile,
   sameVersion,
   sha256Hex,
@@ -75,6 +77,7 @@ import {
   versionOf,
 } from './fs-safe.ts'
 import type { FsHooks, FsOps, FsOptions } from './fs-safe.ts'
+import { cleanFolderTrash, isFolderTrashId, moveFolderToTrash, readTrashedFolder } from './folder-trash.ts'
 import { IndexCache, deriveIndex } from './index-cache.ts'
 import type { LibraryIndex } from './index-cache.ts'
 import { isObject, parseBinding, parseListParams, parseMetaUpdate, parseRestoreRequest, parseSaveRequest } from './params.ts'
@@ -86,7 +89,7 @@ import type { IndexedFile } from './scan.ts'
 import { numberedNames, readTrashRecord, recordLockTarget, setAsideBrokenRecord, trashNameCandidates, writeTrashRecord } from './trash.ts'
 import type { TrashItem } from './trash.ts'
 
-/** 新建文件的 requestId 在 Host 进程里记住最近多少个（design-spec 6.1）。 */
+/** 新建和移动文件的 requestId 在 Host 进程里记住最近多少个（design-spec 6.1）。 */
 const REMEMBERED_REQUESTS = 100
 
 /**
@@ -289,7 +292,7 @@ export class LibraryService implements LibraryApi {
   readonly #queue = new KeyedQueue()
   readonly #cache = new IndexCache()
   /** 新建文件的 requestId → 结果，最近 100 个。 */
-  readonly #created = new Map<string, SaveResult>()
+  readonly #savedRequests = new Map<string, SaveResult>()
   /** 回收站文件的标题和规范化正文，按回收站目录分组、按修改时间和大小复用。 */
   readonly #trashInfo = new Map<string, Map<string, TrashFileInfo>>()
 
@@ -310,9 +313,7 @@ export class LibraryService implements LibraryApi {
     if (state.kind === 'unavailable') return { ...emptyList('unavailable', state.configured), error: state.error }
     let index: LibraryIndex
     try {
-      // 展开侧栏时刷新索引；搜索输入时只查询（design-spec 7.2），还没有索引时扫描一次
-      const cached = request.refresh ? null : this.#cache.current(state.real)
-      index = cached ?? await this.#cache.refresh(state.real, { skipRealpaths: state.skipList, platform: this.#platform })
+      index = await this.#index(state, request.refresh)
     } catch (error) {
       return { ...emptyList('unavailable', state.configured), error: unavailableInfo(error) }
     }
@@ -324,6 +325,25 @@ export class LibraryService implements LibraryApi {
       tags: derived.tags,
       entries: filterEntries(derived.docs, request, this.#now().getTime()),
       total: derived.docs.length,
+    }
+  }
+
+  #index(root: OkRoot, refresh: boolean): Promise<LibraryIndex> {
+    // 展开侧栏时刷新索引；搜索输入时只查询（design-spec 7.2），还没有索引时扫描一次。
+    const cached = refresh ? null : this.#cache.current(root.real)
+    return cached === null
+      ? this.#cache.refresh(root.real, { skipRealpaths: root.skipList, platform: this.#platform })
+      : Promise.resolve(cached)
+  }
+
+  async folders(libraryDir: string): Promise<{ folders: string[] }> {
+    try {
+      this.#assertCurrentRoot(libraryDir)
+      const root = this.#rootOrThrow(await this.#resolveRoot(libraryDir))
+      if (root === null) return { folders: [] }
+      return { folders: deriveIndex(await this.#index(root, true)).folders }
+    } catch (error) {
+      throw asPromptxError(error, 'promptx/library/unavailable')
     }
   }
 
@@ -372,7 +392,10 @@ export class LibraryService implements LibraryApi {
 
   /** 同一个 dsh 数据目录下的多个 profile 共用这把锁。锁在库外，库里的文件不能占住它。 */
   async #withTitleLock<T>(root: OkRoot, title: string | undefined, operation: () => Promise<T>): Promise<T> {
-    if (title === undefined) return await operation()
+    return title === undefined ? await operation() : await this.#withLibraryWriteLock(root, operation)
+  }
+
+  async #withLibraryWriteLock<T>(root: OkRoot, operation: () => Promise<T>): Promise<T> {
     const lockDir = this.#options.lockDir
     await mkdir(lockDir, { recursive: true })
     const key = sha256Hex(Buffer.from(foldPath(root.real, this.#platform), 'utf8')).slice(0, 16)
@@ -385,9 +408,11 @@ export class LibraryService implements LibraryApi {
     const request = parseSaveRequest(params)
     // 另存为新 Prompt 一律存到库根目录（L-12），不看所选文件夹
     const asNew = request.binding === null || request.mode === 'saveAsNew'
-    // 新建仍要求正文。已有的空文件可以单独改元数据，正文必须与磁盘版本一致。
-    const editingMetadata = !asNew && (request.metadata?.title !== undefined || request.metadata?.tags !== undefined)
-    if (request.text.trim() === '' && !editingMetadata) throw new PromptxError('promptx/library/empty')
+    if (asNew && request.moveToFolder !== undefined) throw new PromptxError('promptx/internal', 'invalid-params')
+    // 新建要求正文。已有的空文件可以单独改元数据或换文件夹，正文必须与磁盘版本一致。
+    const editingEntry = !asNew
+      && (request.metadata?.title !== undefined || request.metadata?.tags !== undefined || request.moveToFolder !== undefined)
+    if (request.text.trim() === '' && !editingEntry) throw new PromptxError('promptx/library/empty')
     const folder = asNew && request.mode !== 'saveAsNew' ? folderRelPath(request.folder, this.#platform) : ''
     if (folder === null) throw new PromptxError('promptx/library/invalid-path')
     const configured = this.#options.getRoot()
@@ -408,7 +433,7 @@ export class LibraryService implements LibraryApi {
   async #saveNew(configured: string, request: SaveRequest, folder: string): Promise<SaveResult> {
     // 保存请求超时后小窗会带同一个 requestId 重发：返回已经建好的文件，不建第二个（design-spec 6.1，审查意见 S05）
     const key = request.requestId === '' ? null : JSON.stringify([configured, request.requestId])
-    const remembered = key === null ? undefined : this.#created.get(key)
+    const remembered = key === null ? undefined : this.#savedRequests.get(key)
     if (remembered !== undefined) return remembered
     const metadata = request.metadata
     if (metadata !== undefined && (metadata.title === undefined || metadata.tags === undefined)) {
@@ -428,7 +453,7 @@ export class LibraryService implements LibraryApi {
       if (request.libraryDir !== undefined && request.libraryDir !== this.#options.getRoot()) {
         throw new PromptxError('promptx/library/unavailable')
       }
-      return await this.#createPrompt(root, request.text, folder, key, metadata)
+      return await this.#createPrompt(root, request.text, folder, key, metadata, request.folderMustExist)
     })
   }
 
@@ -438,8 +463,13 @@ export class LibraryService implements LibraryApi {
     folder: string,
     key: string | null,
     metadata: Partial<PromptMetadata> | undefined,
+    folderMustExist: boolean,
   ): Promise<SaveResult> {
-    await ensureFolder(root.real, folder)
+    if (folderMustExist && folder !== '') {
+      await this.#existingFolder(root, folder)
+    } else {
+      await ensureFolder(root.real, folder)
+    }
     const now = this.#now()
     const stamp = formatIsoUtc(now)
     const id = generatePromptId(now, this.#randomBytes(4))
@@ -471,14 +501,31 @@ export class LibraryService implements LibraryApi {
     if (binding === null) throw new PromptxError('promptx/internal', 'invalid-binding')
     const relPath = promptRelPath(binding.relPath, this.#platform)
     if (relPath === null) throw new PromptxError('promptx/library/invalid-path')
+    const target = request.moveToFolder === undefined ? undefined : folderRelPath(request.moveToFolder, this.#platform)
+    if (target === null) throw new PromptxError('promptx/library/invalid-path')
+    const destination = target === folderOf(relPath) ? undefined : target
     const root = this.#rootOrThrow(await this.#resolveRoot(configured))
     // 插件按文件位置绑定：库目录变了，原来的文件就不在这个库里，按「原文件已不存在」处理（L-01、L-12）
     if (root === null || binding.libraryDir !== configured) return saveConflict('missing')
     this.#assertNotSkipped(root, folderOf(relPath))
-    return await this.#withTitleLock(root, request.metadata?.title, () => this.#replacePrompt(root, relPath, binding, request))
+    return await this.#withLibraryWriteLock(root, async () => {
+      if (request.libraryDir !== undefined || destination !== undefined) this.#assertCurrentRoot(configured)
+      const key = destination === undefined || request.requestId === '' ? null : JSON.stringify([configured, 'move', request.requestId])
+      const remembered = key === null ? undefined : this.#savedRequests.get(key)
+      if (remembered !== undefined) return remembered
+      const result = await this.#replacePrompt(root, relPath, binding, request, destination)
+      if (result.kind === 'saved') this.#remember(key, result)
+      return result
+    })
   }
 
-  async #replacePrompt(root: OkRoot, relPath: string, binding: Binding, request: SaveRequest): Promise<SaveResult> {
+  async #replacePrompt(
+    root: OkRoot,
+    relPath: string,
+    binding: Binding,
+    request: SaveRequest,
+    destination: string | undefined,
+  ): Promise<SaveResult> {
     const { text, mode, metadata } = request
     const located = await locate(root.real, relPath)
     if (located.kind !== 'file') return saveConflict('missing')
@@ -490,62 +537,79 @@ export class LibraryService implements LibraryApi {
     const before = versionOf(current.bytes)
     if (!sameVersion(before, binding)) return saveConflict('modified')
     await assertWritable(located.abs)
+    const { name } = splitRelPath(relPath)
+    let targetDir: string | undefined
+    let targetPath = relPath
+    if (destination !== undefined) {
+      this.#assertNotSkipped(root, destination)
+      targetDir = destination === '' ? root.real : await this.#existingFolder(root, destination, 'promptx/library/folder-not-found')
+      targetPath = destination === '' ? name : `${destination}/${name}`
+    }
     const original = decodeUtf8(current.bytes)
     if (original === null) throw new PromptxError('promptx/library/unreadable', 'not-utf8')
     const parsed = parsePromptFile(original)
     const oldBody = editorBody(parsed)
     const bodyChanged = text !== oldBody
     if (text.trim() === '' && bodyChanged) throw new PromptxError('promptx/library/empty')
-    const now = this.#now()
-    const stamp = formatIsoUtc(now)
     const frontMatter = parsed.frontMatter
     const title = metadata?.title
     const tags = metadata?.tags
     const titleChanged = title !== undefined && title !== displayTitle(frontMatter?.fields.title, oldBody, relPath)
-    let next: string
-    let expected: FrontMatterFields
-    if (frontMatter === null) {
-      // 没有 front matter 的文件，用户在对话框里选「补上并保存」之前一个字节都不改（L-08、7.3）
-      if (mode !== 'addFrontMatter') return saveConflict('noFrontMatter')
-      const fields = {
-        id: generatePromptId(now, this.#randomBytes(4)),
-        title: title ?? binding.title,
-        ...(tags === undefined ? {} : { tags }),
-        created: stamp,
-        updated: stamp,
+    const tagsChanged = tags !== undefined && !sameTags(frontMatter?.fields.tags ?? [], tags)
+    let next = original
+    // 仅换文件夹时不写入元数据和更新时间，旧文件原样移动，包括没有 front matter 的 Markdown。
+    if (destination === undefined || bodyChanged || titleChanged || tagsChanged) {
+      const now = this.#now()
+      const stamp = formatIsoUtc(now)
+      let expected: FrontMatterFields
+      if (frontMatter === null) {
+        // 没有 front matter 的文件，用户在对话框里选「补上并保存」之前一个字节都不改（L-08、7.3）
+        if (mode !== 'addFrontMatter') return saveConflict('noFrontMatter')
+        const fields = {
+          id: generatePromptId(now, this.#randomBytes(4)),
+          title: title ?? binding.title,
+          ...(tags === undefined ? {} : { tags }),
+          created: stamp,
+          updated: stamp,
+        }
+        expected = fields
+        next = addFrontMatter(original, fields)
+      } else if (frontMatter.state !== 'ok') {
+        // 写坏了、布局不认识或没有结尾行：不改写，提示先修好或另存为新 Prompt（L-01，审查意见 S12）
+        return saveConflict('invalidFrontMatter')
+      } else {
+        // 按编辑窗口明确提交的字段改标题或标签，其余字段、注释、顺序和引号保持原样。
+        const patch: FrontMatterPatch = { updated: stamp }
+        if ((frontMatter.fields.id ?? '').trim() === '') patch.id = generatePromptId(now, this.#randomBytes(4))
+        if (titleChanged) patch.title = title
+        if (tagsChanged) patch.tags = tags
+        const patched = patchFrontMatter(original, patch)
+        if (!patched.ok) return saveConflict(patched.reason === 'no-front-matter' ? 'noFrontMatter' : 'invalidFrontMatter')
+        expected = { ...frontMatter.fields, ...patch }
+        next = patched.text
       }
-      expected = fields
-      next = addFrontMatter(original, fields)
-    } else if (frontMatter.state !== 'ok') {
-      // 写坏了、布局不认识或没有结尾行：不改写，提示先修好或另存为新 Prompt（L-01，审查意见 S12）
-      return saveConflict('invalidFrontMatter')
-    } else {
-      // 按编辑窗口明确提交的字段改标题或标签，其余字段、注释、顺序和引号保持原样。
-      const patch: FrontMatterPatch = { updated: stamp }
-      if ((frontMatter.fields.id ?? '').trim() === '') patch.id = generatePromptId(now, this.#randomBytes(4))
-      if (titleChanged) patch.title = title
-      if (tags !== undefined && !sameTags(frontMatter.fields.tags ?? [], tags)) patch.tags = tags
-      const patched = patchFrontMatter(original, patch)
-      if (!patched.ok) return saveConflict(patched.reason === 'no-front-matter' ? 'noFrontMatter' : 'invalidFrontMatter')
-      expected = { ...frontMatter.fields, ...patch }
-      next = patched.text
+      // 仅编辑元数据时保持磁盘正文原样，包括来自外部编辑器的混合换行。
+      if (bodyChanged) next = replaceBody(next, text)
+      const check = readBack(next, expected, parsed)
+      if (check === null || toLf(check.body) !== toLf(text)) return saveConflict('invalidFrontMatter')
     }
-    // 仅编辑元数据时保持磁盘正文原样，包括来自外部编辑器的混合换行。
-    if (bodyChanged) next = replaceBody(next, text)
-    const check = readBack(next, expected, parsed)
-    if (check === null || toLf(check.body) !== toLf(text)) return saveConflict('invalidFrontMatter')
-    const bytes = Buffer.from(next, 'utf8')
+    const bytes = next === original ? current.bytes : Buffer.from(next, 'utf8')
     assertWritableSize(bytes)
     if (titleChanged) await this.#assertUniqueTitle(root, title, relPath)
-    const outcome = await replaceFile(located.abs, bytes, { ...this.#fsOptions(), expected: before, mode: modeToKeep(current.stats) })
+    const options = { ...this.#fsOptions(), expected: before, mode: modeToKeep(current.stats) }
+    if (destination !== undefined || request.libraryDir !== undefined) this.#assertCurrentRoot(root.configured)
+    const outcome = targetDir === undefined
+      ? await replaceFile(located.abs, bytes, options)
+      : await replaceAndMoveFile(located.abs, targetDir, bytes, options)
     if (outcome.kind !== 'replaced') return saveConflict(outcome.kind)
-    const indexed = indexedFromText(relPath, next, outcome.stats)
+    const indexed = indexedFromText(targetPath, next, outcome.stats)
     const after = versionOf(bytes)
     const meta = indexed.doc.meta
-    this.#cache.record(root.real, relPath, indexed)
+    if (targetPath !== relPath) this.#cache.record(root.real, relPath, null)
+    this.#cache.record(root.real, targetPath, indexed)
     const nextBinding: Binding = {
       libraryDir: binding.libraryDir,
-      relPath,
+      relPath: targetPath,
       id: meta.id,
       title: meta.title,
       sha256: after.sha256,
@@ -566,7 +630,7 @@ export class LibraryService implements LibraryApi {
       try {
         const root = this.#rootOrThrow(await this.#resolveRoot(configured))
         if (root === null) return metaConflict('missing')
-        return await this.#withTitleLock(root, update.patch.title, () => (
+        return await this.#withLibraryWriteLock(root, () => (
           this.#updateMeta(root, relPath, update.patch, update.addFrontMatter)
         ))
       } catch (error) {
@@ -650,6 +714,58 @@ export class LibraryService implements LibraryApi {
 
   // ───────────── 删除与回收站 ─────────────
 
+  async createFolder(name: string, libraryDir: string): Promise<{ folder: string }> {
+    const folder = folderRelPath(name, this.#platform)
+    if (folder === null || folder === '' || folder.includes('/')) throw new PromptxError('promptx/library/invalid-path')
+    return await this.#mutate(libraryDir, async () => {
+      try {
+        this.#assertCurrentRoot(libraryDir)
+        let state = await this.#resolveRoot(libraryDir)
+        if (state.kind === 'missing') {
+          await mkdir(libraryDir, { recursive: true })
+          state = await this.#resolveRoot(libraryDir)
+        }
+        const root = this.#rootOrThrow(state)
+        if (root === null) throw new PromptxError('promptx/library/not-found')
+        return await this.#withLibraryWriteLock(root, async () => {
+          this.#assertCurrentRoot(libraryDir)
+          this.#assertNotSkipped(root, folder)
+          if ((await nameKeysOf(root.real)).has(nameKey(folder))) {
+            throw new PromptxError('promptx/library/folder-exists')
+          }
+          await mkdir(folderAbs(root.real, folder))
+          this.#cache.reset()
+          return { folder }
+        })
+      } catch (error) {
+        throw asPromptxError(error, 'promptx/library/write-failed')
+      }
+    })
+  }
+
+  async deleteFolder(folder: string, libraryDir: string): Promise<{ trashFile: string }> {
+    const rel = folderRelPath(folder, this.#platform)
+    if (rel === null || rel === '') throw new PromptxError('promptx/library/invalid-path')
+    return await this.#mutate(libraryDir, async () => {
+      try {
+        this.#assertCurrentRoot(libraryDir)
+        const root = this.#rootOrThrow(await this.#resolveRoot(libraryDir))
+        if (root === null) throw new PromptxError('promptx/library/not-found')
+        return await this.#withLibraryWriteLock(root, async () => {
+          this.#assertCurrentRoot(libraryDir)
+          this.#assertMovableFolder(root, rel)
+          const source = await this.#existingFolder(root, rel)
+          const trashDir = await ensureTrashDir(root.real)
+          const trashFile = await moveFolderToTrash(trashDir, source, rel, this.#now().getTime())
+          this.#cache.reset()
+          return { trashFile }
+        })
+      } catch (error) {
+        throw asPromptxError(error, 'promptx/library/move-failed')
+      }
+    })
+  }
+
   async delete(relPath: string): Promise<{ trashFile: string }> {
     const rel = promptRelPath(relPath, this.#platform)
     if (rel === null) throw new PromptxError('promptx/library/invalid-path')
@@ -667,12 +783,13 @@ export class LibraryService implements LibraryApi {
     const root = this.#rootOrThrow(await this.#resolveRoot(configured))
     if (root === null) throw new PromptxError('promptx/library/not-found')
     this.#assertNotSkipped(root, folderOf(relPath))
-    const located = await locate(root.real, relPath)
-    if (located.kind !== 'file') throw new PromptxError('promptx/library/not-found')
+    if ((await locate(root.real, relPath)).kind !== 'file') throw new PromptxError('promptx/library/not-found')
     const trashDir = await ensureTrashDir(root.real)
     const { name } = splitRelPath(relPath)
     // 删除 = 在修改队列里、持回收站记录锁，先把文件不覆盖地移进 `_trash/`，再原子写记录（design-spec 7.3）
-    const trashFile = await this.#withRecordLock(trashDir, async () => {
+    const trashFile = await this.#withRecordLock(trashDir, () => this.#withLibraryWriteLock(root, async () => {
+      const located = await locate(root.real, relPath)
+      if (located.kind !== 'file') throw new PromptxError('promptx/library/not-found')
       const record = await readTrashRecord(trashDir, this.#platform)
       // 读不出来的记录不改写：先改名留着，再写一份新的
       if (record.state === 'unreadable') await setAsideBrokenRecord(trashDir, this.#now(), this.#fsOptions())
@@ -703,7 +820,7 @@ export class LibraryService implements LibraryApi {
         throw new PromptxError(writingRecord ? 'promptx/trash/record-failed' : 'promptx/library/move-failed', systemErrorDetail(error))
       }
       return moved
-    })
+    }))
     this.#cache.record(root.real, relPath, null)
     return { trashFile }
   }
@@ -741,6 +858,16 @@ export class LibraryService implements LibraryApi {
           originalPath: item?.originalPath ?? null,
         })
       })
+      const folderIds = dirents.filter(d => d.isDirectory() && isFolderTrashId(d.name)).map(d => d.name)
+      const folders = await mapPool(folderIds, READ_CONCURRENCY, async (id) => {
+        const folder = await readTrashedFolder(trashDir, id, this.#platform)
+        return folder?.entry ?? null
+      })
+      for (const folder of folders) {
+        if (folder !== null && words.every(word => normalizeSearchText(folder.originalPath ?? folder.title).includes(word))) {
+          entries.push(folder)
+        }
+      }
       // 只留这次还在的文件，已经恢复或被移走的名字不再占内存
       this.#trashInfo.set(trashDir, current)
       entries.sort(compareTrashEntries)
@@ -800,21 +927,82 @@ export class LibraryService implements LibraryApi {
   async trashRestore(params: RestoreParams): Promise<RestoreResult> {
     const request = parseRestoreRequest(params)
     const file = request.file
-    if (!isTrashFileName(file, this.#platform)) throw new PromptxError('promptx/library/invalid-path')
+    const isFolder = isFolderTrashId(file)
+    if (!isFolder && !isTrashFileName(file, this.#platform)) throw new PromptxError('promptx/library/invalid-path')
     let chosen: string | null = null
     // 用户在「原路径已被占用」对话框里确认的替代路径；没带路径时按原位置处理，占用时再给一个替代路径
     if (request.target === 'alternative' && request.alternative !== null) {
-      chosen = promptRelPath(request.alternative, this.#platform)
-      if (chosen === null) throw new PromptxError('promptx/library/invalid-path')
+      chosen = isFolder ? folderRelPath(request.alternative, this.#platform) : promptRelPath(request.alternative, this.#platform)
+      if (chosen === null || chosen === '') throw new PromptxError('promptx/library/invalid-path')
     }
-    const configured = this.#options.getRoot()
+    const configured = request.libraryDir ?? this.#options.getRoot()
     return await this.#mutate(configured, async () => {
       try {
+        if (request.libraryDir !== undefined) this.#assertCurrentRoot(configured)
+        if (isFolder) {
+          return await this.#restoreFolder(configured, file, chosen)
+        }
         return await this.#restore(configured, file, chosen, request.acceptModified)
       } catch (error) {
         throw asPromptxError(error, 'promptx/library/move-failed')
       }
     })
+  }
+
+  async #restoreFolder(configured: string, file: string, chosen: string | null): Promise<RestoreResult> {
+    const root = this.#rootOrThrow(await this.#resolveRoot(configured))
+    if (root === null) return { kind: 'missing' }
+    const trashDir = join(root.real, TRASH_DIR)
+    if (!(await isRealDirectory(trashDir))) return { kind: 'missing' }
+    return await this.#withLibraryWriteLock(root, async () => {
+      this.#assertCurrentRoot(configured)
+      const item = await readTrashedFolder(trashDir, file, this.#platform)
+      if (item === null) return { kind: 'missing' }
+      const original = item.entry.originalPath ?? item.entry.title
+      const destination = chosen ?? original
+      const { folder, name } = splitRelPath(destination)
+      if (folderRelPath(destination, this.#platform) === null || this.#touchesSkipped(root, destination)) {
+        return { kind: 'occupied', alternative: await this.#folderAlternative(root, '', name) }
+      }
+      try {
+        await ensureFolder(root.real, folder)
+      } catch (error) {
+        // 原来的上级路径被文件或符号链接占用，改在库根目录恢复。
+        if (error instanceof PromptxError || errnoCode(error) === 'ENOTDIR') {
+          return { kind: 'occupied', alternative: await this.#folderAlternative(root, '', name) }
+        }
+        throw error
+      }
+      const parent = folderAbs(root.real, folder)
+      if ((await nameKeysOf(parent)).has(nameKey(name))) {
+        return { kind: 'occupied', alternative: await this.#folderAlternative(root, folder, name) }
+      }
+      try {
+        // 同一数据目录下的 profile 由写锁串行化。POSIX rename 拒绝覆盖非空目录或普通文件，
+        // 但操作系统外部程序在占用检查后创建的同名空目录仍可能被替换。
+        await rename(item.source, join(parent, name))
+      } catch (error) {
+        if ((await nameKeysOf(parent)).has(nameKey(name))) {
+          return { kind: 'occupied', alternative: await this.#folderAlternative(root, folder, name) }
+        }
+        throw error
+      }
+      await Promise.all([fsyncDir(parent), fsyncDir(item.container)])
+      await cleanFolderTrash(item.container)
+      this.#cache.reset()
+      return { kind: 'restored', relPath: destination }
+    })
+  }
+
+  async #folderAlternative(root: OkRoot, folder: string, name: string): Promise<string> {
+    const used = await nameKeysOf(folderAbs(root.real, folder))
+    let attempts = 0
+    for (const candidate of numberedNames(name, '')) {
+      if (++attempts > MAX_ALTERNATIVES) break
+      const relPath = folder === '' ? candidate : `${folder}/${candidate}`
+      if (!used.has(nameKey(candidate)) && !this.#touchesSkipped(root, relPath)) return relPath
+    }
+    throw new PromptxError('promptx/library/move-failed', 'EEXIST: no free alternative name')
   }
 
   /** chosen 为 null 时恢复到原位置；否则是用户确认的替代路径。 */
@@ -966,6 +1154,26 @@ export class LibraryService implements LibraryApi {
     if (this.#insideSkipped(root, folder)) throw new PromptxError('promptx/library/invalid-path')
   }
 
+  #assertCurrentRoot(libraryDir: string): void {
+    if (libraryDir !== this.#options.getRoot()) throw new PromptxError('promptx/library/unavailable')
+  }
+
+  #assertMovableFolder(root: OkRoot, folder: string): void {
+    if (this.#touchesSkipped(root, folder)) throw new PromptxError('promptx/library/invalid-path')
+  }
+
+  #touchesSkipped(root: OkRoot, folder: string): boolean {
+    if (this.#insideSkipped(root, folder)) return true
+    const prefix = foldPath(folderAbs(root.real, folder), this.#platform) + sep
+    return [...root.skip].some(path => path.startsWith(prefix))
+  }
+
+  async #existingFolder(root: OkRoot, folder: string, code: ErrorCode = 'promptx/library/not-found'): Promise<string> {
+    const located = await locate(root.real, folder)
+    if (located.kind !== 'other' || !(await isRealDirectory(located.abs))) throw new PromptxError(code)
+    return located.abs
+  }
+
   #mutate<T>(configured: string, operation: () => Promise<T>): Promise<T> {
     return this.#queue.run(resolve(configured), operation)
   }
@@ -982,10 +1190,10 @@ export class LibraryService implements LibraryApi {
 
   #remember(key: string | null, result: SaveResult): void {
     if (key === null) return
-    this.#created.set(key, result)
-    for (const oldest of this.#created.keys()) {
-      if (this.#created.size <= REMEMBERED_REQUESTS) break
-      this.#created.delete(oldest)
+    this.#savedRequests.set(key, result)
+    for (const oldest of this.#savedRequests.keys()) {
+      if (this.#savedRequests.size <= REMEMBERED_REQUESTS) break
+      this.#savedRequests.delete(oldest)
     }
   }
 

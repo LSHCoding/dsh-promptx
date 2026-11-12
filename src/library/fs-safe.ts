@@ -7,7 +7,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
 import type { Stats } from 'node:fs'
-import { copyFile, link, lstat, mkdir, open, readdir, rename, rm, unlink } from 'node:fs/promises'
+import { copyFile, link, lstat, mkdir, mkdtemp, open, readdir, rename, rm, rmdir, unlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -494,6 +494,84 @@ export async function createNoClobber(
   if (placed === null) throw Object.assign(new Error('EEXIST: no free file name'), { code: 'EEXIST' })
   await fsyncDir(dir)
   return { name: placed.name, stats: placed.copied ?? written }
+}
+
+/** 目标必须仍是我们放下的文件。回滚时遇到外部替换或编辑，保留外部版本。 */
+async function matchesPlacement(target: string, written: Stats, version: FileVersion): Promise<boolean> {
+  try {
+    const current = await lstat(target)
+    return current.dev === written.dev && current.ino === written.ino && await checkVersion(target, version) === 'match'
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT' || errnoCode(error) === 'ENOTDIR') return false
+    throw error
+  }
+}
+
+/**
+ * 保存同时换目录：目标独占写入并持久化。源先挪到原目录的临时子目录，核对两边后才清理。
+ * 外部程序恰好替换源或目标时，按能恢复的方式回滚。两个目录的改动无法通过一个可移植的文件系统调用提交，
+ * 中途断电可能留下目标和备份。保留的备份目录不参与临时文件清理。
+ */
+export async function replaceAndMoveFile(
+  source: string,
+  dir: string,
+  data: Uint8Array,
+  options: ReplaceOptions & { expected: FileVersion },
+): Promise<ReplaceOutcome | { kind: 'destinationOccupied' }> {
+  const name = basename(source)
+  const sourceDir = dirname(source)
+  const target = join(dir, name)
+  const temp = join(dir, tempNameFor(name))
+  const nextVersion = versionOf(data)
+  let placed: Stats | undefined
+  let backupDir: string | undefined
+  let backup: string | undefined
+  let committed = false
+  try {
+    const written = await writeNewFile(temp, data, options.mode)
+    const result = await placeFirstFree(temp, dir, [name], options)
+    if (result === null) return { kind: 'destinationOccupied' }
+    placed = result.copied ?? written
+    await fsyncDir(dir)
+    await options.hooks?.beforeVerify?.(source)
+    backupDir = await mkdtemp(join(sourceDir, '.promptx-move-'))
+    const before = await checkVersion(source, options.expected)
+    if (before !== 'match') return { kind: before }
+    if (!await matchesPlacement(target, placed, nextVersion)) return { kind: 'destinationOccupied' }
+    const staged = join(backupDir, name)
+    await renameWithRetry(source, staged, options)
+    backup = staged
+    await fsyncDir(backupDir)
+    await fsyncDir(sourceDir)
+    if (await checkVersion(backup, options.expected) !== 'match') return { kind: 'modified' }
+    if (!await matchesPlacement(target, placed, nextVersion)) return { kind: 'destinationOccupied' }
+    committed = true
+  } finally {
+    try {
+      if (backup !== undefined) {
+        if (committed) await rm(backup, { force: true }).catch(() => undefined)
+        else await restoreMoveSource(backup, sourceDir, name, options)
+      }
+      if (!committed && placed !== undefined && await matchesPlacement(target, placed, nextVersion).catch(() => false)) {
+        await rm(target, { force: true }).catch(() => undefined)
+        await fsyncDir(dir)
+      }
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined)
+      if (backupDir !== undefined) await rmdir(backupDir).catch(() => undefined)
+    }
+  }
+  await fsyncDir(sourceDir)
+  return { kind: 'replaced', stats: placed }
+}
+
+async function restoreMoveSource(backup: string, dir: string, name: string, options: FsOptions): Promise<void> {
+  try {
+    if ((await lstat(backup)).isFile() && await moveNoClobber(backup, dir, [name], { ...options, hooks: {} }) !== null) return
+  } catch {
+    // 源路径恢复不了时，保留临时子目录，避免丢掉被移动的原文件。
+  }
+  throw new PromptxError('promptx/library/move-recovery')
 }
 
 function* prepend<T>(head: T, rest: Iterator<T>): Generator<T, void, unknown> {

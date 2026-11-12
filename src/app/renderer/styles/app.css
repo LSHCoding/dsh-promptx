@@ -605,6 +605,19 @@ textarea.px-input {
   overflow-y: auto;
 }
 
+.px-folders-heading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-top: 4px;
+  padding-right: 6px;
+  padding-bottom: 2px;
+}
+
+.px-folders-heading > span {
+  margin-right: auto;
+}
+
 .px-folders-footer {
   flex: none;
   padding: 6px;

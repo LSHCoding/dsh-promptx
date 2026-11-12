@@ -3,13 +3,15 @@
 // 数据类请求转给 Host（见 protocol.ts 的 RENDERER_FORWARDED_METHODS）。
 
 import type { CompanionRequests, RendererForwardedMethod } from './protocol.ts'
-import { normalizeTagPhrases } from './library-rules.ts'
+import { folderOf, normalizeTagPhrases } from './library-rules.ts'
 import type { Binding, CompanionConfig, EntryMetadataDraft, ErrorInfo, FolderSel, LibraryScope, OptimizeEvent, PromptMetadata, SaveConflict, TextSelection } from './types.ts'
 
 /** 小窗偏好，存在 `<dsh 数据目录>/promptx/prefs.json`，由主进程写入。 */
 export interface Prefs {
   version: 1
   window: { x: number; y: number; width: number; height: number } | null
+  /** 聊天栏展开时实际渲染的编辑区宽度。小程序重新启动时用它重建无聊天栏的窗口。 */
+  editorWidth: number | null
   panes: {
     library: boolean
     folderWidth: number
@@ -27,6 +29,7 @@ export interface Prefs {
 export const DEFAULT_PREFS: Prefs = {
   version: 1,
   window: null,
+  editorWidth: null,
   panes: { library: true, folderWidth: 150, listWidth: 300, previewHeight: 232, sessionWidth: 420 },
   library: { folder: { kind: 'all' }, scope: 'all', tag: null },
 }
@@ -48,7 +51,7 @@ export interface BridgeEvents {
   /** 主进程要退出或隐藏前请求立即写回草稿；渲染进程写完后调用 flushed(id)。 */
   'flush': { id: number }
   /** 端到端测试命令（只在 e2e 模式下发送），渲染进程处理后调用 e2eDone。 */
-  'e2e': { id: number; action: string; text?: string; size?: number; metadata?: PromptMetadata }
+  'e2e': { id: number; action: string; text?: string; size?: number; metadata?: PromptMetadata; folder?: string }
 }
 
 export type BridgeEventName = keyof BridgeEvents
@@ -71,6 +74,7 @@ export interface EntryEditorSnapshot {
   text: string
   selection: TextSelection | null
   metadata: EntryMetadataDraft
+  folders: string[]
   config: ResolvedConfig | null
   saving: boolean
   error: ErrorInfo | null
@@ -78,7 +82,11 @@ export interface EntryEditorSnapshot {
   recovered: boolean
 }
 
-export type EntryMetadataFields = Pick<EntryMetadataDraft, 'title' | 'tags'>
+export type EntryMetadataFields = Pick<EntryMetadataDraft, 'title' | 'tags' | 'folder'>
+
+export function entryFolderPatch(binding: Binding, fields: EntryMetadataFields): string | undefined {
+  return fields.folder === folderOf(binding.relPath) ? undefined : fields.folder
+}
 
 /** 正文保存只带实际改动的元数据，保留历史标签和原来的 front matter 写法。 */
 export function entryMetadataPatch(snapshot: EntryEditorSnapshot, fields: EntryMetadataFields): Partial<PromptMetadata> {
@@ -94,7 +102,8 @@ export function entryMetadataPatch(snapshot: EntryEditorSnapshot, fields: EntryM
 }
 
 export function isEntryDirty(snapshot: EntryEditorSnapshot, text: string, metadata: EntryMetadataFields): boolean {
-  return text !== snapshot.binding.savedBody || Object.keys(entryMetadataPatch(snapshot, metadata)).length > 0
+  return text !== snapshot.binding.savedBody || entryFolderPatch(snapshot.binding, metadata) !== undefined ||
+    Object.keys(entryMetadataPatch(snapshot, metadata)).length > 0
 }
 
 export interface EntryEditorBridge {
@@ -154,7 +163,7 @@ export interface PromptxBridge {
   prefs: {
     get(): Promise<Prefs>
     /** 合并写入（主进程防抖后落盘）。 */
-    set(patch: Partial<Pick<Prefs, 'panes' | 'library'>>): void
+    set(patch: Partial<Pick<Prefs, 'editorWidth' | 'panes' | 'library'>>): void
   }
 }
 

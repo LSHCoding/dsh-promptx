@@ -6,6 +6,7 @@ import { errorReason } from '../../../shared/i18n/index.ts'
 import { run } from './controls.tsx'
 import { useAppState, useController, useT } from './hooks.ts'
 import { StatusBarContainer } from './StatusBar.tsx'
+import { Toolbar } from './Toolbar.tsx'
 
 export function EditorPane(): ReactElement {
   const controller = useController()
@@ -14,6 +15,7 @@ export function EditorPane(): ReactElement {
   const load = useAppState(state => state.draft.load)
   const loadError = useAppState(state => state.draft.loadError)
   const locale = useAppState(state => state.locale)
+  const sessionOpen = useAppState(state => state.optimize.paneOpen)
 
   useLayoutEffect(() => {
     if (host.current === null) return undefined
@@ -26,8 +28,22 @@ export function EditorPane(): ReactElement {
     }
   }, [controller])
 
+  useLayoutEffect(() => {
+    controller.layout.persistEditorWidth()
+    const element = host.current
+    if (!sessionOpen || element === null || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => {
+      controller.layout.persistEditorWidth()
+    })
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+    }
+  }, [controller, sessionOpen])
+
   return (
     <section className="px-editor-column">
+      <Toolbar />
       <div className="px-editor-area">
         <div className="px-editor" ref={host} />
         {load === 'loading'

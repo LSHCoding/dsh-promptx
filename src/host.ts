@@ -33,6 +33,7 @@ import { translate } from './shared/i18n/index.ts'
 import { DEFAULT_INSTRUCTION } from './shared/instructions.ts'
 import type { CompanionMode, E2eCommand, E2eResult } from './shared/protocol.ts'
 import type { CompanionConfig, CompanionState, ErrorInfo, PanelStatus, PromptxConfig } from './shared/types.ts'
+import { readToolbarShortcuts } from './shared/window-shortcuts.ts'
 import { type Appearance, type AppearanceLocale, mapLocaleTag, resolveAppearance, resolveInstructionLocale } from './web/appearance.ts'
 import { checkLibraryRoot, createConfigUpdater, type LocationContext } from './web/config-update.ts'
 import { attachCompanionHandlers } from './host-handlers.ts'
@@ -134,6 +135,7 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
 
   const companionConfig = (): CompanionConfig => ({
     globalShortcut: config.globalShortcut.get(),
+    windowShortcuts: readToolbarShortcuts(field => config[field].get()),
     hideOnBlur: config.hideOnBlur.get(),
     confirmDelete: config.confirmDelete.get(),
     convertMiddleDot: config.convertMiddleDot.get(),
@@ -279,6 +281,8 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
 
   const updateConfig = createConfigUpdater({
     locationContext,
+    currentConfig: () => readConfig(config),
+    platform: process.platform,
     apply: async (patch: Partial<PromptxConfig>) => {
       if (settings === undefined) throw new PromptxError('promptx/settings/unavailable')
       await settings.update(SETTINGS_NAMESPACE, patch)

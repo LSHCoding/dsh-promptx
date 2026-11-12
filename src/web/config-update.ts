@@ -11,12 +11,13 @@
 import { realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { checkLibraryDir, checkShortcut, resolveLibraryDir, RUNTIME_SOURCES } from '../config.ts'
+import { checkLibraryDir, resolveLibraryDir, RUNTIME_SOURCES } from '../config.ts'
 import type { LibraryLocationContext } from '../config.ts'
 import { expandHome } from '../paths.ts'
 import { parseAccelerator } from '../shared/accelerator.ts'
 import { toErrorInfo } from '../shared/errors.ts'
 import type { ConfigFieldError, ConfigUpdateResult, ErrorInfo, PromptxConfig } from '../shared/types.ts'
+import { conflictingShortcutFields, SHORTCUT_CONFIG_FIELDS } from '../shared/window-shortcuts.ts'
 
 /** 库目录位置检查需要的上下文：在 config.ts 的基础上加上 dsh 另配的技能目录和 agents 目录。 */
 export interface LocationContext extends LibraryLocationContext {
@@ -30,6 +31,8 @@ export interface LocationContext extends LibraryLocationContext {
 
 export interface ConfigUpdaterDeps {
   locationContext: () => LocationContext
+  currentConfig: () => PromptxConfig
+  platform: string
   /** 写入已校验、已规范化的改动。 */
   apply: (patch: Partial<PromptxConfig>) => Promise<void>
 }
@@ -48,6 +51,13 @@ const CONFIG_FIELDS: Record<keyof PromptxConfig, true> = {
   convertYen: true,
   optimizeInstruction: true,
   globalShortcut: true,
+  shortcutLibrary: true,
+  shortcutSave: true,
+  shortcutOptimize: true,
+  shortcutClear: true,
+  shortcutChat: true,
+  shortcutSettings: true,
+  shortcutClose: true,
   hideOnBlur: true,
   runtimeSource: true,
 }
@@ -55,10 +65,10 @@ const CONFIG_FIELDS: Record<keyof PromptxConfig, true> = {
 type FieldErrors = Partial<Record<keyof PromptxConfig, ConfigFieldError>>
 
 export function createConfigUpdater(deps: ConfigUpdaterDeps): (patch: unknown) => Promise<ConfigUpdateResult> {
-  return async (patch: unknown): Promise<ConfigUpdateResult> => {
+  const update = async (patch: unknown): Promise<ConfigUpdateResult> => {
     let validated: { ok: true; patch: Partial<PromptxConfig> } | { ok: false; result: ConfigUpdateResult }
     try {
-      validated = await validatePatch(patch, deps.locationContext)
+      validated = await validatePatch(patch, deps)
     } catch (error) {
       return { ok: false, errors: {}, error: unavailable(error) }
     }
@@ -71,6 +81,13 @@ export function createConfigUpdater(deps: ConfigUpdaterDeps): (patch: unknown) =
       return { ok: false, errors: {}, error: unavailable(error) }
     }
     return { ok: true }
+  }
+  // 多个 dsh 页面同时保存时，后一份改动要用前一份已经写入的配置检查冲突。
+  let tail = Promise.resolve()
+  return (patch) => {
+    const result = tail.then(() => update(patch))
+    tail = result.then(() => undefined, () => undefined)
+    return result
   }
 }
 
@@ -132,7 +149,7 @@ export async function checkLibraryRoot(root: string, ctx: LocationContext): Prom
 
 async function validatePatch(
   patch: unknown,
-  locationContext: () => LocationContext,
+  deps: ConfigUpdaterDeps,
 ): Promise<{ ok: true; patch: Partial<PromptxConfig> } | { ok: false; result: ConfigUpdateResult }> {
   if (!isPlainObject(patch)) return badRequest('patch must be an object')
   for (const key of Object.keys(patch)) {
@@ -147,7 +164,7 @@ async function validatePatch(
     if (typeof value !== 'string' || value.includes('\0')) {
       errors.libraryDir = 'value-invalid'
     } else {
-      const reason = await checkLibraryLocation(value, locationContext())
+      const reason = await checkLibraryLocation(value, deps.locationContext())
       if (reason === null) out.libraryDir = value.trim()
       else errors.libraryDir = reason
     }
@@ -177,19 +194,23 @@ async function validatePatch(
       out.optimizeInstruction = /\S/.test(value) ? value : ''
     }
   }
-  if (Object.hasOwn(patch, 'globalShortcut')) {
-    const value = patch.globalShortcut
+  for (const field of SHORTCUT_CONFIG_FIELDS) {
+    if (!Object.hasOwn(patch, field)) continue
+    const value = patch[field]
     if (typeof value !== 'string') {
-      errors.globalShortcut = 'value-invalid'
+      errors[field] = 'value-invalid'
+    } else if (value.trim() === '') {
+      out[field] = ''
     } else {
-      const reason = checkShortcut(value)
-      if (reason !== null) {
-        errors.globalShortcut = reason
-      } else {
-        // 存规范写法（修饰键排好序、字母大写）：小程序、快捷键锁文件和配置页显示都按同一种写法比较。
-        const parsed = parseAccelerator(value)
-        out.globalShortcut = parsed.ok ? parsed.canonical : ''
-      }
+      const global = field === 'globalShortcut'
+      const parsed = parseAccelerator(value, global ? 'global' : 'window')
+      if (parsed.ok) out[field] = parsed.canonical
+      else errors[field] = global ? 'shortcut-invalid' : 'window-shortcut-invalid'
+    }
+  }
+  if (SHORTCUT_CONFIG_FIELDS.some(field => out[field] !== undefined)) {
+    for (const field of conflictingShortcutFields(out, deps.currentConfig(), deps.platform)) {
+      errors[field] = 'shortcut-conflict'
     }
   }
   if (Object.hasOwn(patch, 'runtimeSource')) {

@@ -16,8 +16,11 @@ export const ERROR_CODES = [
   'promptx/library/empty',
   'promptx/library/write-failed',
   'promptx/library/move-failed',
+  'promptx/library/move-recovery',
   'promptx/library/invalid-title',
   'promptx/library/duplicate-title',
+  'promptx/library/folder-exists',
+  'promptx/library/folder-not-found',
   // 回收站
   'promptx/trash/record-failed',
   'promptx/trash/not-found',

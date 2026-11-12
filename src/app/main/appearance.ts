@@ -2,7 +2,9 @@
 // 表示「跟随系统」；小程序和 dsh 在同一台电脑上，按小程序看到的系统设置解析成具体值再交给渲染进程。
 
 import type { ResolvedConfig } from '../../shared/bridge.ts'
+import { parseAccelerator } from '../../shared/accelerator.ts'
 import type { CompanionConfig } from '../../shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS, readToolbarShortcuts } from '../../shared/window-shortcuts.ts'
 
 export type Locale = ResolvedConfig['resolvedLocale']
 export type Theme = ResolvedConfig['resolvedTheme']
@@ -37,6 +39,7 @@ export function resolveConfig(config: CompanionConfig, system: SystemAppearance)
 /** Host 还没推过配置、推来的字段又坏了时用的值：不登记快捷键，外观跟随系统。 */
 export const FALLBACK_COMPANION_CONFIG: CompanionConfig = {
   globalShortcut: '',
+  windowShortcuts: DEFAULT_TOOLBAR_SHORTCUTS,
   hideOnBlur: false,
   confirmDelete: true,
   convertMiddleDot: true,
@@ -58,8 +61,19 @@ export function parseCompanionConfig(raw: unknown, previous: CompanionConfig | n
   const base = previous ?? FALLBACK_COMPANION_CONFIG
   const string = (field: unknown, fallback: string): string => (typeof field === 'string' ? field : fallback)
   const boolean = (field: unknown, fallback: boolean): boolean => (typeof field === 'boolean' ? field : fallback)
+  const shortcuts = value.windowShortcuts
+  const windowShortcuts = readToolbarShortcuts((field) => {
+    const requested = typeof shortcuts === 'object' && shortcuts !== null
+      ? (shortcuts as Record<string, unknown>)[field]
+      : undefined
+    if (typeof requested !== 'string') return base.windowShortcuts[field]
+    if (requested.trim() === '') return ''
+    const parsed = parseAccelerator(requested, 'window')
+    return parsed.ok ? parsed.canonical : base.windowShortcuts[field]
+  })
   return {
     globalShortcut: string(value.globalShortcut, base.globalShortcut),
+    windowShortcuts,
     hideOnBlur: boolean(value.hideOnBlur, base.hideOnBlur),
     confirmDelete: boolean(value.confirmDelete, base.confirmDelete),
     convertMiddleDot: boolean(value.convertMiddleDot, base.convertMiddleDot),

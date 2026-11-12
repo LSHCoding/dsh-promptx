@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { undo } from '@codemirror/commands'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { SUCCESS_TOAST_MS } from '../../../src/app/renderer/controller/toasts.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../../src/shared/window-shortcuts.ts'
 import {
   binding,
   chooseDialog,
   confirmSaveForm,
+  config,
   draftRecord,
   entry,
   fail,
@@ -302,6 +304,34 @@ describe('底栏提示的时长（E-03）', () => {
 })
 
 describe('其他窗口级快捷键（技术方案 5.5）', () => {
+  it('运行中更新设置后，快捷键触发清空、聊天、设置及关闭工具栏动作', async () => {
+    const bridge = new FakeBridge()
+    const controller = await start(bridge)
+    bridge.emit('config', config({
+      windowShortcuts: {
+        ...DEFAULT_TOOLBAR_SHORTCUTS,
+        shortcutClear: 'Command+K',
+        shortcutChat: 'Command+J',
+        shortcutSettings: 'Command+,',
+        shortcutClose: 'Command+W',
+      },
+    }))
+    type(controller, '正文')
+    controller.handleKeydown(keyEvent({ key: 'k', code: 'KeyK', metaKey: true }))
+    expect(controller.editor.getText()).toBe('')
+    controller.handleKeydown(keyEvent({ key: 'j', code: 'KeyJ', metaKey: true }))
+    await controller.layout.settled()
+    expect(controller.store.getState().optimize.paneOpen).toBe(true)
+    controller.handleKeydown(keyEvent({ key: ',', code: 'Comma', metaKey: true }))
+    await settle()
+    expect(bridge.window.openSettings).toHaveBeenCalledOnce()
+    controller.handleKeydown(keyEvent({ key: 'Escape' }))
+    expect(bridge.window.hide).not.toHaveBeenCalled()
+    controller.handleKeydown(keyEvent({ key: 'w', code: 'KeyW', metaKey: true }))
+    await settle()
+    expect(bridge.window.hide).toHaveBeenCalledOnce()
+  })
+
   it('⌘S 保存到库', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.save', params => ok({ kind: 'saved', binding: binding('a.md', params.text), entry: entry('a.md'), created: true }))

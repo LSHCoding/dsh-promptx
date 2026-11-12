@@ -218,6 +218,18 @@ describe('发起与取消（O-01）', () => {
     expect(controller.store.getState().optimize.paneOpen).toBe(false)
     expect(controller.store.getState().optimize.session).toBeNull()
   })
+
+  it('模型不可用时保留用户手动展开的聊天栏', async () => {
+    const bridge = new FakeBridge()
+    const host = new FakeHost(bridge)
+    const controller = await start(bridge)
+    await controller.optimize.togglePane()
+    type(controller, '草稿')
+    await controller.optimize.toggle()
+    host.discard({ code: 'promptx/optimize/no-model' })
+    await controller.layout.settled()
+    expect(controller.store.getState().optimize).toMatchObject({ paneOpen: true, session: null })
+  })
 })
 
 describe('流式回复（O-02）', () => {
@@ -264,7 +276,7 @@ describe('应用候选与草稿快照（O-04，技术方案 5.5，审查 COV-08�
     host.finish('done', { candidate: '第一版' })
     await controller.optimize.apply(lastRound(controller)?.id ?? '')
     controller.optimize.setFollowup('再精简一些')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     expect(bridge.callsTo('optimize.followup')).toEqual([{ text: '再精简一些' }])
     expect(controller.store.getState().optimize.followup).toBe('')
     host.finish('done', { candidate: '第二版' })
@@ -427,10 +439,53 @@ describe('草稿读回之前不能应用候选（F-01、技术方案 4.5，审�
 })
 
 describe('追加要求、失败与重试（O-05、O-06）', () => {
+  it('第一轮等待 Host 回复时不会重复发送，启动失败保留用户输入', async () => {
+    const bridge = new FakeBridge()
+    const pending = deferred<BridgeResult<{ session: OptimizeSession }>>()
+    bridge.handle('optimize.start', () => pending.promise)
+    const controller = await start(bridge)
+    type(controller, '主编辑区草稿')
+    controller.optimize.setFollowup('聊天栏的 Prompt')
+    const sending = controller.optimize.sendMessage()
+    expect(controller.optimize.state.submitting).toBe(true)
+    await controller.optimize.sendMessage()
+    await controller.optimize.toggle()
+    expect(bridge.callsTo('optimize.start')).toEqual([{ text: '聊天栏的 Prompt' }])
+    pending.resolve(fail('promptx/optimize/no-model'))
+    await sending
+    expect(controller.optimize.state).toMatchObject({ session: null, submitting: false, followup: '聊天栏的 Prompt' })
+    expect(controller.editor.getText()).toBe('主编辑区草稿')
+  })
+
+  it('聊天发起的第一轮被 Host 丢弃时恢复输入，之后可以重新发送', async () => {
+    const bridge = new FakeBridge()
+    const host = new FakeHost(bridge)
+    const controller = await start(bridge)
+    await controller.optimize.togglePane()
+    controller.optimize.setFollowup('聊天栏的 Prompt')
+    await controller.optimize.sendMessage()
+    expect(controller.optimize.state.followup).toBe('')
+    host.discard({ code: 'promptx/optimize/no-model' })
+    expect(controller.optimize.state).toMatchObject({ session: null, paneOpen: true, followup: '聊天栏的 Prompt' })
+    await controller.optimize.sendMessage()
+    expect(lastRound(controller)).toMatchObject({ kind: 'initial', input: '聊天栏的 Prompt' })
+  })
+
+  it('第一轮被丢弃时也保留已经写在聊天栏里的下一条', async () => {
+    const bridge = new FakeBridge()
+    const host = new FakeHost(bridge)
+    const controller = await start(bridge)
+    controller.optimize.setFollowup('聊天栏的 Prompt')
+    await controller.optimize.sendMessage()
+    controller.optimize.setFollowup('还在写的内容')
+    host.discard({ code: 'promptx/optimize/no-model' })
+    expect(controller.optimize.state.followup).toBe('聊天栏的 Prompt\n\n还在写的内容')
+  })
+
   it('只有空白时不发送；有一轮在进行时不能发送', async () => {
     const { bridge, controller } = await optimizeStarted()
     controller.optimize.setFollowup('再精简')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     expect(bridge.callsTo('optimize.followup')).toEqual([])
     expect(controller.store.getState().optimize.followup).toBe('再精简')
   })
@@ -439,7 +494,7 @@ describe('追加要求、失败与重试（O-05、O-06）', () => {
     const { host, controller } = await optimizeStarted()
     host.finish('done', { candidate: '一' })
     controller.optimize.setFollowup('再精简')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     expect(controller.store.getState().optimize.followup).toBe('')
     host.finish('failed', { error: { code: 'promptx/optimize/network' } })
     expect(controller.store.getState().optimize.followup).toBe('再精简')
@@ -450,12 +505,12 @@ describe('追加要求、失败与重试（O-05、O-06）', () => {
     const { host, controller } = await optimizeStarted()
     host.finish('done', { candidate: '一' })
     controller.optimize.setFollowup('第二轮')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     await controller.optimize.cancel()
     expect(controller.store.getState().optimize.followup).toBe('第二轮')
 
     controller.optimize.setFollowup('第三轮')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     controller.optimize.setFollowup('还在想的下一条')
     host.finish('failed', { error: { code: 'promptx/optimize/timeout' } })
     expect(controller.store.getState().optimize.followup).toBe('还在想的下一条')
@@ -472,7 +527,7 @@ describe('追加要求、失败与重试（O-05、O-06）', () => {
     const { bridge, host, controller } = await optimizeStarted()
     host.finish('done', { candidate: '一' })
     controller.optimize.setFollowup('再精简')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     host.finish('failed', { error: { code: 'promptx/optimize/network' } })
     const failedId = lastRound(controller)?.id ?? ''
     await controller.optimize.retry(failedId)
@@ -508,19 +563,20 @@ describe('清空会话与会话栏开合（O-07）', () => {
 
     await controller.optimize.togglePane()
     controller.optimize.setFollowup('再改')
-    await controller.optimize.sendFollowup()
+    await controller.optimize.sendMessage()
     host.finish('done', { candidate: '二' })
     expect(toastText(controller)).not.toBe('优化结果已返回。')
   })
 
-  it('清空会话：插件先取消再丢弃，会话栏收起，窗口宽度复原', async () => {
+  it('清空会话：插件先取消再丢弃，聊天栏和窗口宽度保持原样', async () => {
     const { bridge, controller } = await optimizeStarted()
+    const width = bridge.bounds.width
     await controller.optimize.clear()
     await controller.layout.settled()
     expect(bridge.callsTo('optimize.clear')).toHaveLength(1)
     expect(controller.store.getState().optimize.session).toBeNull()
-    expect(controller.store.getState().optimize.paneOpen).toBe(false)
-    expect(bridge.bounds.width).toBe(980)
+    expect(controller.store.getState().optimize.paneOpen).toBe(true)
+    expect(bridge.bounds.width).toBe(width)
   })
 
   it('开始新会话后，旧会话迟到的推送不会把它显示回来', async () => {

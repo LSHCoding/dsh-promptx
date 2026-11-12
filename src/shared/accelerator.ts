@@ -68,11 +68,17 @@ const KEY_NAMES: ReadonlyMap<string, string> = new Map([
   ...PUNCTUATION.map((mark): [string, string] => [mark, mark]),
 ])
 
+const WINDOW_KEY_NAMES: ReadonlyMap<string, string> = new Map([
+  ['enter', 'Enter'],
+  ['esc', 'Escape'],
+  ['escape', 'Escape'],
+])
+
 /**
  * 解析 Electron 加速键写法。键名不区分大小写，`+` 两侧的空白忽略（与 Electron 一致）；
  * 成功时给出规范写法：修饰键按 CommandOrControl、Command、Control、Alt、Shift、Super 排序，字母大写。
  */
-export function parseAccelerator(s: string): ParsedAccelerator {
+export function parseAccelerator(s: string, scope: 'global' | 'window' = 'global'): ParsedAccelerator {
   const trimmed = s.trim()
   if (trimmed === '') return { ok: false, reason: 'empty' }
   const tokens = trimmed.split('+').map(token => token.trim())
@@ -89,7 +95,7 @@ export function parseAccelerator(s: string): ParsedAccelerator {
       modifiers.add(modifier)
       continue
     }
-    const key = KEY_NAMES.get(lower)
+    const key = KEY_NAMES.get(lower) ?? (scope === 'window' ? WINDOW_KEY_NAMES.get(lower) : undefined)
     if (key === undefined) return { ok: false, reason: 'bad-key' }
     keys.push(key)
   }
@@ -97,7 +103,7 @@ export function parseAccelerator(s: string): ParsedAccelerator {
   if (duplicate || OVERLAPPING.some(([a, b]) => modifiers.has(a) && modifiers.has(b))) return { ok: false, reason: 'syntax' }
   const [key, ...extraKeys] = keys
   if (key === undefined || extraKeys.length > 0) return { ok: false, reason: 'syntax' }
-  if (modifiers.size === 0) return { ok: false, reason: 'no-modifier' }
+  if (modifiers.size === 0 && (scope !== 'window' || key !== 'Escape')) return { ok: false, reason: 'no-modifier' }
   if (modifiers.size === 1 && modifiers.has('Shift')) return { ok: false, reason: 'shift-only' }
 
   const ordered = MODIFIER_ORDER.filter(modifier => modifiers.has(modifier))
@@ -110,6 +116,8 @@ const MAC_KEY_SYMBOLS: ReadonlyMap<string, string> = new Map([
   ['Left', '←'],
   ['Right', '→'],
   ['Plus', '+'],
+  ['Enter', '↩'],
+  ['Escape', 'Esc'],
 ])
 
 /**
@@ -117,8 +125,8 @@ const MAC_KEY_SYMBOLS: ReadonlyMap<string, string> = new Map([
  * 其他平台写成 `Ctrl+Alt+Shift+Win+P`，CommandOrControl 显示为 Ctrl，Command / Super 在 Windows 上是 Win、
  * 在 Linux 上是 Super。写法不合法时原样返回（去掉首尾空白），界面上至少能看到用户写了什么。
  */
-export function formatAccelerator(s: string, platform: string): string {
-  const parsed = parseAccelerator(s)
+export function formatAccelerator(s: string, platform: string, scope: 'global' | 'window' = 'global'): string {
+  const parsed = parseAccelerator(s, scope)
   if (!parsed.ok) return s.trim()
   const has = (modifier: AcceleratorModifier): boolean => parsed.modifiers.includes(modifier)
 
@@ -136,7 +144,7 @@ export function formatAccelerator(s: string, platform: string): string {
   if (has('Alt')) parts.push('Alt')
   if (has('Shift')) parts.push('Shift')
   if (has('Command') || has('Super')) parts.push(platform === 'win32' ? 'Win' : 'Super')
-  parts.push(parsed.key)
+  parts.push(parsed.key === 'Escape' ? 'Esc' : parsed.key)
   return parts.join('+')
 }
 
@@ -181,14 +189,21 @@ function keyFromCode(code: string): string | null {
   return CODE_KEYS.get(code) ?? null
 }
 
+/** 录制和触发都优先按物理键位匹配，避免 Option、Shift 或键盘布局改变主键。 */
+function windowShortcutKey(e: AcceleratorKeyEvent): string | null {
+  if (e.code === 'NumpadAdd') return 'Plus'
+  return keyFromCode(e.code) ?? CODE_KEYS.get(e.key) ?? WINDOW_KEY_NAMES.get(e.key.toLowerCase())
+    ?? (e.key === ' ' ? 'Space' : e.key === '+' ? 'Plus' : KEY_NAMES.get(e.key.toLowerCase()) ?? null)
+}
+
 /**
  * 快捷键录制：把一次 keydown 换算成规范的加速键写法。只按下修饰键时、主键不支持时、
  * 或组合不合法（没有修饰键、只有 Shift）时返回 null，录制框继续等待。
  * metaKey 在 macOS 上是 ⌘（Command），在其他平台上是 Win / Super 键。
  */
-export function acceleratorFromKeyEvent(e: AcceleratorKeyEvent, platform: string): string | null {
+export function acceleratorFromKeyEvent(e: AcceleratorKeyEvent, platform: string, scope: 'global' | 'window' = 'global'): string | null {
   if (MODIFIER_KEY_VALUES.has(e.key)) return null
-  const key = keyFromCode(e.code)
+  const key = scope === 'window' ? windowShortcutKey(e) : keyFromCode(e.code)
   if (key === null) return null
   const parts: string[] = []
   if (e.ctrlKey) parts.push('Control')
@@ -196,8 +211,23 @@ export function acceleratorFromKeyEvent(e: AcceleratorKeyEvent, platform: string
   if (e.shiftKey) parts.push('Shift')
   if (e.metaKey) parts.push(platform === 'darwin' ? 'Command' : 'Super')
   parts.push(key)
-  const parsed = parseAccelerator(parts.join('+'))
+  const parsed = parseAccelerator(parts.join('+'), scope)
   return parsed.ok ? parsed.canonical : null
+}
+
+const PHYSICAL_ORDER: readonly AcceleratorModifier[] = ['Command', 'Control', 'Alt', 'Shift', 'Super']
+
+/** CommandOrControl 和 Super 按平台换成实际的修饰键，供锁文件和快捷键冲突检测共用。 */
+export function physicalShortcutKey(accelerator: string, platform: string, scope: 'global' | 'window' = 'global'): string | null {
+  const parsed = parseAccelerator(accelerator, scope)
+  if (!parsed.ok) return null
+  const modifiers = new Set<AcceleratorModifier>()
+  for (const modifier of parsed.modifiers) {
+    if (platform === 'darwin') modifiers.add(modifier === 'CommandOrControl' || modifier === 'Super' ? 'Command' : modifier)
+    else if (modifier === 'CommandOrControl') modifiers.add('Control')
+    else modifiers.add(modifier === 'Command' ? 'Super' : modifier)
+  }
+  return [...PHYSICAL_ORDER.filter(modifier => modifiers.has(modifier)), parsed.key].join('+')
 }
 
 const OTHER_PLATFORM_SHORTCUT = 'Control+Alt+P'

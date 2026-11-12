@@ -13,6 +13,8 @@ function isRunning(round: OptimizeRound): boolean {
   return round.status === 'running'
 }
 
+type SubmissionSource = 'editor' | 'chat' | 'followup'
+
 /**
  * 请求的结果和推送的快照可能乱序到达。结果里的会话不能让已经结束的一轮退回「进行中」，
  * 也不能丢掉已经收到的增量文字：同一轮在本地更长、且以结果里的回复开头时保留本地的。
@@ -36,6 +38,10 @@ export class Optimize {
   private readonly snapshots = new Map<string, string>()
   /** 已经丢弃或清空的会话：迟到的请求结果不能把它们重新显示出来。 */
   private readonly ended = new Set<string>()
+  /** 无可用模型时只收起由这轮优化自动展开的聊天栏。 */
+  private autoOpenedSessionId: string | null = null
+  /** 聊天栏发起的第一轮被丢弃时，可以把已提交的文字放回输入框。 */
+  private chatStartedSessionId: string | null = null
 
   constructor(
     private readonly ctx: Context,
@@ -63,28 +69,13 @@ export class Optimize {
       await this.cancel()
       return
     }
-    await this.start()
-  }
-
-  private async start(): Promise<void> {
+    if (this.state.submitting) return
     const draft = this.ctx.editor.getText()
     if (isBlank(draft)) {
       this.toasts.error(text(this.ctx, 'toast.nothingToOptimize'))
       return
     }
-    const result = await this.ctx.bridge.call('optimize.start', { text: draft })
-    if (!result.ok) {
-      // 包括「dsh 里还没有可用的模型」：不开始会话，会话栏不展开（O-01）。
-      this.toasts.error(describe(this.ctx, result.error))
-      return
-    }
-    const session = result.value.session
-    // 第一轮在收到任何文字前就因为没有可用模型结束时，discarded 可能比这个结果先到。
-    if (this.ended.has(session.id)) return
-    if (this.state.session?.id !== session.id) this.snapshots.clear()
-    this.recordSnapshot(session, draft)
-    this.setSession(session, true)
-    await this.layout.open('session')
+    await this.submit(draft, 'editor')
   }
 
   async cancel(): Promise<void> {
@@ -107,21 +98,43 @@ export class Optimize {
     this.update(optimize => (optimize.followup === followup ? optimize : { ...optimize, followup }))
   }
 
-  /** 只有空白时不发送；有一轮在进行时不能发送。 */
-  async sendFollowup(): Promise<void> {
+  /** 聊天输入框在空会话时发送待优化的 Prompt，之后发送追加要求。 */
+  async sendMessage(): Promise<void> {
     this.toasts.beginAction()
     const followup = this.state.followup
-    if (isBlank(followup) || this.state.session === null || this.runningRound() !== undefined) return
+    if (isBlank(followup) || this.state.submitting || this.runningRound() !== undefined) return
+    await this.submit(followup, this.state.session === null ? 'chat' : 'followup')
+  }
+
+  private async submit(input: string, source: SubmissionSource): Promise<void> {
+    // 即使第一轮来自聊天栏，「应用」也要用提交时的主编辑区全文检查后续修改。
     const draft = this.ctx.editor.getText()
-    this.setFollowup('')
-    const result = await this.ctx.bridge.call('optimize.followup', { text: followup })
-    if (!result.ok) {
-      if (this.state.followup === '') this.setFollowup(followup)
-      this.toasts.error(describe(this.ctx, result.error))
-      return
+    this.update(optimize => ({ ...optimize, submitting: true, followup: source === 'followup' ? '' : optimize.followup }))
+    try {
+      const method = source === 'followup' ? 'optimize.followup' : 'optimize.start'
+      const result = await this.ctx.bridge.call(method, { text: input })
+      if (!result.ok) {
+        if (source === 'followup' && this.state.followup === '') this.setFollowup(input)
+        this.toasts.error(describe(this.ctx, result.error))
+        return
+      }
+      const session = result.value.session
+      // 第一轮可能在请求返回前就被 Host 丢弃或被用户清空。
+      if (this.ended.has(session.id)) return
+      if (this.state.session?.id !== session.id) this.snapshots.clear()
+      this.recordSnapshot(session, draft)
+      this.setSession(session, true)
+      if (source === 'chat') {
+        this.chatStartedSessionId = session.id
+        if (this.state.followup === input) this.setFollowup('')
+      }
+      if (source === 'editor') {
+        this.autoOpenedSessionId = this.state.paneOpen ? null : session.id
+        await this.layout.open('session')
+      }
+    } finally {
+      this.update(optimize => ({ ...optimize, submitting: false }))
     }
-    this.recordSnapshot(result.value.session, draft)
-    this.setSession(result.value.session, true)
   }
 
   /** 只能重试失败或取消的轮次：插件去掉那一轮，用同样的输入追加新的一轮。 */
@@ -165,7 +178,7 @@ export class Optimize {
       return
     }
     const candidate = round.candidate
-    // 恢复显示的会话（小程序重启后）没有快照：第一轮的输入就是当时的草稿，追加轮无从比较，按「改过」处理。
+    // 小程序重启后没有快照：第一轮以原输入为参照，追加轮按草稿可能改过处理。
     const snapshot = this.snapshots.get(roundId) ?? (round.kind === 'initial' ? round.input : null)
     if (snapshot === null || snapshot !== this.ctx.editor.getText()) {
       const choice = await this.dialogs.open({
@@ -225,7 +238,7 @@ export class Optimize {
 
   // ───────────────────────────── 清空会话与会话栏开合（O-07） ─────────────────────────────
 
-  /** 有一轮在进行时插件先取消，然后丢弃整个会话并收起会话栏。 */
+  /** 有一轮在进行时插件先取消，然后清空消息，保留聊天栏的开合状态。 */
   async clear(): Promise<void> {
     this.toasts.beginAction()
     const session = this.state.session
@@ -234,18 +247,17 @@ export class Optimize {
       this.toasts.error(describe(this.ctx, result.error))
       return
     }
-    this.drop(session)
-    await this.layout.close('session')
+    if (this.state.session?.id === session?.id) this.drop(session)
   }
 
-  /** 工具栏「会话」：收起或展开会话栏，内容不丢。 */
+  /** 工具栏「聊天」：收起或展开聊天栏，内容不丢。 */
   async togglePane(): Promise<void> {
     this.toasts.beginAction()
-    if (this.state.paneOpen) await this.layout.close('session')
-    else if (this.state.session !== null) await this.layout.open('session')
+    this.autoOpenedSessionId = null
+    await this.layout.toggleSession()
   }
 
-  /** 启动时从插件恢复会话（小程序重启后会话仍在插件内存里）。会话栏先收起，用「会话」按钮打开。 */
+  /** 启动时从插件恢复会话（小程序重启后会话仍在插件内存里）。聊天栏先收起，用「聊天」按钮打开。 */
   async restore(): Promise<void> {
     const result = await this.ctx.bridge.call('optimize.state', {})
     if (result.ok && result.value.session !== null && this.state.session === null) this.setSession(result.value.session, false)
@@ -258,7 +270,6 @@ export class Optimize {
       case 'session':
         if (event.session === null) {
           this.drop(this.state.session)
-          this.closePane()
         } else {
           this.setSession(event.session, false)
         }
@@ -294,24 +305,28 @@ export class Optimize {
     this.ended.add(sessionId)
     const session = this.state.session
     if (session === null || session.id === sessionId) {
-      this.drop(session)
-      this.closePane()
+      const close = this.autoOpenedSessionId === sessionId
+      const initialInput = this.chatStartedSessionId === sessionId
+        ? session?.rounds.find(round => round.kind === 'initial')?.input
+        : undefined
+      const pendingInput = this.state.followup
+      // 丢弃会话会移除已发送的首条消息，把它和之后写的内容一起留在输入框。
+      const restoredInput = initialInput === undefined || initialInput === pendingInput
+        ? pendingInput
+        : [initialInput, pendingInput].filter(value => value !== '').join('\n\n')
+      this.drop(session, restoredInput)
+      // 打开可能还在等原生窗口调整宽度，关闭在布局队列中排在它之后。
+      if (close) runTask(this.layout.close('session'))
     }
     this.toasts.error(describe(this.ctx, error))
   }
 
-  /**
-   * 收起会话栏。不看此刻是否已经打开：开始优化时会话栏的打开还在排队（要先问主进程窗口位置），
-   * 这时 discarded 到达也要收起；布局的开合按顺序执行，关闭排在打开之后，执行时栏没开就什么都不做。
-   */
-  private closePane(): void {
-    runTask(this.layout.close('session'))
-  }
-
-  private drop(session: OptimizeSession | null): void {
+  private drop(session: OptimizeSession | null, followup = ''): void {
     if (session !== null) this.ended.add(session.id)
+    this.autoOpenedSessionId = null
+    this.chatStartedSessionId = null
     this.snapshots.clear()
-    this.update(optimize => ({ ...optimize, session: null, followup: '' }))
+    this.update(optimize => ({ ...optimize, session: null, followup }))
   }
 
   /** fromResult：来自请求结果的会话要和本地合并（可能比推送旧）；推送的快照直接采用。 */

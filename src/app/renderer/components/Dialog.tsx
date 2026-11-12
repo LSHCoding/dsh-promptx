@@ -88,7 +88,7 @@ function Dialog({ dialog }: { dialog: DialogState }): ReactElement {
           : (
             <div className="px-dialog-form">
               <label className="px-field">
-                <span className="px-field-label">{t('dialog.rename.titleField')}</span>
+                <span className="px-field-label">{t(dialog.formKind === 'folderName' ? 'library.folderName' : 'dialog.rename.titleField')}</span>
                 <input
                   className="px-input"
                   value={form.title}
@@ -98,18 +98,35 @@ function Dialog({ dialog }: { dialog: DialogState }): ReactElement {
                   }}
                 />
               </label>
-              <label className="px-field">
-                <span className="px-field-label">{t('dialog.rename.tagsField')}</span>
-                <input
-                  className="px-input"
-                  value={form.tags}
-                  spellCheck={false}
-                  onChange={(event) => {
-                    setForm({ ...form, tags: event.target.value })
-                  }}
-                />
-                <span className="px-field-hint">{t('dialog.rename.tagsHint')}</span>
-              </label>
+              {dialog.formKind === 'folderName' ? null : (
+                <label className="px-field">
+                  <span className="px-field-label">{t('dialog.rename.tagsField')}</span>
+                  <input
+                    className="px-input"
+                    value={form.tags}
+                    spellCheck={false}
+                    onChange={(event) => {
+                      setForm({ ...form, tags: event.target.value })
+                    }}
+                  />
+                  <span className="px-field-hint">{t('dialog.rename.tagsHint')}</span>
+                </label>
+              )}
+              {dialog.folderOptions === undefined ? null : (
+                <label className="px-field">
+                  <span className="px-field-label">{t('dialog.saveMetadata.folder')}</span>
+                  <select
+                    className="px-select"
+                    value={form.folder ?? ''}
+                    onChange={(event) => {
+                      setForm({ ...form, folder: event.target.value })
+                    }}
+                  >
+                    <option value="">{t('library.uncategorized')}</option>
+                    {dialog.folderOptions.map(folder => <option key={folder} value={folder}>{folder}</option>)}
+                  </select>
+                </label>
+              )}
             </div>
           )}
         {dialog.error === undefined ? null : <p className="px-dialog-error" role="alert">{dialog.error}</p>}

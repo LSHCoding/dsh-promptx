@@ -1,6 +1,7 @@
 // tests/web 下各测试共用的数据和钩子（不是测试文件本身，vitest 只收 *.spec.ts）。
 
 import { afterEach, beforeEach, expect, vi } from 'vitest'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../src/shared/window-shortcuts.ts'
 import type { StatusPieces } from '../../src/web/status-store.ts'
 
 /**
@@ -37,6 +38,7 @@ export function statusPieces(): StatusPieces {
       convertYen: true,
       optimizeInstruction: '',
       globalShortcut: 'Control+P',
+      ...DEFAULT_TOOLBAR_SHORTCUTS,
       hideOnBlur: false,
       runtimeSource: 'auto',
     },

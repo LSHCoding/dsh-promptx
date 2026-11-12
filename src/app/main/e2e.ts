@@ -20,6 +20,7 @@ export type CompanionE2eCommand =
   | { action: 'core-path'; text: string }
   | { action: 'save-to-library' }
   | { action: 'state' }
+  | { action: 'toggle-chat' }
   | { action: 'typing-latency'; size: number }
 
 /** 发给渲染进程的 e2e 事件（不含序号）。typing-latency 的草稿放在 text 里，size 一并带上。 */
@@ -84,6 +85,7 @@ export function parseE2eCommand(raw: unknown): CompanionE2eCommand | null {
       return typeof text === 'string' ? { action, text } : null
     case 'save-to-library':
     case 'state':
+    case 'toggle-chat':
       return { action }
     case 'typing-latency':
       return typeof size === 'number' && Number.isSafeInteger(size) && size >= 0 && size <= MAX_TYPING_SIZE ? { action, size } : null
@@ -108,6 +110,8 @@ export async function runE2eCommand(raw: unknown, deps: E2eDeps): Promise<E2eRes
       return saveToLibrary(deps)
     case 'typing-latency':
       return typingLatency(command.size, deps)
+    case 'toggle-chat':
+      return await deps.askRenderer(command, E2E_TIMEOUTS.state) ?? { ok: false, data: {} }
     case 'state': {
       const renderer = await deps.askRenderer({ action: 'state' }, E2E_TIMEOUTS.state)
       return { ok: true, data: { ...deps.state(), renderer: renderer?.data ?? null } }

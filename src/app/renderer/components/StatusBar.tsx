@@ -3,7 +3,7 @@
 
 import { useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 import { errorReason, type MessageKey } from '../../../shared/i18n/index.ts'
-import { formatShortcut, WINDOW_SHORTCUTS } from '../shortcuts.ts'
+import { formatShortcut, windowShortcut } from '../shortcuts.ts'
 import type { SaveStatus } from '../state/state.ts'
 import { run } from './controls.tsx'
 import { Spinner } from './icons.tsx'
@@ -134,7 +134,7 @@ export function StatusBarContainer(): ReactElement {
         boundTitle={binding?.title ?? null}
         message={message}
         optimizing={running}
-        copyShortcut={formatShortcut(WINDOW_SHORTCUTS.copyAndHide, platform)}
+        copyShortcut={formatShortcut(windowShortcut('copyAndHide'), platform)}
         t={t}
         onCopy={() => {
           run(controller.copyAndHide())

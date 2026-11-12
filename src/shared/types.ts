@@ -1,5 +1,7 @@
 // Host、Client、小程序共用的数据类型。这里只放类型，不放实现，也不 import node、DOM、React、Electron。
 
+import type { ToolbarShortcuts } from './window-shortcuts.ts'
+
 /** 业务错误。code 形如 `promptx/<领域>/<原因>`（见 errors.ts）；detail 只放系统错误信息，不放用户内容。 */
 export interface ErrorInfo {
   code: string
@@ -102,7 +104,7 @@ export interface Binding {
 /** normal：按绑定状态保存；saveAsNew：另存为库根目录下的新 Prompt；addFrontMatter：用户确认后给没有 front matter 的文件补上再保存。 */
 export type SaveMode = 'normal' | 'saveAsNew' | 'addFrontMatter'
 
-export type SaveConflict = 'modified' | 'missing' | 'noFrontMatter' | 'invalidFrontMatter'
+export type SaveConflict = 'modified' | 'missing' | 'noFrontMatter' | 'invalidFrontMatter' | 'destinationOccupied'
 
 export type SaveResult =
   | { kind: 'saved'; binding: Binding; entry: EntryMeta; created: boolean }
@@ -133,8 +135,9 @@ export type MetaResult =
 // ───────────────────────────── 回收站 ─────────────────────────────
 
 export interface TrashEntry {
-  /** `_trash/` 下的文件名。 */
+  /** `_trash/` 下的文件或文件夹记录名。 */
   file: string
+  kind?: 'folder'
   title: string
   /** 删除时间（毫秒）；没有记录时为 null。 */
   deletedAt: number | null
@@ -162,6 +165,8 @@ export interface EntryMetadataDraft {
   title: string
   tags: string
   savedTags: string[]
+  /** 待保存的目标文件夹。空串表示未分类，缺省时沿用原目录。 */
+  folder?: string
 }
 
 export interface DraftRecord {
@@ -212,7 +217,7 @@ export type OptimizeEvent =
 // ───────────────────────────── 配置与状态 ─────────────────────────────
 
 /** 插件配置（dsh 的 Config）。字段全部 volatile，修改不重启插件。 */
-export interface PromptxConfig {
+export interface PromptxConfig extends ToolbarShortcuts {
   /** 空串表示默认的 `<dsh 数据目录>/promptx/library`。 */
   libraryDir: string
   confirmDelete: boolean
@@ -231,6 +236,7 @@ export type RuntimeSource = 'auto' | 'mirror' | 'official'
 /** Host 推给小程序的配置。 */
 export interface CompanionConfig {
   globalShortcut: string
+  windowShortcuts: ToolbarShortcuts
   hideOnBlur: boolean
   confirmDelete: boolean
   convertMiddleDot: boolean
@@ -327,6 +333,8 @@ export type ConfigFieldError =
   | 'library-dir-reserved'
   | 'library-dir-skills'
   | 'shortcut-invalid'
+  | 'window-shortcut-invalid'
+  | 'shortcut-conflict'
   | 'value-invalid'
 
 export type ConfigUpdateResult =

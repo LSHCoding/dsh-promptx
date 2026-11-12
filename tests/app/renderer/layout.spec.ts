@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { DEFAULT_PREFS } from '../../../src/shared/bridge.ts'
-import { PANE_LIMITS } from '../../../src/shared/layout.ts'
+import { libraryWidth, PANE_LIMITS } from '../../../src/shared/layout.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { clampPaneSizes } from '../../../src/app/renderer/controller/app.ts'
-import { libraryWidth, minimumWindowWidth, sessionWidth } from '../../../src/app/renderer/controller/layout.ts'
+import { minimumWindowWidth, sessionWidth } from '../../../src/app/renderer/controller/layout.ts'
 import { FakeBridge, ok, round, session, startController, trapUnhandled } from './helpers.ts'
 
 let checkUnhandled: () => void
@@ -154,6 +154,34 @@ describe('打开和关闭可选栏时的窗口宽度（5.7 规则 1–4）', () 
     expect(bridge.bounds).toMatchObject({ x: 519, width: 1401 })
     await controller.layout.close('session')
     expect(bridge.bounds).toMatchObject({ x: 800, width: 980 })
+  })
+
+  it('聊天栏打开时保存编辑区实际宽度，收起后清除记录', async () => {
+    const bridge = new FakeBridge()
+    const controller = await start(bridge)
+    const editor = { offsetWidth: 508 }
+    controller.layout.setEditorElement(editor)
+    controller.layout.persistEditorWidth()
+    expect(bridge.prefs.set).not.toHaveBeenCalled()
+
+    await controller.layout.toggleSession()
+    controller.layout.persistEditorWidth()
+    expect(bridge.storedPrefs.editorWidth).toBe(508)
+    editor.offsetWidth = 612
+    controller.layout.persistEditorWidth()
+    expect(bridge.storedPrefs.editorWidth).toBe(612)
+
+    await controller.layout.toggleSession()
+    controller.layout.persistEditorWidth()
+    expect(bridge.storedPrefs.editorWidth).toBeNull()
+  })
+
+  it('连续点击聊天按钮按队列判断开关状态', async () => {
+    const bridge = new FakeBridge()
+    const controller = await start(bridge)
+    await Promise.all([controller.layout.toggleSession(), controller.layout.toggleSession()])
+    expect(controller.store.getState().optimize.paneOpen).toBe(false)
+    expect(bridge.bounds.width).toBe(980)
   })
 
   it('屏幕放不下时压编辑区，还不够就暂时收起另一侧的栏；收起的会话内容不丢', async () => {

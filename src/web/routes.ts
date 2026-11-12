@@ -302,17 +302,20 @@ function parseE2eCommand(value: unknown): E2eCommand {
       if (typeof value.text !== 'string') throw new BadRequest('command.text must be a string')
       return { action, text: value.text }
     case 'edit-entry': {
-      onlyKeys(value, ['action', 'relPath', 'text', 'metadata'])
+      onlyKeys(value, ['action', 'relPath', 'text', 'metadata', 'folder'])
       if (typeof value.text !== 'string' || typeof value.relPath !== 'string') throw new BadRequest('entry path and text must be strings')
-      const { metadata, relPath, text } = value
-      if (metadata === undefined) return { action, relPath, text }
+      const { metadata, relPath, text, folder } = value
+      if (folder !== undefined && typeof folder !== 'string') throw new BadRequest('entry folder must be a string')
+      const destination = folder === undefined ? {} : { folder }
+      if (metadata === undefined) return { action, relPath, text, ...destination }
       if (!isPlainObject(metadata) || typeof metadata.title !== 'string' || !Array.isArray(metadata.tags) ||
         !metadata.tags.every((tag: unknown): tag is string => typeof tag === 'string')) throw new BadRequest('invalid entry metadata')
       onlyKeys(metadata, ['title', 'tags'])
-      return { action, relPath, text, metadata: { title: metadata.title, tags: metadata.tags } }
+      return { action, relPath, text, metadata: { title: metadata.title, tags: metadata.tags }, ...destination }
     }
     case 'save-to-library':
     case 'state':
+    case 'toggle-chat':
       onlyKeys(value, ['action'])
       return { action }
     default:

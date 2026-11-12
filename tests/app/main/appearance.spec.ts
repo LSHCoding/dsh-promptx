@@ -8,12 +8,14 @@ import {
   WINDOW_BACKGROUND,
 } from '../../../src/app/main/appearance.ts'
 import type { CompanionConfig } from '../../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../../src/shared/window-shortcuts.ts'
 import { trapProcessErrors } from './helpers.ts'
 
 trapProcessErrors()
 
 const config: CompanionConfig = {
   globalShortcut: 'Control+P',
+  windowShortcuts: DEFAULT_TOOLBAR_SHORTCUTS,
   hideOnBlur: false,
   confirmDelete: true,
   convertMiddleDot: true,

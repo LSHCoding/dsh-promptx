@@ -58,8 +58,13 @@
   grid-template-columns: auto minmax(0, 1fr);
 }
 
-.px-entry-metadata .px-input {
+.px-entry-metadata .px-input,
+.px-entry-metadata .px-select {
   min-width: 0;
+}
+
+.px-entry-folder {
+  grid-column: 1 / -1;
 }
 
 .px-entry-notice {

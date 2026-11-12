@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactElement } from 'react'
 import { errorReason, translate, type MessageKey } from '../../../shared/i18n/index.ts'
+import { folderOf } from '../../../shared/library-rules.ts'
 import type { SaveConflict } from '../../../shared/types.ts'
 import { applyAppearance } from '../appearance.ts'
 import { runTask } from '../controller/context.ts'
-import { formatShortcut, WINDOW_SHORTCUTS } from '../shortcuts.ts'
+import { formatShortcut, windowShortcut } from '../shortcuts.ts'
 import type { EntryEditorController } from './controller.ts'
 
 const CONFLICT_KEYS: Record<SaveConflict, MessageKey> = {
@@ -11,6 +12,7 @@ const CONFLICT_KEYS: Record<SaveConflict, MessageKey> = {
   missing: 'entryEditor.conflictMissing',
   noFrontMatter: 'entryEditor.conflictNoFrontMatter',
   invalidFrontMatter: 'entryEditor.conflictInvalidFrontMatter',
+  destinationOccupied: 'entryEditor.conflictDestinationOccupied',
 }
 
 export function EntryEditorApp({ controller }: { controller: EntryEditorController }): ReactElement {
@@ -22,6 +24,10 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
   const frozen = snapshot?.freezeId != null
   const busy = state.action !== null || snapshot?.saving === true || frozen
   const title = snapshot?.binding.title ?? t('entryEditor.mode')
+  const currentFolder = folderOf(snapshot?.binding.relPath ?? '')
+  const selectedFolder = state.metadata.folder ?? currentFolder
+  // 恢复草稿中选过的文件夹可能已经被移走，仍显示该选择，用户可以换到新的目标。
+  const folders = [...new Set([...(snapshot?.folders ?? []), currentFolder, selectedFolder])].filter(folder => folder !== '')
 
   useLayoutEffect(() => {
     applyAppearance(document, { platform: controller.bridge.platform, locale, theme })
@@ -54,7 +60,7 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
             type="button"
             className="px-button px-button-primary"
             disabled={!ready || busy || !state.dirty}
-            title={translate(locale, 'common.withShortcut', { label: t('entryEditor.save'), shortcut: formatShortcut(WINDOW_SHORTCUTS.save, controller.bridge.platform) })}
+            title={translate(locale, 'common.withShortcut', { label: t('entryEditor.save'), shortcut: formatShortcut(windowShortcut('save'), controller.bridge.platform) })}
             onMouseDown={(event) => { event.preventDefault() }}
             onClick={() => { runTask(controller.save()) }}
           >
@@ -87,6 +93,18 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
               onChange={(event) => { controller.updateMetadata('tags', event.target.value) }}
             />
             <span className="px-field-hint" id="entry-editor-tags-hint">{t('dialog.rename.tagsHint')}</span>
+          </label>
+          <label className="px-field px-entry-folder">
+            <span className="px-field-label">{t('dialog.saveMetadata.folder')}</span>
+            <select
+              className="px-select"
+              value={selectedFolder}
+              disabled={!ready || busy || snapshot.binding.libraryDir !== snapshot.config?.libraryDir}
+              onChange={(event) => { controller.updateMetadata('folder', event.target.value) }}
+            >
+              <option value="">{t('library.uncategorized')}</option>
+              {folders.map(folder => <option key={folder} value={folder}>{folder}</option>)}
+            </select>
           </label>
         </div>
       )}

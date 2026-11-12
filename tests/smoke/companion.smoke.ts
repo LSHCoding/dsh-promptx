@@ -15,6 +15,7 @@ import { CompanionSupervisor } from '../../src/companion/supervisor.ts'
 import type { LaunchSpec, RuntimeInstall } from '../../src/services.ts'
 import type { SmokeReport } from '../../src/shared/protocol.ts'
 import type { CompanionStatus, RuntimeSource } from '../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../src/shared/window-shortcuts.ts'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const runtimeRoot = process.env.PROMPTX_SMOKE_RUNTIME_DIR ?? join(repoRoot, '.smoke-runtime')
@@ -120,6 +121,7 @@ describe('companion smoke', () => {
         config: {
           // 冒烟测试用一个不会和测试机上的组合冲突的快捷键。
           globalShortcut: 'Control+Alt+Shift+F8',
+          windowShortcuts: DEFAULT_TOOLBAR_SHORTCUTS,
           hideOnBlur: false,
           confirmDelete: true,
           convertMiddleDot: true,

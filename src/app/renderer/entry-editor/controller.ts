@@ -70,6 +70,7 @@ export class EntryEditorController {
           this.updateMetadata('title', command.metadata.title)
           this.updateMetadata('tags', command.metadata.tags.join(', '))
         }
+        if (command.folder !== undefined) this.updateMetadata('folder', command.folder)
       }),
     )
     await this.load()
@@ -109,7 +110,10 @@ export class EntryEditorController {
     }
     this.store.update((state) => {
       const metadata = replacing
-        ? { title: snapshot.metadata.title, tags: snapshot.metadata.tags }
+        ? {
+          title: snapshot.metadata.title, tags: snapshot.metadata.tags,
+          ...(snapshot.metadata.folder === undefined ? {} : { folder: snapshot.metadata.folder }),
+        }
         : followSavedMetadata(state.metadata, previous, snapshot)
       return {
         ...state,
@@ -150,7 +154,12 @@ export class EntryEditorController {
     if (load !== 'ready' || snapshot?.freezeId !== null || previous[field] === value) return
     const metadata = { ...previous, [field]: value }
     const text = this.editor.getText()
-    this.store.update(state => ({ ...state, metadata, dirty: isEntryDirty(snapshot, text, metadata) }))
+    const clearConflict = field === 'folder' && snapshot.conflict === 'destinationOccupied'
+    this.store.update(state => ({
+      ...state, metadata, dirty: isEntryDirty(snapshot, text, metadata),
+      snapshot: clearConflict ? { ...snapshot, conflict: null } : snapshot,
+      error: field === 'folder' && (clearConflict || state.error?.code === 'promptx/library/folder-not-found') ? null : state.error,
+    }))
     this.bridge.entryEditor.update(text, this.editor.getSelection(), snapshot.generation, metadata)
   }
 
@@ -223,6 +232,7 @@ function followSavedMetadata(
   const savedTags = snapshot.metadata.savedTags.join(', ')
   // 旧文件正文改动后可能改变推导出的标题，只有从旧基线到新基线都没有编辑时才跟随。
   return {
+    ...fields,
     title: previous.binding.title !== snapshot.binding.title && fields.title.trim() === previous.binding.title &&
       previous.metadata.title.trim() === previous.binding.title &&
       snapshot.metadata.title === snapshot.binding.title ? snapshot.metadata.title : fields.title,

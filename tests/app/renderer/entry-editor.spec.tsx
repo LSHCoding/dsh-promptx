@@ -28,6 +28,7 @@ function snapshot(overrides: Partial<EntryEditorSnapshot> = {}): EntryEditorSnap
     text: '原正文',
     selection: { anchor: 3, head: 3 },
     metadata: { title: entryBinding.title, tags: '', savedTags: [] },
+    folders: ['写作', '代码'],
     config: config(),
     saving: false,
     error: null,
@@ -145,6 +146,49 @@ describe('独立库条目编辑窗口', () => {
     expect(bridge.entryEditor.prepared).toHaveBeenLastCalledWith(
       7, 1, '原正文', { anchor: 3, head: 3 }, { title: '代码审查', tags: 'Code Review, 风格检查' },
     )
+  })
+
+  it('预选条目当前文件夹，只改为未分类即可保存并显示更新的路径', async () => {
+    const { controller, bridge } = await mount()
+    const folder = screen.getByRole<HTMLSelectElement>('combobox', { name: '保存到文件夹' })
+    const save = screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' })
+    expect(folder.value).toBe('写作')
+    expect([...folder.options].map(option => option.textContent)).toEqual(['未分类', '写作', '代码'])
+    fireEvent.change(folder, { target: { value: '' } })
+    expect(save.disabled).toBe(false)
+    expect(bridge.entryEditor.update).toHaveBeenLastCalledWith(
+      '原正文', { anchor: 3, head: 3 }, 1, { title: '评审助手', tags: '', folder: '' },
+    )
+    const pending = deferred<BridgeResult<null>>()
+    bridge.entryEditor.save.mockReturnValueOnce(pending.promise)
+    fireEvent.click(save)
+    expect(folder.disabled).toBe(true)
+    expect(bridge.entryEditor.save).toHaveBeenCalledWith(1)
+    await act(async () => {
+      bridge.emit('entryEditor.state', snapshot({ binding: binding('评审.md', '原正文', { title: '评审助手' }) }))
+      pending.resolve(ok(null))
+      await settle()
+    })
+    expect(screen.getByText('评审.md')).toBeTruthy()
+    expect(controller.editor.getText()).toBe('原正文')
+    expect(folder.value).toBe('')
+    expect(save.disabled).toBe(true)
+  })
+
+  it('恢复文件夹选择，目标冲突后可以换另一个目录', async () => {
+    const metadata = { title: '评审助手', tags: '', savedTags: [], folder: '代码' }
+    const initial = snapshot({ metadata, recovered: true, conflict: 'destinationOccupied' })
+    const { bridge } = await mount(new FakeBridge(), initial)
+    const folder = screen.getByRole<HTMLSelectElement>('combobox', { name: '保存到文件夹' })
+    expect(folder.value).toBe('代码')
+    expect(screen.getByRole('alert').textContent).toContain('所选文件夹内已有同名文件或文件夹')
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(false)
+    fireEvent.change(folder, { target: { value: '写作' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(bridge.entryEditor.update).toHaveBeenLastCalledWith('原正文', { anchor: 3, head: 3 }, 1, {
+      title: '评审助手', tags: '', folder: '写作',
+    })
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(true)
   })
 
   it('正文保存后让未编辑的标题跟随旧文件的新推导标题', async () => {

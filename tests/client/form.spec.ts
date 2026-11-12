@@ -14,6 +14,7 @@ import {
   type Draft,
 } from '../../src/client/form.ts'
 import type { PromptxConfig } from '../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../src/shared/window-shortcuts.ts'
 
 const config: PromptxConfig = {
   libraryDir: '',
@@ -22,6 +23,7 @@ const config: PromptxConfig = {
   convertYen: true,
   optimizeInstruction: '',
   globalShortcut: 'Control+P',
+  ...DEFAULT_TOOLBAR_SHORTCUTS,
   hideOnBlur: false,
   runtimeSource: 'auto',
 }

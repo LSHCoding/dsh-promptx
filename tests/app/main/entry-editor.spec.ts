@@ -4,6 +4,7 @@ import { resolveConfig } from '../../../src/app/main/appearance.ts'
 import { registerEntryEditorIpc, registerIpcHandlers, UntrustedSenderError } from '../../../src/app/main/ipc.ts'
 import { IPC_CHANNELS } from '../../../src/app/main/channels.ts'
 import { PromptxError } from '../../../src/shared/errors.ts'
+import { RpcError } from '../../../src/shared/rpc.ts'
 import type { DraftRecord, EntryMeta, LibraryReadResult, PromptMetadata, SaveResult } from '../../../src/shared/types.ts'
 import type { EntryEditorSnapshot } from '../../../src/shared/bridge.ts'
 import { BASE_CONFIG, FakePlatform, type FakeWindow } from './fakes.ts'
@@ -13,7 +14,7 @@ afterEach(() => { for (const manager of managers.splice(0)) manager.dispose() })
 
 function entry(relPath = 'a.md', body = '原文'): LibraryReadResult {
   const meta: EntryMeta = {
-    relPath, folder: '', id: relPath, title: relPath, tags: [], favorite: false,
+    relPath, folder: relPath.slice(0, Math.max(0, relPath.lastIndexOf('/'))), id: relPath, title: relPath, tags: [], favorite: false,
     updatedAt: 0, createdAt: null, status: 'ok', hasFrontMatter: true,
   }
   return { entry: meta, body, version: { sha256: `sha-${body}`, size: body.length } }
@@ -26,6 +27,7 @@ function setup(recovery: DraftRecord | null = null) {
   const config = resolveConfig(BASE_CONFIG, { languages: ['zh'], dark: false })
   let saved: SaveResult | null = null
   let failLoad = false
+  let folders = ['写作', '代码']
   const requests: { method: string; params: unknown }[] = []
   let read = (relPath: string) => Promise.resolve(entry(relPath))
   let persist = (_input: unknown) => Promise.resolve({ updatedAt: 'now' })
@@ -43,6 +45,7 @@ function setup(recovery: DraftRecord | null = null) {
       return { record: recovery }
     }
     if (method === 'entryDraft.save') return persist(params)
+    if (method === 'library.folders') return { folders }
     if (method === 'library.read') return read(params.relPath as string)
     if (method === 'library.save') return save(params as { text: string })
     throw new Error('unexpected method')
@@ -73,6 +76,7 @@ function setup(recovery: DraftRecord | null = null) {
     setResult(value: SaveResult) { saved = value },
     setSave(value: typeof save) { save = value },
     setRead(value: typeof read) { read = value },
+    setFolders(value: string[]) { folders = value },
     setPersist(value: typeof persist) { persist = value },
     failRecovery(value: boolean) { failLoad = value },
     prepareAutomatically(value: boolean) { autoPrepare = value },
@@ -87,7 +91,7 @@ describe('独立条目编辑窗口', () => {
     expect(h.child().options).toMatchObject({ parent: h.parent, entryEditor: true })
     expect(h.child().visible).toBe(true)
     expect(h.manager.getState()).toMatchObject({ ok: true, value: { text: '原文', binding: { relPath: 'a.md' } } })
-    expect(h.requests.map(call => call.method)).toEqual(['entryDraft.load', 'library.read', 'entryDraft.save'])
+    expect(h.requests.map(call => call.method)).toEqual(['entryDraft.load', 'library.read', 'library.folders', 'entryDraft.save'])
     await h.manager.save()
     expect(h.requests.some(call => call.method === 'library.save')).toBe(false)
     h.manager.update('新文', { anchor: 2, head: 2 })
@@ -96,6 +100,60 @@ describe('独立条目编辑窗口', () => {
     expect(write?.params).toMatchObject({ text: '新文', binding: { relPath: 'a.md', savedBody: '原文' }, mode: 'normal' })
     expect(write?.params).not.toHaveProperty('metadata')
     expect(h.changed).toHaveBeenCalledOnce()
+  })
+
+  it('只改文件夹也能移动同一条目，保存成功后更新路径和草稿基线', async () => {
+    const h = setup()
+    await h.manager.open('写作/a.md')
+    const opened = h.manager.getState()
+    if (!opened.ok) throw new Error('missing entry')
+    const { binding, metadata, folders } = opened.value
+    expect(folders).toEqual(['写作', '代码'])
+    h.manager.update('原文', { anchor: 0, head: 0 }, { ...metadata, folder: '' })
+    await h.manager.flush()
+    expect(h.requests.at(-1)?.params).toHaveProperty('entryMetadata.folder', '')
+    h.setResult({ kind: 'saved', created: false, entry: entry().entry, binding: { ...binding, relPath: 'a.md' } })
+    expect(await h.manager.save()).toEqual({ ok: true, value: null })
+    const writes = () => h.requests.filter(call => call.method === 'library.save')
+    expect(writes()[0]?.params).toMatchObject({ moveToFolder: '', text: '原文', binding, libraryDir: h.config.libraryDir })
+    expect(writes()[0]?.params).not.toHaveProperty('metadata')
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: { binding: { relPath: 'a.md', id: binding.id } } })
+    expect(h.requests.at(-1)?.params).not.toHaveProperty('entryMetadata')
+    await h.manager.save()
+    expect(writes()).toHaveLength(1)
+  })
+
+  it('目标目录消失时刷新可选目录，并保留选项和未保存正文', async () => {
+    const h = setup()
+    await h.manager.open('a.md')
+    h.manager.update('改动', { anchor: 2, head: 2 }, { title: 'a.md', tags: '', folder: '写作' })
+    h.setFolders(['代码'])
+    h.setSave(() => Promise.reject(new RpcError(-32000, { code: 'promptx/library/folder-not-found' })))
+    expect(await h.manager.save()).toMatchObject({ ok: false, error: { code: 'promptx/library/folder-not-found' } })
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: {
+      text: '改动', binding: { relPath: 'a.md' }, folders: ['代码'], metadata: { folder: '写作' },
+    } })
+  })
+
+  it('移动请求超时后原样重发，并在结果回来后保留后来输入的内容', async () => {
+    const h = setup()
+    await h.manager.open('a.md')
+    const opened = h.manager.getState()
+    if (!opened.ok) throw new Error('missing entry')
+    const { binding, metadata } = opened.value
+    h.manager.update('原文', { anchor: 0, head: 0 }, { ...metadata, folder: '写作' })
+    h.setSave(() => Promise.reject(new RpcError(-32000, { code: 'promptx/channel/timeout' })))
+    expect(await h.manager.save()).toMatchObject({ ok: false, error: { code: 'promptx/channel/timeout' } })
+    h.manager.update('改动', { anchor: 2, head: 2 }, { ...metadata, folder: '代码' })
+    h.setSave(() => Promise.resolve({ kind: 'saved', created: false, entry: entry('写作/a.md').entry, binding: { ...binding, relPath: '写作/a.md' } }))
+    expect(await h.manager.save()).toEqual({ ok: true, value: null })
+    const writes = h.requests.filter(call => call.method === 'library.save')
+    expect(writes).toHaveLength(2)
+    expect(writes[1]?.params).toEqual(writes[0]?.params)
+    expect(h.manager.getState()).toMatchObject({ ok: true, value: {
+      text: '改动', binding: { relPath: '写作/a.md', savedBody: '原文' }, metadata: { folder: '代码' },
+    } })
+    expect(h.requests.at(-1)?.params).toHaveProperty('entryMetadata.folder', '代码')
   })
 
   it('只改标题或标签也保存，对每次写入只传改动的字段', async () => {

@@ -365,6 +365,31 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     expect(other.platform.window.options).toMatchObject({ width: 900, height: 500 })
   })
 
+  it.each([
+    { library: false, restoredWidth: 600 },
+    { library: true, restoredWidth: 600 + 170 + 310 + 2 },
+  ])('restores the editor width with chat closed on restart (library=$library)', async ({ library, restoredWidth }) => {
+    const first = await boot()
+    first.host.peer.notify('window.command', { command: 'show' })
+    await until(() => first.platform.window.visible, 2000, 'first show')
+    // 聊天栏在有限的屏幕空间里可能窄于配置里的 420 像素。
+    const withChat = restoredWidth + 330
+    await first.renderer.invoke(IPC_CHANNELS.windowSetWidth, withChat, 'left')
+    first.renderer.send(IPC_CHANNELS.prefsSet, { editorWidth: 600, panes: { library, folderWidth: 170, listWidth: 310 } })
+
+    await first.renderer.invoke(IPC_CHANNELS.windowHide)
+    first.host.peer.notify('window.command', { command: 'show' })
+    await until(() => first.platform.window.visible, 2000, 'show before restart')
+    expect(first.platform.window.bounds.width).toBe(withChat)
+    await first.app.shutdown('test-restart', 0, null)
+
+    const restarted = await boot()
+    expect(restarted.platform.window.options.width).toBe(restoredWidth)
+    restarted.host.peer.notify('window.command', { command: 'show' })
+    await until(() => restarted.platform.window.visible, 2000, 'show after restart')
+    expect(restarted.platform.window.bounds.width).toBe(restoredWidth)
+  })
+
   it('runs Host window commands and remembers one that came before the window existed', async () => {
     const harness = start()
     await until(() => harness.app.mode !== null, 2000, 'hello')

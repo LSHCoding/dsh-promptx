@@ -1,5 +1,4 @@
-// 小窗的整体布局（需求 5.3 至 5.6）：工具栏 → 主体（可选的文件夹栏、列表栏，编辑区，可选的会话栏）→ 编辑区下方的底栏。
-// 文件夹栏、列表栏和会话栏一直延伸到小窗底部，底栏只在编辑区下方。
+// 库、编辑区和聊天栏并排布局。工具栏和底栏属于编辑区。
 
 import { useEffect, useLayoutEffect, type ReactElement } from 'react'
 import { PANE_LIMITS } from '../../../shared/layout.ts'
@@ -11,7 +10,6 @@ import { EditorPane } from './EditorPane.tsx'
 import { ControllerContext, useAppState, useController, useT } from './hooks.ts'
 import { LibraryPane } from './LibraryPane.tsx'
 import { SessionPane } from './SessionPane.tsx'
-import { Toolbar } from './Toolbar.tsx'
 
 export function App({ controller }: { controller: AppController }): ReactElement {
   return (
@@ -58,7 +56,6 @@ function Shell(): ReactElement {
 
   return (
     <div className="px-app">
-      <Toolbar />
       <main className="px-body">
         {libraryOpen
           ? (

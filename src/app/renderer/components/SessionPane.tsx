@@ -1,5 +1,5 @@
 // 优化会话栏（需求 O-02 至 O-07、5.6）：标题「优化会话」，旁边是模型名称和「清空会话」；消息按时间排列，
-// 回复边生成边显示，用户没有往上翻时自动滚到底部；底部是追加输入框和「发送」（进行中变成「取消」）。
+// 回复边生成边显示。底部的输入框可以发起优化或追加要求，生成中显示「取消」。
 
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactElement } from 'react'
 import { describeError } from '../../../shared/i18n/index.ts'
@@ -35,6 +35,7 @@ export function SessionPane(): ReactElement {
         <button
           type="button"
           className="px-text-button"
+          disabled={session === null}
           onClick={() => {
             run(controller.optimize.clear())
           }}
@@ -52,7 +53,7 @@ export function SessionPane(): ReactElement {
       >
         {session?.rounds.map(round => <Round key={round.id} round={round} model={session.model.name} />)}
       </div>
-      <FollowupBox />
+      <ChatInput />
     </aside>
   )
 }
@@ -160,21 +161,24 @@ function RoundActions({ round }: { round: OptimizeRound }): ReactElement {
 }
 
 /**
- * 追加输入框（O-05）：多行；不带修饰键的 Enter 发送，Shift+Enter 换行，输入法组字时 Enter 用来选词；
+ * 聊天输入框：不带修饰键的 Enter 发送，Shift+Enter 换行，输入法组字时 Enter 用来选词；
  * 有一轮在进行时不能发送（输入框仍可以先写下一轮的要求）。⌘↩ 由窗口级快捷键处理，复制的是编辑区内容（F-03）。
  */
-function FollowupBox(): ReactElement {
+function ChatInput(): ReactElement {
   const controller = useController()
   const t = useT()
   const followup = useAppState(state => state.optimize.followup)
+  const submitting = useAppState(state => state.optimize.submitting)
+  const emptySession = useAppState(state => state.optimize.session === null)
   const running = useAppState(state => state.optimize.session?.rounds.some(round => round.status === 'running') ?? false)
+  const placeholder = t(emptySession ? 'session.initialPlaceholder' : 'session.followupPlaceholder')
   const input = useRef<HTMLTextAreaElement>(null)
   useFocusTarget('followup', input)
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || isComposingKey(event.nativeEvent)) return
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
     event.preventDefault()
-    if (!running) run(controller.optimize.sendFollowup())
+    if (!running && !submitting) run(controller.optimize.sendMessage())
   }
   return (
     <div className="px-followup">
@@ -183,8 +187,8 @@ function FollowupBox(): ReactElement {
         className="px-input px-followup-input"
         rows={3}
         value={followup}
-        placeholder={t('session.followupPlaceholder')}
-        aria-label={t('session.followupPlaceholder')}
+        placeholder={placeholder}
+        aria-label={placeholder}
         spellCheck={false}
         onChange={(event) => {
           controller.optimize.setFollowup(event.target.value)
@@ -207,9 +211,9 @@ function FollowupBox(): ReactElement {
           <button
             type="button"
             className="px-button px-button-primary"
-            disabled={isBlank(followup)}
+            disabled={submitting || isBlank(followup)}
             onClick={() => {
-              run(controller.optimize.sendFollowup())
+              run(controller.optimize.sendMessage())
             }}
           >
             {t('session.send')}

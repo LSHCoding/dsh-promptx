@@ -62,6 +62,7 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
         title: str(metadata.title, 'entryMetadata.title'),
         tags: str(metadata.tags, 'entryMetadata.tags'),
         savedTags: strings(metadata.savedTags, 'entryMetadata.savedTags'),
+        ...(metadata.folder === undefined ? {} : { folder: str(metadata.folder, 'entryMetadata.folder') }),
       },
     })
   })
@@ -77,6 +78,15 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
     })
   })
   peer.handle('library.read', params => deps.library.read(str(record(params).relPath, 'relPath')))
+  peer.handle('library.folders', params => deps.library.folders(str(record(params).libraryDir, 'libraryDir')))
+  peer.handle('library.createFolder', (params) => {
+    const p = record(params)
+    return deps.library.createFolder(str(p.name, 'name'), str(p.libraryDir, 'libraryDir'))
+  })
+  peer.handle('library.deleteFolder', (params) => {
+    const p = record(params)
+    return deps.library.deleteFolder(str(p.folder, 'folder'), str(p.libraryDir, 'libraryDir'))
+  })
   peer.handle('library.suggestMetadata', async params => ({
     metadata: await deps.suggestMetadata(str(record(params).text, 'text')),
   }))
@@ -90,6 +100,8 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
       requestId: str(p.requestId, 'requestId'),
       ...(p.metadata === undefined ? {} : { metadata: metadataPatch(record(p.metadata), 'metadata') }),
       ...(p.libraryDir === undefined ? {} : { libraryDir: str(p.libraryDir, 'libraryDir') }),
+      ...(p.folderMustExist === undefined ? {} : { folderMustExist: bool(p.folderMustExist, 'folderMustExist') }),
+      ...(p.moveToFolder === undefined ? {} : { moveToFolder: str(p.moveToFolder, 'moveToFolder') }),
     })
   })
   peer.handle('library.updateMeta', (params) => {
@@ -111,6 +123,7 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
       target: oneOf<RestoreTarget>(p.target, ['original', 'alternative'], 'target'),
       alternative: nullableStr(p.alternative, 'alternative'),
       acceptModified: bool(p.acceptModified, 'acceptModified'),
+      ...(p.libraryDir === undefined ? {} : { libraryDir: str(p.libraryDir, 'libraryDir') }),
     })
   })
 

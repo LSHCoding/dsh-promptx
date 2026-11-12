@@ -1,7 +1,8 @@
 // 窗口位置和大小的计算（需求 F-02、5.7，design-spec 5.4）。算法本身在 shared/layout.ts，
 // 这里把它和主进程的几个入口对上：显示前的位置、「重置窗口位置」、渲染进程请求的宽度和最小宽度。
 
-import { ensureVisible, initialWindowBounds, MIN_WINDOW, type Rect } from '../../shared/layout.ts'
+import type { Prefs } from '../../shared/bridge.ts'
+import { ensureVisible, initialWindowBounds, libraryWidth, MIN_WINDOW, PANE_LIMITS, type HorizontalSpan, type Rect } from '../../shared/layout.ts'
 
 export interface DisplayArea {
   workArea: Rect
@@ -11,9 +12,18 @@ export interface DisplayArea {
  * 显示前的位置和大小：没有记录时按鼠标所在屏幕的默认位置；有记录时挪回可见范围
  * （工具栏那条带至少有 64×24 在某个屏幕上，否则移回鼠标所在屏幕）。
  */
-export function boundsForShow(saved: Rect | null, displays: readonly DisplayArea[], cursorWorkArea: Rect): Rect {
+export function boundsForShow(saved: Rect | null, displays: readonly DisplayArea[], cursorWorkArea: Rect, toolbar?: HorizontalSpan): Rect {
   if (saved === null) return initialWindowBounds(cursorWorkArea)
-  return ensureVisible(saved, displays, cursorWorkArea)
+  return ensureVisible(saved, displays, cursorWorkArea, toolbar)
+}
+
+/** 工具栏在编辑区上方，窗口左侧露出库栏时也得检查是否抓得到工具栏。 */
+export function toolbarSpan(prefs: Prefs): HorizontalSpan | undefined {
+  const { window, panes, editorWidth } = prefs
+  if (window === null) return undefined
+  const width = Math.min(window.width, editorWidth ?? PANE_LIMITS.editor.min)
+  const x = panes.library ? Math.min(libraryWidth(panes), window.width - width) : 0
+  return { x, width: editorWidth === null ? window.width - x : width }
 }
 
 /** 「重置窗口位置」：主屏幕上的默认位置和默认大小。 */

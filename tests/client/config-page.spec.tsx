@@ -447,6 +447,31 @@ describe('开关', () => {
 })
 
 describe('快捷键录制', () => {
+  it('工具栏快捷键可以录制、停用，暂存后一次提交', async () => {
+    const { api } = renderPage(makeStatus())
+    const record = screen.getByRole('button', { name: '录制「显示或隐藏聊天」快捷键' })
+    fireEvent.click(record)
+    fireEvent.keyDown(record, { key: 'ArrowRight', code: 'ArrowRight', metaKey: true })
+    expect(input('显示或隐藏聊天').value).toBe('Command+Right')
+    fireEvent.change(input('关闭小窗'), { target: { value: '' } })
+    expect(api.saveConfig).not.toHaveBeenCalled()
+    fireEvent.click(saveButton())
+    expect(api.saveConfig).toHaveBeenCalledWith({ shortcutChat: 'Command+Right', shortcutClose: '' })
+    await flush()
+  })
+
+  it('同一个实际按键占用另一个 PromptX 快捷键时提示冲突', async () => {
+    const { api } = renderPage(makeStatus())
+    fireEvent.change(input('显示或隐藏聊天'), { target: { value: 'Cmd+S' } })
+    expect(input('显示或隐藏聊天').getAttribute('aria-invalid')).toBe('true')
+    expect(saveButton().disabled).toBe(true)
+    fireEvent.change(input('保存 Prompt'), { target: { value: '' } })
+    expect(saveButton().disabled).toBe(false)
+    fireEvent.click(saveButton())
+    expect(api.saveConfig).toHaveBeenCalledWith({ shortcutChat: 'Command+S', shortcutSave: '' })
+    await flush()
+  })
+
   it('按「录制」后按下组合键，换算成加速键写法填进输入框（暂存）', async () => {
     const { api } = renderPage(makeStatus({ platform: 'linux' }))
     const record = screen.getByRole<HTMLButtonElement>('button', { name: '录制' })

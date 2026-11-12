@@ -89,24 +89,25 @@ export class LibrarySave {
     }
     const generation = this.draft.generation
     const libraryDir = this.draft.libraryDir
-    const folder = this.targetFolder()
     const pending = this.pendingCreate
     this.pendingCreate = null
-    const retry = pending?.generation === generation && pending.request.folder === folder && pending.request.libraryDir === libraryDir
+    const retry = pending?.generation === generation && pending.request.libraryDir === libraryDir
       ? pending.request
       : null
     // 超时后的重试提交原来确认过的正文、元数据和目标，Host 可按同一个 id 返回已建好的条目。
     let request = retry
     let form: MetadataForm
+    let folderOptions: readonly string[] = []
     let formError: string | undefined
     let manual = false
     if (retry === null) {
-      const metadata = await this.suggestMetadata(body)
+      const [metadata, folders] = await Promise.all([this.suggestMetadata(body), this.getFolders(libraryDir)])
       if (this.cancelled(generation, libraryDir)) return 'cancelled'
       manual = metadata === null
       form = { title: metadata?.title ?? '', tags: metadata?.tags.join(', ') ?? '' }
+      folderOptions = folders
     } else {
-      form = { title: retry.metadata.title, tags: retry.metadata.tags.join(', ') }
+      form = { title: retry.metadata.title, tags: retry.metadata.tags.join(', '), folder: retry.folder ?? '' }
     }
 
     while (true) {
@@ -123,16 +124,19 @@ export class LibrarySave {
           escapeButton: 'cancel',
           focusDefaultButton: formError === undefined,
           form,
+          folderOptions,
         })
         if (choice.button !== CONFIRM_METADATA_BUTTON || choice.form === undefined || this.cancelled(generation, libraryDir)) return 'cancelled'
         const title = choice.form.title.trim()
         if (title === '') return 'cancelled'
         form = choice.form
         const expectedLibrary = libraryDir ?? this.draft.libraryDir
+        const folder = form.folder !== undefined && folderOptions.includes(form.folder) ? form.folder : null
         request = {
           text: retry?.text ?? body,
           binding: null,
           folder,
+          ...(folder === null ? {} : { folderMustExist: true }),
           mode: 'normal',
           requestId: randomId(),
           ...(expectedLibrary === undefined ? {} : { libraryDir: expectedLibrary }),
@@ -142,10 +146,13 @@ export class LibrarySave {
 
       const result = await this.ctx.bridge.call('library.save', request)
       if (this.disposed) return 'cancelled'
-      if (!result.ok && result.error.code === 'promptx/library/duplicate-title') {
+      if (!result.ok && (result.error.code === 'promptx/library/duplicate-title' || (request.folder !== null && result.error.code === 'promptx/library/not-found'))) {
         if (this.cancelled(generation, libraryDir)) return 'cancelled'
         // 模型检查和确认之间可能有其他写入。把已填字段带回对话框，让用户修正。
         formError = reason(this.ctx, result.error)
+        folderOptions = await this.getFolders(libraryDir)
+        if (this.cancelled(generation, libraryDir)) return 'cancelled'
+        if (form.folder !== undefined && !folderOptions.includes(form.folder)) form = { ...form, folder: '' }
         request = null
         continue
       }
@@ -201,9 +208,9 @@ export class LibrarySave {
     return 'saved'
   }
 
-  private targetFolder(): string | null {
-    const { open, view, folder, list } = this.ctx.store.getState().library
-    if (!open || view !== 'library' || folder.kind !== 'folder') return null
-    return list?.folders.includes(folder.path) === true ? folder.path : null
+  private async getFolders(libraryDir: string | undefined): Promise<string[]> {
+    if (libraryDir === undefined) return []
+    const result = await this.ctx.bridge.call('library.folders', { libraryDir })
+    return result.ok ? result.value.folders : []
   }
 }

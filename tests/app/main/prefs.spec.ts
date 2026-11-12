@@ -89,6 +89,7 @@ describe('parsePrefs', () => {
     const prefs: Prefs = {
       version: 1,
       window: { x: 10, y: 20, width: 1000, height: 700 },
+      editorWidth: 500,
       panes: { library: true, folderWidth: 160, listWidth: 320, previewHeight: 240, sessionWidth: 400 },
       library: { folder: { kind: 'folder', path: 'a' }, scope: 'recent', tag: 't' },
     }

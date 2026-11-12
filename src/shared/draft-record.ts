@@ -62,6 +62,7 @@ function parseEntryMetadata(value: unknown): EntryMetadataDraft {
     title: expectString(value.title, 'entryMetadata.title'),
     tags: expectString(value.tags, 'entryMetadata.tags'),
     savedTags: value.savedTags.map(tag => expectString(tag, 'entryMetadata.savedTags item')),
+    ...(value.folder === undefined ? {} : { folder: expectString(value.folder, 'entryMetadata.folder') }),
   }
 }
 

@@ -20,7 +20,7 @@ afterEach(() => {
   checkUnhandled()
 })
 
-async function mount(initial: OptimizeSession): Promise<{ bridge: FakeBridge; controller: AppController; container: HTMLElement }> {
+async function mount(initial: OptimizeSession | null): Promise<{ bridge: FakeBridge; controller: AppController; container: HTMLElement }> {
   const bridge = new FakeBridge()
   bridge.handle('optimize.state', () => ok({ session: initial }))
   const controller = await startController(bridge)
@@ -133,6 +133,33 @@ describe('气泡与候选按钮（O-03、O-04、O-06）', () => {
 })
 
 describe('追加输入框（O-05）', () => {
+  it('空会话直接发送第一轮，结果只在点击「应用」后写进主编辑区', async () => {
+    const { bridge, controller } = await mount(null)
+    controller.editor.replaceAll('主编辑区草稿')
+    bridge.handle('optimize.start', ({ text }) => ok({ session: session('s1', [
+      round('r1', { input: text, status: 'done', reply: '改写稿', candidate: '改写稿' }),
+    ]) }))
+    const input = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '输入要优化的 Prompt…' })
+    const send = screen.getByRole<HTMLButtonElement>('button', { name: '发送' })
+    expect(send.disabled).toBe(true)
+    fireEvent.change(input, { target: { value: '聊天栏的 Prompt' } })
+    expect(send.disabled).toBe(false)
+    await act(async () => {
+      fireEvent.click(send)
+      await settle()
+    })
+    expect(bridge.callsTo('optimize.start')).toEqual([{ text: '聊天栏的 Prompt' }])
+    expect(bridge.callsTo('optimize.followup')).toEqual([])
+    expect(screen.getByRole('textbox', { name: '追加要求…' })).toBe(input)
+    expect(input.value).toBe('')
+    expect(controller.editor.getText()).toBe('主编辑区草稿')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '应用' }))
+      await settle()
+    })
+    expect(controller.editor.getText()).toBe('改写稿')
+  })
+
   async function box(running: boolean) {
     const current = session('s1', [round('r1', { status: running ? 'running' : 'done', candidate: 'x' })])
     const mounted = await mount(current)

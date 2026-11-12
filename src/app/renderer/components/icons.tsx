@@ -17,6 +17,7 @@ export type IconName =
   | 'more'
   | 'copy'
   | 'folder'
+  | 'folderAdd'
   | 'trash'
   | 'all'
   | 'inbox'
@@ -86,6 +87,7 @@ const PATHS: Readonly<Record<IconName, ReactElement>> = {
     </>
   ),
   folder: <path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z" />,
+  folderAdd: <path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1ZM8 7v4m-2-2h4" />,
   trash: (
     <>
       <path d="M3 4.5h10M4.5 4.5l.6 8.1a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.1" />

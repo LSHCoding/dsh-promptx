@@ -31,6 +31,7 @@ async function mount(bridge: FakeBridge): Promise<AppController> {
 describe('主窗口确认标题和标签后新建', () => {
   it('空草稿不能保存；有内容后点击保存发送独立新建，保存后按钮仍为保存', async () => {
     const bridge = new FakeBridge()
+    bridge.handle('library.folders', () => ok({ folders: ['写作/评审'] }))
     bridge.handle('library.save', params => ok({ kind: 'saved', binding: binding('新.md', params.text), entry: entry('新.md'), created: true }))
     const controller = await mount(bridge)
     const saveAsNew = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
@@ -48,13 +49,16 @@ describe('主窗口确认标题和标签后新建', () => {
     expect(bridge.callsTo('library.save')).toEqual([])
     const title = screen.getByRole('textbox', { name: '标题' }) as HTMLInputElement
     const tags = screen.getByRole('textbox', { name: /标签/ }) as HTMLInputElement
+    const folder = screen.getByRole('combobox', { name: '保存到文件夹' }) as HTMLSelectElement
     const confirm = screen.getByRole('button', { name: '确认' })
     expect(title.value).toBe('建议标题')
     expect(tags.value).toBe('Writing Guide, 示例')
+    expect(folder.selectedOptions[0]?.textContent).toBe('未分类')
     expect(document.activeElement).toBe(confirm)
     await act(async () => {
       fireEvent.change(title, { target: { value: '新标题' } })
       fireEvent.change(tags, { target: { value: 'Custom Label，复盘' } })
+      fireEvent.change(folder, { target: { value: '写作/评审' } })
       fireEvent.keyDown(tags, { key: 'Enter' })
       await settle()
     })
@@ -62,6 +66,8 @@ describe('主窗口确认标题和标签后新建', () => {
     expect(bridge.callsTo('library.save')[0]).toMatchObject({
       mode: 'normal',
       binding: null,
+      folder: '写作/评审',
+      folderMustExist: true,
       text: '新内容',
       metadata: { title: '新标题', tags: ['Custom Label', '复盘'] },
     })

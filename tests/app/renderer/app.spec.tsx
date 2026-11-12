@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { undo } from '@codemirror/commands'
 import { DEFAULT_PREFS, type BridgeResult } from '../../../src/shared/bridge.ts'
 import type { DraftRecord } from '../../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../../src/shared/window-shortcuts.ts'
 import { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { App } from '../../../src/app/renderer/components/App.tsx'
 import {
@@ -129,7 +130,7 @@ describe('草稿载入（F-01）', () => {
 })
 
 describe('工具栏（需求 5.3、S-02）', () => {
-  it('左组 库、保存、优化、清空；右组 设置、关闭；悬停提示带当前快捷键', async () => {
+  it('左组 库、保存、优化、清空、聊天；右组 设置、关闭；悬停提示带当前快捷键', async () => {
     const bridge = new FakeBridge()
     bridge.handle('draft.load', () => ok({ record: draftRecord('有内容') }))
     await mountApp(bridge)
@@ -139,9 +140,59 @@ describe('工具栏（需求 5.3、S-02）', () => {
     expect(tip('保存')).toBe('保存（⌘S）')
     expect(tip('优化')).toBe('优化（⇧⌘O）')
     expect(tip('清空')).toBe('清空')
+    expect(tip('聊天')).toBe('聊天')
     expect(tip('设置')).toBe('设置')
     expect(tip('关闭')).toBe('关闭（Esc）')
-    expect(bar.queryByRole('button', { name: '会话' })).toBeNull()
+  })
+
+  it('小窗收到更新后，同一个快捷键出现在工具栏提示并触发动作', async () => {
+    const bridge = new FakeBridge()
+    await mountApp(bridge)
+    const chat = within(toolbar()).getByRole('button', { name: '聊天' })
+    const close = within(toolbar()).getByRole('button', { name: '关闭' })
+    act(() => {
+      bridge.emit('config', config({
+        windowShortcuts: { ...DEFAULT_TOOLBAR_SHORTCUTS, shortcutChat: 'Command+J', shortcutClose: '' },
+      }))
+    })
+    expect(chat.getAttribute('data-tip')).toBe('聊天（⌘J）')
+    expect(close.getAttribute('data-tip')).toBe('关闭')
+    await act(async () => {
+      fireEvent.keyDown(editorContent(), { key: 'j', code: 'KeyJ', metaKey: true })
+      await settle()
+    })
+    expect(chat.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('工具栏只在编辑区内，首次启动聊天收起，打开后可以收起空白聊天栏', async () => {
+    const bridge = new FakeBridge()
+    bridge.storedPrefs = structuredClone(DEFAULT_PREFS)
+    await mountApp(bridge)
+    const bar = toolbar()
+    const chat = within(bar).getByRole('button', { name: '聊天' })
+    expect(bar.parentElement?.classList.contains('px-editor-column')).toBe(true)
+    expect(bar.parentElement?.firstElementChild).toBe(bar)
+    expect(screen.getByRole('navigation', { name: '文件夹' }).contains(bar)).toBe(false)
+    expect(chat.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByRole('complementary', { name: '优化会话' })).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(chat)
+      await settle()
+    })
+    const panel = screen.getByRole('complementary', { name: '优化会话' })
+    expect(panel.contains(bar)).toBe(false)
+    expect(panel.querySelector('.px-session-messages')?.childElementCount).toBe(0)
+    expect(within(panel).getByRole('textbox', { name: '输入要优化的 Prompt…' })).toBeTruthy()
+    expect(within(panel).getByRole<HTMLButtonElement>('button', { name: '发送' }).disabled).toBe(true)
+    expect(chat.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => {
+      fireEvent.click(chat)
+      await settle()
+    })
+    expect(screen.queryByRole('complementary', { name: '优化会话' })).toBeNull()
+    expect(chat.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('Windows 上悬停提示写成 Ctrl+…', async () => {
@@ -188,14 +239,40 @@ describe('工具栏（需求 5.3、S-02）', () => {
     expect(document.activeElement).toBe(editorContent())
   })
 
-  it('有会话时出现「会话」；进行中「优化」变成「停止」', async () => {
+  it('恢复已有会话时聊天栏仍收起，进行中「优化」变成「停止」', async () => {
     const bridge = new FakeBridge()
     bridge.handle('optimize.state', () => ok({ session: session('s1', [round('r1')]) }))
     await mountApp(bridge)
     const bar = within(toolbar())
-    expect(bar.getByRole('button', { name: '会话' }).getAttribute('aria-pressed')).toBe('false')
+    expect(bar.getByRole('button', { name: '聊天' }).getAttribute('aria-pressed')).toBe('false')
     expect(bar.getByRole('button', { name: '停止' })).toBeTruthy()
     expect(bar.queryByRole('button', { name: '优化' })).toBeNull()
+  })
+
+  it('清空对话后聊天按钮和空面板仍然可见', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('optimize.state', () => ok({ session: session('s1', [round('r1')]) }))
+    bridge.handle('optimize.clear', () => {
+      bridge.emit('optimize.event', { type: 'session', session: null })
+      return ok({})
+    })
+    await mountApp(bridge)
+    const chat = within(toolbar()).getByRole('button', { name: '聊天' })
+    await act(async () => {
+      fireEvent.click(chat)
+      await settle()
+    })
+    const panel = screen.getByRole('complementary', { name: '优化会话' })
+    expect(panel.querySelector('.px-session-messages')?.childElementCount).toBe(1)
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole('button', { name: '清空会话' }))
+      await settle()
+    })
+    expect(within(toolbar()).getByRole('button', { name: '聊天' })).toBe(chat)
+    expect(chat.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('complementary', { name: '优化会话' })).toBe(panel)
+    expect(panel.querySelector('.px-session-messages')?.childElementCount).toBe(0)
+    expect(within(panel).getByRole('textbox', { name: '输入要优化的 Prompt…' })).toBeTruthy()
   })
 
   it('点「关闭」隐藏小窗；点按钮不抢编辑区的焦点', async () => {

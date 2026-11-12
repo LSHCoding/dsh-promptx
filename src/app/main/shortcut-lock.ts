@@ -20,7 +20,6 @@
 import { createHash } from 'node:crypto'
 import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseAccelerator, type AcceleratorModifier } from '../../shared/accelerator.ts'
 
 export interface LockHolder {
   pid: number
@@ -64,24 +63,7 @@ const NODE_FILE_TIMES: LockFileTimes = {
   },
 }
 
-const PHYSICAL_ORDER: readonly AcceleratorModifier[] = ['Command', 'Control', 'Alt', 'Shift', 'Super']
-
-/**
- * 按物理按键规范化的组合，用作锁的键。CommandOrControl 在 macOS 上就是 Command、在其他平台上就是 Control，
- * Super 在 macOS 上也落到 ⌘：两个 profile 分别写了 `CommandOrControl+P` 和 `Command+P` 时按的是同一组键，必须算同一把锁。
- * 写法不合法时返回 null。
- */
-export function physicalShortcutKey(accelerator: string, platform: string): string | null {
-  const parsed = parseAccelerator(accelerator)
-  if (!parsed.ok) return null
-  const modifiers = new Set<AcceleratorModifier>()
-  for (const modifier of parsed.modifiers) {
-    if (platform === 'darwin') modifiers.add(modifier === 'CommandOrControl' || modifier === 'Super' ? 'Command' : modifier)
-    else if (modifier === 'CommandOrControl') modifiers.add('Control')
-    else modifiers.add(modifier === 'Command' ? 'Super' : modifier)
-  }
-  return [...PHYSICAL_ORDER.filter(modifier => modifiers.has(modifier)), parsed.key].join('+')
-}
+export { physicalShortcutKey } from '../../shared/accelerator.ts'
 
 export function shortcutLockPath(dir: string, key: string): string {
   const digest = createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 16)

@@ -3,6 +3,7 @@
 
 import { vi } from 'vitest'
 import type { CompanionRequests, RendererForwardedMethod } from '../../../src/shared/protocol.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../../src/shared/window-shortcuts.ts'
 import {
   DEFAULT_PREFS,
   type BridgeEventName,
@@ -63,6 +64,7 @@ export const LIBRARY_DIR = '/tmp/promptx-test/library'
 export function config(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   return {
     globalShortcut: 'Control+P',
+    windowShortcuts: DEFAULT_TOOLBAR_SHORTCUTS,
     hideOnBlur: false,
     confirmDelete: true,
     convertMiddleDot: true,
@@ -172,7 +174,7 @@ export class FakeBridge implements PromptxBridge {
 
   readonly prefs = {
     get: vi.fn(async (): Promise<Prefs> => structuredClone(this.storedPrefs)),
-    set: vi.fn((patch: Partial<Pick<Prefs, 'panes' | 'library'>>) => {
+    set: vi.fn<PromptxBridge['prefs']['set']>((patch) => {
       this.storedPrefs = { ...this.storedPrefs, ...patch }
     }),
   }
@@ -183,6 +185,7 @@ export class FakeBridge implements PromptxBridge {
     this.handle('draft.save', () => ok({ updatedAt: '2026-11-08T00:00:00Z' }))
     this.handle('optimize.state', () => ok({ session: null }))
     this.handle('library.list', () => ok(listResult([])))
+    this.handle('library.folders', () => ok({ folders: [] }))
     this.handle('library.suggestMetadata', () => ok({ metadata: { title: '建议标题', tags: ['Writing Guide', '示例'] } }))
   }
 
@@ -269,17 +272,18 @@ export function chooseDialog(controller: AppController, button: string): void {
 }
 
 /** 测试只关注写入结果时，确认模型预填的标题和标签。 */
-export async function confirmSaveForm(controller: AppController): Promise<void> {
+export async function confirmSaveForm(controller: AppController, folder?: string): Promise<void> {
   await settle()
   const { dialog } = controller.store.getState()
   if (dialog?.defaultButton === CONFIRM_METADATA_BUTTON && dialog.form !== undefined) {
-    controller.resolveDialog(dialog.id, { button: CONFIRM_METADATA_BUTTON, form: dialog.form })
+    const form = folder === undefined ? dialog.form : { ...dialog.form, folder }
+    controller.resolveDialog(dialog.id, { button: CONFIRM_METADATA_BUTTON, form })
   }
 }
 
-export async function saveAndConfirm(controller: AppController): Promise<SaveOutcome> {
+export async function saveAndConfirm(controller: AppController, folder?: string): Promise<SaveOutcome> {
   const saving = controller.save()
-  await confirmSaveForm(controller)
+  await confirmSaveForm(controller, folder)
   return saving
 }
 

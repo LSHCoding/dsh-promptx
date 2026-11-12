@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 — 2026-11-12
+
+- Place the toolbar above the editor and make each toolbar shortcut configurable in PromptX settings.
+- Keep the Chat button visible and start with the chat panel closed. Send a prompt directly from the empty chat panel to start a rewrite. Clearing the conversation leaves the panel open.
+- Create folders, move folders to the library trash, and choose a destination when saving a prompt. New prompts default to Uncategorized. Saving changes to an existing prompt can move it to another folder.
+- Restore the editor width on restart when the chat panel was open at shutdown.
+
 ## 0.1.3 — 2026-11-11
 
 - Generate a title and tags with the default dsh model when saving a new prompt. Review or edit the suggestions before saving, or enter metadata manually if generation fails.

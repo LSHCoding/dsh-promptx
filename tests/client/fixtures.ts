@@ -6,6 +6,7 @@ import type { StatusSnapshot, StatusStore } from '../../src/client/api.ts'
 import { en, zh, type PromptxLocaleKey, type PromptxTranslate } from '../../src/client/locale.ts'
 import { DEFAULT_INSTRUCTION } from '../../src/shared/instructions.ts'
 import type { PanelStatus } from '../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../src/shared/window-shortcuts.ts'
 
 export function makeStatus(overrides: Partial<PanelStatus> = {}): PanelStatus {
   return {
@@ -17,6 +18,7 @@ export function makeStatus(overrides: Partial<PanelStatus> = {}): PanelStatus {
       convertYen: true,
       optimizeInstruction: '',
       globalShortcut: 'Control+P',
+      ...DEFAULT_TOOLBAR_SHORTCUTS,
       hideOnBlur: false,
       runtimeSource: 'auto',
     },

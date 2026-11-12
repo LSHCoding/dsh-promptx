@@ -25,6 +25,7 @@ import {
 } from '../../../src/shared/protocol.ts'
 import { RpcPeer } from '../../../src/shared/rpc.ts'
 import type { CompanionConfig } from '../../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../../src/shared/window-shortcuts.ts'
 
 export const WORK_AREA: Rect = { x: 0, y: 25, width: 1440, height: 875 }
 
@@ -505,6 +506,7 @@ export type HostSide = RpcPeer<HostRequests, HostNotifications, CompanionRequest
 
 export const BASE_CONFIG: CompanionConfig = {
   globalShortcut: 'Control+P',
+  windowShortcuts: DEFAULT_TOOLBAR_SHORTCUTS,
   hideOnBlur: false,
   confirmDelete: true,
   convertMiddleDot: true,

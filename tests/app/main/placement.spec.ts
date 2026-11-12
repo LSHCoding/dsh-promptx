@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect } from '../../../src/app/main/placement.ts'
+import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect, toolbarSpan } from '../../../src/app/main/placement.ts'
+import { DEFAULT_PREFS } from '../../../src/shared/bridge.ts'
 import { initialWindowBounds, type Rect } from '../../../src/shared/layout.ts'
 import { trapProcessErrors } from './helpers.ts'
 
@@ -27,6 +28,12 @@ describe('boundsForShow', () => {
     expect(placed.x).toBeGreaterThanOrEqual(MAIN.x)
     expect(placed.x + placed.width).toBeLessThanOrEqual(MAIN.x + MAIN.width)
     expect(placed.y).toBeGreaterThanOrEqual(MAIN.y)
+  })
+
+  it('moves a partially visible window back when only its library can be reached', () => {
+    const saved = { x: 1300, y: 100, width: 980, height: 600 }
+    const toolbar = toolbarSpan({ ...DEFAULT_PREFS, window: saved })
+    expect(boundsForShow(saved, [{ workArea: MAIN }], MAIN, toolbar)).toEqual(initialWindowBounds(MAIN))
   })
 
   it('fills a screen that is smaller than the minimum size', () => {

@@ -402,13 +402,6 @@ export const CONFIG_PAGE_CSS = `
   white-space: nowrap;
 }
 
-.promptx-footnote {
-  margin: 12px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-tertiary);
-}
-
 .promptx-footer {
   display: flex;
   align-items: center;

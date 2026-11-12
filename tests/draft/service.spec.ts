@@ -88,7 +88,7 @@ describe('draft service (E-02, F-01, design-spec 4.5)', () => {
     await main.load()
     await main.save({ text: 'main remains', selection: { anchor: 2, head: 2 }, binding: null })
     await first.load()
-    const entryMetadata = { title: '审查提示词', tags: 'Code Review, 风格检查,', savedTags: ['旧标签'] }
+    const entryMetadata = { title: '审查提示词', tags: 'Code Review, 风格检查,', savedTags: ['旧标签'], folder: '' }
     await first.save({ text: 'unsaved entry edits', selection: { anchor: 3, head: 3 }, binding: BINDING, entryMetadata })
     expect((await main.load())?.text).toBe('main remains')
     await first.close()

@@ -15,7 +15,6 @@ import type {
   OptimizeEvent,
   OptimizeSession,
   RestoreResult,
-  RestoreTarget,
   RuntimeSource,
   RuntimeStatus,
   SaveResult,
@@ -57,6 +56,9 @@ export interface LibraryServiceOptions {
 
 export interface LibraryApi {
   list(params: LibraryListParams): Promise<LibraryListResult>
+  folders(libraryDir: string): Promise<{ folders: string[] }>
+  createFolder(name: string, libraryDir: string): Promise<{ folder: string }>
+  deleteFolder(folder: string, libraryDir: string): Promise<{ trashFile: string }>
   read(relPath: string): Promise<LibraryReadResult>
   /** requestId：新建文件时用于去重，同一个 requestId 重发返回已经建好的文件（Host 进程内记住最近的 100 个）。 */
   save(params: CompanionRequests['library.save']['params']): Promise<SaveResult>
@@ -64,7 +66,7 @@ export interface LibraryApi {
   delete(relPath: string): Promise<{ trashFile: string }>
   trashList(query: string): Promise<TrashListResult>
   trashRead(file: string): Promise<{ entry: TrashEntry; body: string }>
-  trashRestore(params: { file: string; target: RestoreTarget; alternative: string | null; acceptModified: boolean }): Promise<RestoreResult>
+  trashRestore(params: CompanionRequests['trash.restore']['params']): Promise<RestoreResult>
   /** 库目录变了：丢掉索引缓存。 */
   reset(): void
 }

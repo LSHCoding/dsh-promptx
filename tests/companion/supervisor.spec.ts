@@ -9,11 +9,23 @@ import type { HostLogger, HostPeer, LaunchSpec, SupervisorOptions } from '../../
 import { PromptxError } from '../../src/shared/errors.ts'
 import { PROTOCOL_VERSION } from '../../src/shared/protocol.ts'
 import type { CompanionConfig, CompanionState, ErrorInfo } from '../../src/shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../src/shared/window-shortcuts.ts'
 import { failOnProcessProblems } from './process-traps.ts'
 
 const MOCK = fileURLToPath(new URL('../fixtures/mock-companion.mjs', import.meta.url))
 
-const CONFIG: CompanionConfig = { globalShortcut: '', hideOnBlur: false, confirmDelete: true, convertMiddleDot: true, convertYen: true, locale: null, theme: 'system', libraryDir: '/tmp/library', profile: 'test' }
+const CONFIG: CompanionConfig = {
+  globalShortcut: '',
+  windowShortcuts: DEFAULT_TOOLBAR_SHORTCUTS,
+  hideOnBlur: false,
+  confirmDelete: true,
+  convertMiddleDot: true,
+  convertYen: true,
+  locale: null,
+  theme: 'system',
+  libraryDir: '/tmp/library',
+  profile: 'test',
+}
 
 /** 测试用的短时序：真实的 15 秒握手、5 秒心跳在单测里太慢。 */
 const FAST: NonNullable<SupervisorOptions['timings']> = {

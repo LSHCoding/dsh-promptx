@@ -1,7 +1,7 @@
 // 库侧栏和会话栏的开合与窗口宽度（需求 5.7、F-02，技术方案 5.4、5.5，审查 COV-13）。
 // 用编辑区实际宽度切换库侧栏；会话栏继续用 shared/layout.ts 的空间分配。
 
-import { MIN_WINDOW, PANE_LIMITS, planPaneClose, planPaneOpen, type OptionalPane } from '../../../shared/layout.ts'
+import { DIVIDER_WIDTH, libraryWidth, MIN_WINDOW, PANE_LIMITS, planPaneClose, planPaneOpen, type OptionalPane } from '../../../shared/layout.ts'
 import type { WindowBounds } from '../../../shared/bridge.ts'
 import type { AppState, PaneSizes } from '../state/state.ts'
 import type { Context } from './context.ts'
@@ -9,14 +9,6 @@ import type { Context } from './context.ts'
 type Grown = { left: number; right: number }
 
 const NO_GROWTH: Grown = { left: 0, right: 0 }
-
-/** 分隔线的宽度（app.css 的 .px-divider-vertical）。库侧栏带两条（文件夹栏|列表栏、列表栏|编辑区），会话栏带一条。 */
-export const DIVIDER_WIDTH = 1
-
-/** 库侧栏打开时占的总宽度：文件夹栏 + 列表栏 + 两条分隔线。 */
-export function libraryWidth(panes: PaneSizes): number {
-  return panes.folderWidth + panes.listWidth + 2 * DIVIDER_WIDTH
-}
 
 /** 会话栏打开时占的总宽度：会话栏 + 一条分隔线。 */
 export function sessionWidth(panes: PaneSizes): number {
@@ -44,6 +36,7 @@ export class PaneLayout {
   /** 靠近屏幕左边时，展开库会借用右边的空间，收起时先归还这部分。 */
   private libraryGrowthRight = 0
   private editorElement: Pick<HTMLElement, 'offsetWidth'> | null = null
+  private savedEditorWidth: number | null = null
   /** 保留切换前的编辑区宽度，供连续切换和窗口受限时恢复。手动调整窗口或栏宽后改用实际宽度。 */
   private libraryEditor: { width: number; windowWidth: number; panes: PaneSizes; sessionOpen: boolean } | null = null
   /** 开合要先问主进程窗口位置，连续点击时按顺序一个个做，避免两次计算用到同一个旧位置。 */
@@ -53,6 +46,15 @@ export class PaneLayout {
 
   setEditorElement(element: Pick<HTMLElement, 'offsetWidth'> | null): void {
     this.editorElement = element
+  }
+
+  /** 聊天栏展开时记录真正的编辑区宽度，包括屏幕受限时的收缩和手动调节。 */
+  persistEditorWidth(): void {
+    const sessionOpen = this.ctx.store.getState().optimize.paneOpen
+    const editorWidth = sessionOpen ? this.editorElement?.offsetWidth : null
+    if (editorWidth === undefined || editorWidth === 0 || editorWidth === this.savedEditorWidth) return
+    this.savedEditorWidth = editorWidth
+    this.ctx.bridge.prefs.set({ editorWidth })
   }
 
   open(pane: OptionalPane): Promise<void> {
@@ -73,6 +75,10 @@ export class PaneLayout {
       await this.openPane('library')
       return true
     })
+  }
+
+  toggleSession(): Promise<void> {
+    return this.enqueue(() => (this.ctx.store.getState().optimize.paneOpen ? this.closePane('session') : this.openPane('session')))
   }
 
   /** 启动时按偏好直接显示库侧栏：窗口大小是上次关窗时记下的，已经包含侧栏，不再加宽。 */

@@ -261,10 +261,11 @@ describe('主窗口保存始终新建', () => {
 })
 
 describe('新建的目标文件夹', () => {
-  it('生成期间改选文件夹，已发起的保存仍写入点击保存时的目录', async () => {
+  it('生成期间切换库筛选，按保存对话框中确认的目录写入', async () => {
     const bridge = new FakeBridge()
     const suggestion = deferred<BridgeResult<{ metadata: PromptMetadata | null }>>()
     bridge.handle('library.list', () => ok(listResult([], { folders: ['写作', '编程'] })))
+    bridge.handle('library.folders', () => ok({ folders: ['写作', '编程'] }))
     bridge.handle('library.suggestMetadata', () => suggestion.promise)
     bridge.handle('library.save', params => created('写作/标题.md', params.text))
     const controller = await start(bridge)
@@ -274,14 +275,16 @@ describe('新建的目标文件夹', () => {
     const saving = controller.save()
     await controller.library.chooseFolder({ kind: 'folder', path: '编程' })
     suggestion.resolve(ok({ metadata: { title: '标题', tags: [] } }))
-    await confirmSaveForm(controller)
+    await confirmSaveForm(controller, '写作')
     expect(await saving).toBe('saved')
     expect(bridge.callsTo('library.save')[0]?.folder).toBe('写作')
+    expect(bridge.callsTo('library.save')[0]?.folderMustExist).toBe(true)
   })
 
-  it('仅展开真实文件夹时使用该目录，其余存根目录', async () => {
+  it('默认保存到未分类，库收起时仍可选择真实文件夹', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.list', () => ok(listResult([], { folders: ['写作'] })))
+    bridge.handle('library.folders', () => ok({ folders: ['写作'] }))
     bridge.handle('trash.list', () => ok({ recordState: 'ok', entries: [] }))
     bridge.handle('library.save', params => created('x.md', params.text))
     const controller = await start(bridge)
@@ -289,14 +292,33 @@ describe('新建的目标文件夹', () => {
     await controller.library.open()
     await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
     await saveAndConfirm(controller)
-    expect(bridge.callsTo('library.save').at(-1)?.folder).toBe('写作')
-    await controller.library.chooseFolder({ kind: 'all' })
-    await saveAndConfirm(controller)
     expect(bridge.callsTo('library.save').at(-1)?.folder).toBeNull()
-    await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
     await controller.library.close()
-    await saveAndConfirm(controller)
-    expect(bridge.callsTo('library.save').at(-1)?.folder).toBeNull()
+    await saveAndConfirm(controller, '写作')
+    expect(bridge.callsTo('library.save').at(-1)?.folder).toBe('写作')
+  })
+
+  it('确认后目标文件夹消失，保留标题和标签并重新询问目标', async () => {
+    const bridge = new FakeBridge()
+    let folders = ['写作', '编程']
+    bridge.handle('library.folders', () => ok({ folders }))
+    bridge.handle('library.save', params => params.folder === '写作'
+      ? fail('promptx/library/not-found')
+      : created('编程/标题.md', params.text))
+    const controller = await start(bridge)
+    type(controller, '正文')
+    const saving = controller.save()
+    await settle()
+    folders = ['编程']
+    await confirmSaveForm(controller, '写作')
+    await settle()
+    expect(openDialog(controller)).toMatchObject({
+      form: { title: '建议标题', tags: 'Writing Guide, 示例', folder: '' },
+      folderOptions: ['编程'],
+    })
+    await confirmSaveForm(controller, '编程')
+    expect(await saving).toBe('saved')
+    expect(bridge.callsTo('library.save').map(request => request.folder)).toEqual(['写作', '编程'])
   })
 
   it('换库后列表未返回，或旧文件夹已消失时不创建旧目录', async () => {
@@ -319,22 +341,22 @@ describe('新建的目标文件夹', () => {
 })
 
 describe('新建超时重试', () => {
-  it('超时后改选文件夹，重新生成确认并使用新的请求 id', async () => {
+  it('超时后切换库筛选，继续重试原来确认的目录和请求 id', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.list', () => ok(listResult([], { folders: ['写作', '编程'] })))
+    bridge.handle('library.folders', () => ok({ folders: ['写作', '编程'] }))
     bridge.handle('library.save', () => fail('promptx/channel/timeout'))
     const controller = await start(bridge)
     type(controller, '正文')
     await controller.library.open()
     await controller.library.chooseFolder({ kind: 'folder', path: '写作' })
-    await saveAndConfirm(controller)
+    await saveAndConfirm(controller, '写作')
     await controller.library.chooseFolder({ kind: 'folder', path: '编程' })
     await saveAndConfirm(controller)
     const [first, second] = bridge.callsTo('library.save')
     expect(first?.folder).toBe('写作')
-    expect(second?.folder).toBe('编程')
-    expect(second?.requestId).not.toBe(first?.requestId)
-    expect(bridge.callsTo('library.suggestMetadata')).toHaveLength(2)
+    expect(second).toEqual(first)
+    expect(bridge.callsTo('library.suggestMetadata')).toHaveLength(1)
   })
 
   it('结果未知时沿用同一 requestId，确认成功后下一次明确保存使用新 id', async () => {

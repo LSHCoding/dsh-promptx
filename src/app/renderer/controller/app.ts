@@ -253,7 +253,12 @@ export class AppController {
   /** 主进程退出或隐藏前请求立即写回草稿，写完后回复（技术方案 5.2「停止」、5.3 shutdown）。 */
   private async flushFor(id: number): Promise<void> {
     try {
-      await this.draft.saver.flush()
+      await Promise.all([
+        this.layout.settled().then(() => {
+          this.layout.persistEditorWidth()
+        }),
+        this.draft.saver.flush(),
+      ])
     } finally {
       this.bridge.flushed(id)
     }
@@ -284,7 +289,7 @@ export class AppController {
     return { ok: true }
   }
 
-  /** 关闭按钮和 Esc：隐藏小窗，焦点还给原来的应用；不清空草稿，不打断优化（F-01）。 */
+  /** 隐藏小窗并把焦点还给原来的应用；不清空草稿，不打断优化（F-01）。 */
   async hide(): Promise<void> {
     this.library.cancelInsert()
     this.closeMenu()
@@ -332,7 +337,7 @@ export class AppController {
     if (result.value.navigated) this.toasts.success(text(this.ctx, 'toast.settingsOpened'))
   }
 
-  /** ⌘L 和工具栏按钮共用库侧栏的开合行为。 */
+  /** 切换库侧栏前收起弹出菜单。 */
   async libraryShortcut(): Promise<void> {
     this.closeMenu()
     await this.library.toggle()
@@ -355,15 +360,20 @@ export class AppController {
       }
       return
     }
-    const command = matchWindowCommand(event, this.store.getState().platform)
+    const { config, platform, menu } = this.store.getState()
+    if (menu !== null && event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+      event.preventDefault()
+      event.stopPropagation()
+      this.closeMenu()
+      return
+    }
+    const command = matchWindowCommand(event, platform, config?.windowShortcuts)
     if (command === null) return
     event.preventDefault()
     event.stopPropagation()
     switch (command) {
       case 'hide':
-        // Esc 先关打开的菜单，没有菜单时才隐藏小窗。
-        if (this.store.getState().menu !== null) this.closeMenu()
-        else runTask(this.hide())
+        runTask(this.hide())
         return
       case 'copyAndHide':
         runTask(this.copyAndHide())
@@ -377,6 +387,17 @@ export class AppController {
       case 'optimize':
         this.closeMenu()
         runTask(this.optimize.toggle())
+        return
+      case 'clear':
+        this.closeMenu()
+        this.clear()
+        return
+      case 'chat':
+        this.closeMenu()
+        runTask(this.optimize.togglePane())
+        return
+      case 'settings':
+        runTask(this.openSettings())
         return
     }
   }
@@ -468,7 +489,19 @@ export class AppController {
         return this.e2eSave(command.id)
       case 'typing-latency':
         return this.measureTyping(e2eSize(command))
-      case 'state':
+      case 'toggle-chat': {
+        if (typeof document === 'undefined') return { ok: false, data: {} }
+        const label = text(this.ctx, 'toolbar.session')
+        const button = [...document.querySelectorAll<HTMLButtonElement>('.px-toolbar button')]
+          .find(item => item.getAttribute('aria-label') === label)
+        if (button === undefined) return { ok: false, data: {} }
+        button.click()
+        await this.layout.settled()
+        return { ok: this.store.getState().optimize.paneOpen !== state.optimize.paneOpen, data: {} }
+      }
+      case 'state': {
+        const column = typeof document === 'undefined' ? null : document.querySelector('.px-editor-column')
+        const toolbar = column?.querySelector('.px-toolbar')
         return {
           ok: true,
           data: {
@@ -478,8 +511,14 @@ export class AppController {
             boundRelPath: state.draft.binding?.relPath ?? null,
             libraryOpen: state.library.open,
             sessionOpen: state.optimize.paneOpen,
+            chatComposerReady: typeof document !== 'undefined' && document.querySelector('.px-followup-input') !== null,
+            chatShortcut: state.config?.windowShortcuts.shortcutChat ?? null,
+            editorWidth: column?.getBoundingClientRect().width ?? null,
+            toolbarInEditor: toolbar !== undefined && toolbar !== null
+              && toolbar.getBoundingClientRect().width === column?.getBoundingClientRect().width,
           },
         }
+      }
       default:
         return { ok: false, data: { error: 'unknown-action' } }
     }

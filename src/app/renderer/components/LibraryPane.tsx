@@ -64,7 +64,21 @@ function FolderColumn({ width }: { width: number }): ReactElement {
   const isActive = (choice: FolderSel) => view === 'library' && sameFolder(folder, choice)
   return (
     <nav className="px-folders" style={{ width }} aria-label={t('library.folders')}>
-      <div className="px-pane-heading">{t('library.folders')}</div>
+      <div className="px-pane-heading px-folders-heading">
+        <span>{t('library.folders')}</span>
+        <IconButton
+          icon="folderAdd"
+          label={t('library.createFolder')}
+          disabled={list?.state === 'unavailable'}
+          onClick={() => { run(controller.library.createFolder()) }}
+        />
+        <IconButton
+          icon="delete"
+          label={t('library.deleteFolder')}
+          disabled={view !== 'library' || folder.kind !== 'folder' || list?.folders.includes(folder.path) !== true}
+          onClick={() => { if (folder.kind === 'folder') run(controller.library.removeFolder(folder.path)) }}
+        />
+      </div>
       <div className="px-folders-list">
         <FolderButton icon="all" label={t('library.all')} active={isActive({ kind: 'all' })} onClick={() => { choose({ kind: 'all' }) }} />
         <FolderButton icon="inbox" label={t('library.uncategorized')} active={isActive({ kind: 'root' })} onClick={() => { choose({ kind: 'root' }) }} />
@@ -445,7 +459,10 @@ function TrashList(): ReactElement {
                   }}
                 >
                   <div className="px-row-main">
-                    <div className="px-row-title" title={entry.title}><span className="px-row-title-text">{entry.title}</span></div>
+                    <div className="px-row-title" title={entry.title}>
+                      {entry.kind === 'folder' ? <Icon name="folder" /> : null}
+                      <span className="px-row-title-text">{entry.title}</span>
+                    </div>
                     <div className="px-row-meta">
                       {entry.deletedAt === null ? null : <span>{t('trash.deletedAgo', { time: relativeTime(entry.deletedAt, now, locale) })}</span>}
                       <span>{originalFolder(entry, t)}</span>
@@ -467,9 +484,11 @@ function TrashPreview(): ReactElement {
   const locale = useAppState(state => state.locale)
   if (preview === null) return <p className="px-empty">{t('library.selectHint')}</p>
   const { entry } = preview
+  const originalParent = entry.originalPath === null ? '' : folderOf(entry.originalPath)
+  const originalPath = entry.kind === 'folder' ? entry.originalPath : originalParent === '' ? t('trash.root') : `${originalParent}/`
   const location = entry.originalPath === null
     ? t('trash.originalUnknown')
-    : t('trash.originalLocation', { path: folderOf(entry.originalPath) === '' ? t('trash.root') : `${folderOf(entry.originalPath)}/` })
+    : t('trash.originalLocation', { path: originalPath ?? '' })
   return (
     <div className="px-preview">
       <div className="px-preview-head">
@@ -477,7 +496,7 @@ function TrashPreview(): ReactElement {
         <div className="px-preview-meta"><span>{location}</span></div>
       </div>
       <div className="px-preview-body">
-        {preview.status === 'ready' ? <pre className="px-preview-text">{preview.body}</pre> : null}
+        {preview.status === 'ready' && entry.kind !== 'folder' ? <pre className="px-preview-text">{preview.body}</pre> : null}
         {preview.status === 'error' && preview.error !== null
           ? <p className="px-preview-error" role="alert">{previewErrorMessage(locale, preview.error)}</p>
           : null}

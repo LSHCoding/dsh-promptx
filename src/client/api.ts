@@ -8,6 +8,7 @@
 // - Host 的回复是跨进程边界来的数据，先检查形状再用。Host 和 Client 随同一个包发布，形状不对就按出错处理，不猜。
 
 import { PromptxError, toErrorInfo } from '../shared/errors.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS, readToolbarShortcuts, TOOLBAR_SHORTCUT_FIELDS } from '../shared/window-shortcuts.ts'
 import type {
   CompanionState,
   ConfigFieldError,
@@ -44,7 +45,8 @@ export const POLL_MIN_IDLE_MS = 1_000
 
 /** 配置项的字段，顺序与 PromptxConfig 一致。 */
 export const CONFIG_FIELDS = [
-  'libraryDir', 'confirmDelete', 'convertMiddleDot', 'convertYen', 'optimizeInstruction', 'globalShortcut', 'hideOnBlur', 'runtimeSource',
+  'libraryDir', 'confirmDelete', 'convertMiddleDot', 'convertYen', 'optimizeInstruction', 'globalShortcut',
+  ...TOOLBAR_SHORTCUT_FIELDS, 'hideOnBlur', 'runtimeSource',
 ] as const satisfies readonly (keyof PromptxConfig)[]
 
 export type CompanionAction = 'restart' | 'show'
@@ -170,7 +172,7 @@ const COMPANION_STATES: readonly CompanionState[] = ['stopped', 'waiting-runtime
 const RUNTIME_SOURCES: readonly RuntimeSource[] = ['auto', 'mirror', 'official']
 const INSTANCE_STATES: readonly PanelStatus['instance'][] = ['active', 'duplicate']
 const FIELD_ERRORS: readonly ConfigFieldError[] = [
-  'library-dir-relative', 'library-dir-reserved', 'library-dir-skills', 'shortcut-invalid', 'value-invalid',
+  'library-dir-relative', 'library-dir-reserved', 'library-dir-skills', 'shortcut-invalid', 'window-shortcut-invalid', 'shortcut-conflict', 'value-invalid',
 ]
 
 type JsonRecord = Record<string, unknown>
@@ -215,7 +217,10 @@ function parseConfig(value: unknown): PromptxConfig | null {
   if (typeof libraryDir !== 'string' || typeof confirmDelete !== 'boolean' || typeof optimizeInstruction !== 'string') return null
   if (typeof convertMiddleDot !== 'boolean' || typeof convertYen !== 'boolean') return null
   if (typeof globalShortcut !== 'string' || typeof hideOnBlur !== 'boolean' || !oneOf(runtimeSource, RUNTIME_SOURCES)) return null
-  return { libraryDir, confirmDelete, convertMiddleDot, convertYen, optimizeInstruction, globalShortcut, hideOnBlur, runtimeSource }
+  const shortcuts = readToolbarShortcuts(field => stringOr(value[field], DEFAULT_TOOLBAR_SHORTCUTS[field]))
+  return {
+    libraryDir, confirmDelete, convertMiddleDot, convertYen, optimizeInstruction, globalShortcut, ...shortcuts, hideOnBlur, runtimeSource,
+  }
 }
 
 function parseRuntime(value: unknown): RuntimeStatus | null {

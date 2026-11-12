@@ -32,7 +32,7 @@ import { FlushCoordinator } from './flush.ts'
 import { HostLink, type CompanionPeer, type HostLinkClose, type InputStream, type OutputStream } from './host-link.ts'
 import { registerEntryEditorIpc, registerIpcHandlers, type E2eRendererResult, type ReadyInfo } from './ipc.ts'
 import { errorCode, type CompanionLogger } from './logger.ts'
-import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect } from './placement.ts'
+import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect, toolbarSpan } from './placement.ts'
 import type { CompanionPlatform, MainWindow, TrayHandle } from './platform.ts'
 import { PrefsStore } from './prefs.ts'
 import {
@@ -96,7 +96,8 @@ export const DEFAULT_TIMINGS: CompanionTimings = {
 
 /** 读写大文件、扫描库的请求给更长的超时（protocol.ts LONG_REQUEST_TIMEOUT_MS）。 */
 const LONG_METHODS: ReadonlySet<RendererForwardedMethod> = new Set([
-  'library.list', 'library.read', 'library.suggestMetadata', 'library.save', 'library.updateMeta', 'library.delete',
+  'library.list', 'library.folders', 'library.createFolder', 'library.deleteFolder',
+  'library.read', 'library.suggestMetadata', 'library.save', 'library.updateMeta', 'library.delete',
   'trash.list', 'trash.read', 'trash.restore',
 ])
 
@@ -250,6 +251,7 @@ export class CompanionApp {
     this.#link.start()
     runTask(this.#logger, 'hello', () => this.#hello())
     this.#prefs.load()
+    this.#prefs.restoreWithoutSession()
     this.#watchParent()
     registerIpcHandlers(this.#platform.ipc, {
       isTrusted: sender => this.#window?.isSender(sender) ?? false,
@@ -328,21 +330,23 @@ export class CompanionApp {
       if (command.action === 'edit-entry') {
         const editor = this.#entryEditor
         if (editor === null) return { ok: false, data: { windowCreated: false } }
+        const reusingWindow = editor.windowCreated
         this.#controller?.show('e2e-entry')
         const opened = await editor.open(command.relPath)
         if (!opened.ok) return { ok: false, data: {}, error: opened.error }
         const deadline = this.#platform.now() + 3000
-        while (!editor.stateRequested && this.#platform.now() < deadline) {
+        while (!reusingWindow && !editor.stateRequested && this.#platform.now() < deadline) {
           await new Promise(resolve => setTimeout(resolve, 10))
         }
         const stateRequested = editor.stateRequested
-        // getState 表示子窗实际请求初始文档，不把它记作 OS 输入法或DOM挂载验收。
+        // 首次加载由子窗请求文档。复用子窗时由主进程推送新文档，再用渲染进程回传确认。
         await new Promise(resolve => setTimeout(resolve, 100))
-        const { metadata } = command
-        editor.sendE2eText(command.text, metadata)
+        const { metadata, folder } = command
+        editor.sendE2eText(command.text, metadata, folder)
         const textDeadline = this.#platform.now() + 3000
         let echoed = editor.getState()
-        const rendererMatches = () => echoed.ok && echoed.value.text === command.text && (
+        const rendererMatches = () => echoed.ok && echoed.value.text === command.text
+          && (folder === undefined || echoed.value.metadata.folder === folder) && (
           metadata === undefined || (echoed.value.metadata.title === metadata.title && echoed.value.metadata.tags === metadata.tags.join(', '))
         )
         while (!rendererMatches() && this.#platform.now() < textDeadline) {
@@ -355,8 +359,11 @@ export class CompanionApp {
         const metadataMatches = metadata === undefined || (snapshot.ok && snapshot.value.binding.title === metadata.title &&
           snapshot.value.metadata.savedTags.length === metadata.tags.length &&
           metadata.tags.every((tag, index) => tag === snapshot.value.metadata.savedTags[index]))
+        const name = command.relPath.split('/').at(-1)
+        const expectedPath = folder === undefined ? command.relPath : folder === '' ? name : `${folder}/${name}`
         const result = {
-          ok: saved.ok && stateRequested && metadataMatches,
+          ok: saved.ok && (reusingWindow || stateRequested) && metadataMatches
+            && snapshot.ok && snapshot.value.binding.relPath === expectedPath,
           data: {
             windowCreated: editor.windowCreated, stateRequested,
             rendererEchoed: true,
@@ -703,7 +710,8 @@ export class CompanionApp {
 
   /** 从隐藏变为显示之前：放到可见位置。 */
   #placeForShow(): void {
-    const target = boundsForShow(this.#prefs.get().window, this.#platform.displays(), this.#platform.cursorWorkArea())
+    const prefs = this.#prefs.get()
+    const target = boundsForShow(prefs.window, this.#platform.displays(), this.#platform.cursorWorkArea(), toolbarSpan(prefs))
     this.#applyBounds(target)
   }
 

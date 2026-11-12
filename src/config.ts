@@ -5,8 +5,9 @@ import Schema from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { defaultShortcut, parseAccelerator } from './shared/accelerator.ts'
+import { defaultShortcut } from './shared/accelerator.ts'
 import type { ConfigFieldError, PromptxConfig, RuntimeSource } from './shared/types.ts'
+import { DEFAULT_TOOLBAR_SHORTCUTS, readToolbarShortcuts, type ToolbarShortcutField } from './shared/window-shortcuts.ts'
 import { expandHome } from './paths.ts'
 
 /** 默认全局快捷键：macOS ⌃P，其他平台 Ctrl+Alt+P（需求 Q7）。Host 和小程序在同一台电脑上，按 Host 的平台决定。 */
@@ -15,7 +16,7 @@ export const DEFAULT_SHORTCUT = defaultShortcut(process.platform)
 export const RUNTIME_SOURCES: readonly RuntimeSource[] = ['auto', 'mirror', 'official']
 
 /** dsh 传给 apply 的配置：每个字段都是可原地更新的引用。 */
-export interface ConfigRefs {
+export interface ConfigRefs extends Record<ToolbarShortcutField, Volatile<string>> {
   libraryDir: Volatile<string>
   confirmDelete: Volatile<boolean>
   convertMiddleDot: Volatile<boolean>
@@ -39,6 +40,13 @@ export const Config: Schema<unknown, ConfigRefs> = Schema.object({
     .description('Instruction sent to the model when optimizing. Empty means the built-in default.'),
   globalShortcut: Schema.string().default(DEFAULT_SHORTCUT).volatile()
     .description('Global shortcut (Electron accelerator) that shows or hides the PromptX window. Empty disables it.'),
+  shortcutLibrary: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutLibrary).volatile().description('Shortcut for toggling the library.'),
+  shortcutSave: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutSave).volatile().description('Shortcut for saving a new Prompt.'),
+  shortcutOptimize: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutOptimize).volatile().description('Shortcut for rewriting or stopping a rewrite.'),
+  shortcutClear: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutClear).volatile().description('Shortcut for clearing the editor.'),
+  shortcutChat: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutChat).volatile().description('Shortcut for toggling the chat pane.'),
+  shortcutSettings: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutSettings).volatile().description('Shortcut for opening PromptX settings.'),
+  shortcutClose: Schema.string().default(DEFAULT_TOOLBAR_SHORTCUTS.shortcutClose).volatile().description('Shortcut for hiding the PromptX window.'),
   hideOnBlur: Schema.boolean().default(false).volatile()
     .description('Legacy setting kept for existing profiles. PromptX now stays visible when it loses focus.'),
   runtimeSource: Schema.union(['auto', 'mirror', 'official'] as const).default('auto').volatile()
@@ -54,6 +62,7 @@ export function readConfig(refs: ConfigRefs): PromptxConfig {
     convertYen: refs.convertYen.get(),
     optimizeInstruction: refs.optimizeInstruction.get(),
     globalShortcut: refs.globalShortcut.get(),
+    ...readToolbarShortcuts(field => refs[field].get()),
     hideOnBlur: refs.hideOnBlur.get(),
     runtimeSource: refs.runtimeSource.get(),
   }
@@ -107,12 +116,6 @@ export function checkLibraryDir(value: string, ctx: LibraryLocationContext): Con
     if (!isInsideOrEqual(fold(target), fold(resolve(ctx.defaultLibrary)))) return 'library-dir-reserved'
   }
   return null
-}
-
-/** 全局快捷键：空串表示不注册；否则必须是合法的加速键。 */
-export function checkShortcut(value: string): ConfigFieldError | null {
-  if (value.trim() === '') return null
-  return parseAccelerator(value).ok ? null : 'shortcut-invalid'
 }
 
 function isInsideOrEqual(child: string, parent: string): boolean {

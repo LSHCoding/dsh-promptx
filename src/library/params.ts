@@ -73,6 +73,8 @@ export interface SaveRequest {
   requestId: string
   metadata: Partial<PromptMetadata> | undefined
   libraryDir: string | undefined
+  folderMustExist: boolean
+  moveToFolder: string | undefined
 }
 
 function parseSaveMode(value: unknown): SaveMode {
@@ -91,6 +93,8 @@ export function parseSaveRequest(value: unknown): SaveRequest {
     requestId: expectString(value.requestId),
     metadata: value.metadata === undefined ? undefined : parsePromptMetadata(value.metadata, true),
     libraryDir: value.libraryDir === undefined ? undefined : expectString(value.libraryDir),
+    folderMustExist: value.folderMustExist === undefined ? false : expectBoolean(value.folderMustExist),
+    moveToFolder: value.moveToFolder === undefined ? undefined : expectString(value.moveToFolder),
   }
 }
 
@@ -151,6 +155,7 @@ export interface RestoreRequest {
   target: RestoreTarget
   alternative: string | null
   acceptModified: boolean
+  libraryDir: string | undefined
 }
 
 export function parseRestoreRequest(value: unknown): RestoreRequest {
@@ -162,5 +167,6 @@ export function parseRestoreRequest(value: unknown): RestoreRequest {
     target,
     alternative: expectStringOrNull(value.alternative),
     acceptModified: expectBoolean(value.acceptModified),
+    libraryDir: value.libraryDir === undefined ? undefined : expectString(value.libraryDir),
   }
 }

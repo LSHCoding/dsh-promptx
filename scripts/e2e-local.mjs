@@ -185,6 +185,14 @@ try {
     check('entry editor loads and edits through its renderer', edited.ok === true && edited.data.windowCreated === true && edited.data.stateRequested === true && edited.data.rendererEchoed === true)
     check('entry editor saves only its target', edited.data.targetRelPath === saved.data.relPath && edited.data.savedBodyMatches === true && updatedFile.endsWith(editedBody))
     check('entry editor saves custom title and phrase tags', edited.data.metadataMatches === true && [metadata.title, ...metadata.tags].every(value => updatedFile.includes(value)))
+    const folder = 'E2E Folder'
+    mkdirSync(join(status.effectiveLibraryDir, folder))
+    const moved = await api('e2e', { command: { action: 'edit-entry', relPath: saved.data.relPath, text: editedBody, folder } })
+    const movedPath = `${folder}/${saved.data.relPath}`
+    check('entry editor moves the existing entry on a folder-only save', moved.ok === true && moved.data.targetRelPath === movedPath
+      && !existsSync(join(status.effectiveLibraryDir, saved.data.relPath)), JSON.stringify(moved.data))
+    check('folder-only move preserves file bytes', existsSync(join(status.effectiveLibraryDir, movedPath))
+      && readFileSync(join(status.effectiveLibraryDir, movedPath), 'utf8') === updatedFile)
     check('other entries unchanged after entry editing', [...snapshots].filter(([path]) => path !== saved.data.relPath).every(([path, bytes]) => readFileSync(join(status.effectiveLibraryDir, path), 'utf8') === bytes))
     await sleep(800)
     const afterEdit = await api('e2e', { command: { action: 'state' } })
@@ -202,20 +210,58 @@ try {
   const typing = await api('e2e', { command: { action: 'typing-latency', size: 100_000 } })
   check('keystroke at 100k chars <= 50 ms', typing.ok === true && typing.data.ms <= 50, `${typing.data.ms} ms`)
 
-  // 6. 改全局快捷键后立即生效，插件不重启
+  // 6. 全局快捷键和工具栏快捷键写入 profile，并立即推给小窗。
   const pidBefore = status.companionPid
   const original = status.config.globalShortcut
+  const originalChat = status.config.shortcutChat
   const probe = 'Control+Alt+Shift+F9'
-  const update = await api('config', { patch: { globalShortcut: probe } })
+  const chatProbe = 'Control+Alt+Shift+F10'
+  const update = await api('config', { patch: { globalShortcut: probe, shortcutChat: 'shift+alt+ctrl+f10' } })
   check('config update accepted', update.ok === true, JSON.stringify(update))
   let after = await api('status?since=-1')
   const until = Date.now() + 10_000
   while (after.shortcut?.accelerator !== probe && Date.now() < until) after = await api(`status?since=${after.seq}`)
   check('new shortcut registered live', after.shortcut?.accelerator === probe && after.shortcut.registered === true, after.shortcut?.error?.code ?? '')
   check('companion not restarted by config change', after.companionPid === pidBefore, `${pidBefore} -> ${after.companionPid}`)
-  await api('config', { patch: { globalShortcut: original } })
+  const patchFile = join(home, 'profiles', PROFILE, 'cordis.patch.yml')
+  const persisted = readFileSync(patchFile, 'utf8')
+  check('toolbar shortcut normalized and stored in profile', after.config.shortcutChat === chatProbe
+    && /^\s*shortcutChat:\s*['"]?Control\+Alt\+Shift\+F10['"]?\s*$/m.test(persisted))
+  let shortcutState = await api('e2e', { command: { action: 'state' } })
+  const shortcutPushDeadline = Date.now() + 10_000
+  while (shortcutState.data?.renderer?.chatShortcut !== chatProbe && Date.now() < shortcutPushDeadline) {
+    await sleep(200)
+    shortcutState = await api('e2e', { command: { action: 'state' } })
+  }
+  check('toolbar shortcut applied live in renderer', shortcutState.data?.renderer?.chatShortcut === chatProbe)
+  await api('config', { patch: { globalShortcut: original, shortcutChat: originalChat } })
 
-  // 7. 停止 dsh，小程序随之退出
+  // 7. 用真实 Electron 的布局核对工具栏、空白聊天栏和重启宽度。
+  const rendererState = async () => (await api('e2e', { command: { action: 'state' } })).data?.renderer
+  const beforeChat = await rendererState()
+  check('toolbar fits the editor and chat starts closed', beforeChat?.toolbarInEditor === true && beforeChat.editorWidth > 0 && beforeChat.sessionOpen === false)
+  await api('companion', { action: 'show' })
+  const chat = await api('e2e', { command: { action: 'toggle-chat' } })
+  const withChat = await rendererState()
+  check('open chat with an input box before optimizing', chat.ok === true && withChat?.sessionOpen === true
+    && withChat.chatComposerReady === true && withChat.editorWidth > 0)
+
+  await api('companion', { action: 'restart' })
+  const restartDeadline = Date.now() + 15_000
+  let restarted
+  do {
+    after = await api('status?since=-1')
+    if (after.companion.state === 'running' && after.companionPid !== pidBefore) {
+      restarted = await rendererState()
+      if (restarted?.draftLoaded === true && restarted.editorWidth > 0) break
+    }
+    await sleep(200)
+  } while (Date.now() < restartDeadline)
+  check('chat starts closed after restart', restarted?.sessionOpen === false)
+  check('editor width preserved across restart', Math.abs(restarted?.editorWidth - withChat?.editorWidth) <= 1,
+    `${withChat?.editorWidth} -> ${restarted?.editorWidth}`)
+
+  // 8. 停止 dsh，小程序随之退出
   const pid = after.companionPid
   const exited = new Promise(resolve => dsh.once('exit', resolve))
   process.kill(-dsh.pid, 'SIGTERM')

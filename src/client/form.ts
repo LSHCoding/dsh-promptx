@@ -6,6 +6,7 @@
 
 import { parseAccelerator } from '../shared/accelerator.ts'
 import type { ConfigFieldError, PromptxConfig } from '../shared/types.ts'
+import { conflictingShortcutFields, TOOLBAR_SHORTCUT_FIELDS } from '../shared/window-shortcuts.ts'
 import { CONFIG_FIELDS } from './api.ts'
 
 export type ConfigField = keyof PromptxConfig
@@ -40,10 +41,10 @@ export function sameConfig(a: PromptxConfig, b: PromptxConfig): boolean {
 }
 
 /** 全局快捷键的规范写法：合法时用 shared/accelerator 的 canonical（和 Host、小程序同一套规则），不合法时只去掉首尾空白。 */
-export function normalizeShortcut(value: string): string {
+export function normalizeShortcut(value: string, scope: 'global' | 'window' = 'global'): string {
   const trimmed = value.trim()
   if (trimmed === '') return ''
-  const parsed = parseAccelerator(trimmed)
+  const parsed = parseAccelerator(trimmed, scope)
   return parsed.ok ? parsed.canonical : trimmed
 }
 
@@ -56,6 +57,10 @@ export function normalizeDraft(draft: Draft): Draft {
   const next: Draft = { ...draft }
   if (next.libraryDir !== undefined) next.libraryDir = next.libraryDir.trim()
   if (next.globalShortcut !== undefined) next.globalShortcut = normalizeShortcut(next.globalShortcut)
+  for (const field of TOOLBAR_SHORTCUT_FIELDS) {
+    const value = next[field]
+    if (value !== undefined) next[field] = normalizeShortcut(value, 'window')
+  }
   if (next.optimizeInstruction !== undefined && !/\S/.test(next.optimizeInstruction)) next.optimizeInstruction = ''
   return next
 }
@@ -110,13 +115,22 @@ export function baseConfig(config: PromptxConfig, accepted: AcceptedSave | null)
  * 页面自己能判断的不合法值（只检查要提交的字段）。其余规则（dsh 数据目录、技能目录）只有 Host 知道，保存时由 Host 返回。
  * 用户手改补丁文件写进的不合法值，只要这次不提交就不拦保存：Host 照常加载，按注册失败处理（design-spec 4.2）。
  */
-export function validatePatch(patch: Draft, platform: string): FieldErrors {
+export function validatePatch(patch: Draft, platform: string, base?: PromptxConfig): FieldErrors {
   const errors: FieldErrors = {}
   if (patch.libraryDir !== undefined && patch.libraryDir !== '' && !isLibraryDirAccepted(patch.libraryDir, platform)) {
     errors.libraryDir = 'library-dir-relative'
   }
   if (patch.globalShortcut !== undefined && patch.globalShortcut !== '' && !parseAccelerator(patch.globalShortcut).ok) {
     errors.globalShortcut = 'shortcut-invalid'
+  }
+  for (const field of TOOLBAR_SHORTCUT_FIELDS) {
+    const value = patch[field]
+    if (value !== undefined && value !== '' && !parseAccelerator(value, 'window').ok) {
+      errors[field] = 'window-shortcut-invalid'
+    }
+  }
+  if (base !== undefined) {
+    for (const field of conflictingShortcutFields(patch, base, platform)) errors[field] = 'shortcut-conflict'
   }
   return errors
 }

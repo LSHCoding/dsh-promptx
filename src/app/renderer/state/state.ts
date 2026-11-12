@@ -83,7 +83,9 @@ export interface PaneSizes {
 export interface OptimizeSlice {
   session: OptimizeSession | null
   paneOpen: boolean
-  /** 追加输入框里的文字。 */
+  /** 发起或追加一轮的请求正在等待 Host 回复。 */
+  submitting: boolean
+  /** 聊天输入框里的文字。 */
   followup: string
 }
 
@@ -94,10 +96,11 @@ export interface DialogButton {
   tone?: 'primary' | 'danger'
 }
 
-/** 标题和标签对话框的输入框。 */
+/** 对话框的输入框。 */
 export interface MetadataForm {
   title: string
   tags: string
+  folder?: string
 }
 
 export interface DialogSpec {
@@ -114,6 +117,9 @@ export interface DialogSpec {
   /** Esc 等于哪个按钮。O-04 的对话框没有「取消」，Esc 等于「保持当前内容」。 */
   escapeButton: string
   form?: MetadataForm
+  /** 文件夹新建只需要名称；保存新条目时可选目标文件夹。 */
+  formKind?: 'folderName'
+  folderOptions?: readonly string[]
 }
 
 export interface DialogState extends DialogSpec {
@@ -191,7 +197,7 @@ export function initialState(platform: string, locale: Locale, theme: 'light' | 
       previewHeight: panes.previewHeight,
       sessionWidth: panes.sessionWidth,
     },
-    optimize: { session: null, paneOpen: false, followup: '' },
+    optimize: { session: null, paneOpen: false, submitting: false, followup: '' },
     dialog: null,
     toast: null,
     menu: null,

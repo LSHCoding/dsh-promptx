@@ -233,9 +233,8 @@ export function* trashNameCandidates(name: string): Generator<string, void, unkn
  * 加上序号会超过 NAME_MAX_BYTES 时先截短原名的主体（按字素簇切）：用户在别处建的接近上限的长文件名，
  * 直接加序号会让占用检查和移动报 ENAMETOOLONG，恢复时给不出替代路径，回收站里有同名文件时也删不掉（外部审查第 6 条）。
  */
-export function* numberedNames(name: string): Generator<string, never, unknown> {
-  const stem = name.slice(0, -3)
-  const extension = name.slice(-3)
+export function* numberedNames(name: string, extension = name.slice(-3)): Generator<string, never, unknown> {
+  const stem = name.slice(0, name.length - extension.length)
   for (let n = 2; ; n++) {
     const suffix = `-${n}${extension}`
     yield `${truncateUtf8(stem, NAME_MAX_BYTES - Buffer.byteLength(suffix, 'utf8'))}${suffix}`
