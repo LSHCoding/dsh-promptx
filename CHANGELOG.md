@@ -3,7 +3,7 @@
 ## 0.1.5 — 2026-11-12
 
 - Align the headers and footers of the library, editor, and chat columns, and let the empty space in each header move the window. Put the library toggle at the left of the toolbar and Settings and Chat at the right. Keep the hide-window button in the window's top-right corner, in the chat header while the chat panel is open.
-- Show the library preview only after you select a prompt, and close it with Hide preview in that prompt's More menu or the More menu below the list. Keep Insert at cursor and More in a fixed row below the list. Delete a folder from the button on its row or from its context menu. Fix a horizontal scrollbar that appeared in the list when hovering over or selecting a prompt.
+- Show the library preview only after you select a prompt. Close it with the × at the right of the preview title, or with Hide preview in that prompt's More menu or the More menu below the list. Keep Insert at cursor and More in a fixed row below the list. Delete a folder from the button on its row or from its context menu. Fix a horizontal scrollbar that appeared in the list when hovering over or selecting a prompt.
 - Color each tag automatically from its name with a muted palette that has separate light and dark versions, so a tag keeps the same color everywhere.
 - Increase the editor line height to 1.6 and show the copy shortcut inside the Copy and hide button.
 - Add an empty state to the chat panel with a button that rewrites the editor content. Put Send inside the chat box, show each rewrite in a card with Copy and Apply in its header, and collapse the first prompt to four lines.

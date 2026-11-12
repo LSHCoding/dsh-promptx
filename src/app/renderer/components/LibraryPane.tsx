@@ -444,6 +444,7 @@ function EntryRow({ entry, selected, now }: { entry: EntryMeta; selected: boolea
 }
 
 function Preview(): ReactElement | null {
+  const controller = useController()
   const t = useT()
   const preview = useAppState(state => state.library.preview)
   const locale = useAppState(state => state.locale)
@@ -452,9 +453,25 @@ function Preview(): ReactElement | null {
   return (
     <div className="px-preview">
       <div className="px-preview-head">
-        <div className="px-preview-title" title={entry.title}>
-          {entry.favorite ? <Star label={t('library.favorited')} /> : null}
-          <span>{entry.title}</span>
+        {/* 标题行最右侧的 ×，和「更多」里的「隐藏预览」是同一个操作（V0.1.5 维护者追加，方案 A）。 */}
+        <div className="px-preview-titlebar">
+          <div className="px-preview-title" title={entry.title}>
+            {entry.favorite ? <Star label={t('library.favorited')} /> : null}
+            <span>{entry.title}</span>
+          </div>
+          {/*
+            不加 keepFocus：点击时按钮先拿到焦点，随预览消失后由 hidePreview 把焦点交回编辑区。
+            加了的话，焦点会留在刚才点过、现在已取消选中的列表行上。
+          */}
+          <IconButton
+            icon="close"
+            label={t('library.action.hidePreview')}
+            tipAlign="end"
+            className="px-icon-button-sm px-preview-hide"
+            onClick={() => {
+              controller.library.hidePreview()
+            }}
+          />
         </div>
         <div className="px-preview-meta">
           <span>{relativeTime(entry.updatedAt, Date.now(), locale)}</span>

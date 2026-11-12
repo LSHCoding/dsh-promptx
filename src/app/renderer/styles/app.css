@@ -1071,6 +1071,29 @@ body[data-ds-dark-theme] {
   padding: 8px 12px 4px;
 }
 
+/*
+ * 预览标题行：标题和收起预览的 ×（V0.1.5 维护者追加，方案 A）。标题过长时只截断标题，× 的位置不动。
+ * × 不能放进 .px-preview-title：那里的 overflow: hidden 会把悬停提示和键盘聚焦框裁掉。
+ */
+.px-preview-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.px-preview-titlebar > .px-preview-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * 24 的按钮放进 22 高的标题行，上下各收 1，标题行和预览区头部的高度不变。
+ * 右边再伸出 2，按钮中心离列表栏右边 22，和列表行、底部那一行的「⋯」在同一条竖线上。
+ */
+.px-preview-hide {
+  margin: -1px -2px -1px 0;
+}
+
 .px-preview-title {
   display: flex;
   align-items: center;

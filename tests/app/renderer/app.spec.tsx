@@ -598,6 +598,52 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(document.querySelector('.px-preview-area')).not.toBeNull()
   })
 
+  it('预览标题行最右侧的 × 收起预览，和「更多」里的「隐藏预览」一样（V0.1.5 追加，方案 A）', async () => {
+    const bridge = new FakeBridge()
+    const first = entry('a.md', { title: '第一条', favorite: true })
+    const second = entry('b.md', { title: '第二条' })
+    bridge.handle('library.list', () => ok(listResult([first, second])))
+    bridge.handle('library.read', ({ relPath }) => ok(readResult(relPath === 'a.md' ? first : second, '正文')))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    await act(async () => {
+      fireEvent.click(rows()[0] as HTMLElement)
+      await settle()
+    })
+    const titlebar = document.querySelector<HTMLElement>('.px-preview-titlebar')
+    if (titlebar === null) throw new Error('no preview titlebar')
+    // × 排在标题后面，不在会截断的标题元素里（否则悬停提示和聚焦框被裁掉）；悬停提示和读屏名称都是「隐藏预览」，提示向左展开。
+    const hide = within(titlebar).getByRole('button', { name: '隐藏预览' })
+    expect([...titlebar.children].map(child => child.className)).toEqual(['px-preview-title', 'px-icon-button px-icon-button-sm px-preview-hide'])
+    expect(within(titlebar.children[0] as HTMLElement).getByRole('img', { name: '已收藏' })).toBeTruthy()
+    expect(hide.getAttribute('data-tip')).toBe('隐藏预览')
+    expect(hide.getAttribute('data-tip-align')).toBe('end')
+
+    // 点击时按钮先拿到焦点（浏览器在按下鼠标时就把焦点给按钮）；收起后预览区、底部的操作和选中一起消失，焦点交回编辑区。
+    // 点击不能包在外层 act 里：fireEvent 自带的 act 在返回前就渲染完，× 已经移除，和浏览器里 React 的提交排在
+    // hidePreview 的微任务之前一致；包在外层 act 里要等整个回调结束才渲染，微任务检查时 × 还拿着焦点，顺序就反了。
+    hide.focus()
+    fireEvent.click(hide)
+    await act(async () => {
+      await settle()
+    })
+    expect(document.querySelector('.px-preview-area')).toBeNull()
+    expect(controller.store.getState().library.selected).toBeNull()
+    expect(rows()[0]?.getAttribute('aria-selected')).toBe('false')
+    expect(document.querySelector('.px-list-footer')?.textContent).toBe('2 个 Prompt')
+    expect(document.activeElement?.closest('.cm-editor')).not.toBeNull()
+
+    // 再点一行，重新展开，× 也跟着回来。
+    await act(async () => {
+      fireEvent.click(rows()[1] as HTMLElement)
+      await settle()
+    })
+    expect(document.querySelector('.px-preview-title')?.textContent).toBe('第二条')
+    expect(screen.getByRole('button', { name: '隐藏预览' })).toBeTruthy()
+  })
+
   it('选中一条：预览区这时才展开，显示完整正文；列表栏底部的「插入到光标」插进编辑区', async () => {
     const bridge = new FakeBridge()
     const meta = entry('a.md', { title: '模板' })
@@ -801,6 +847,8 @@ describe('库侧栏（L-02 至 L-11）', () => {
     })
     expect(screen.getByText('原位置：写作/')).toBeTruthy()
     expect(screen.getByRole('button', { name: '恢复' })).toBeTruthy()
+    // 预览标题行的 × 只加在库的预览上，回收站的预览没有「隐藏预览」（V0.1.5 追加二的范围）。
+    expect(screen.queryByRole('button', { name: '隐藏预览' })).toBeNull()
   })
 
   it('标签下拉列出「全部标签」和库里的标签；分段筛选「全部 | 最近 | 收藏」', async () => {

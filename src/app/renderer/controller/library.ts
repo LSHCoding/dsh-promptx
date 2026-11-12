@@ -241,7 +241,7 @@ export class Library {
   }
 
   /**
-   * 「更多」菜单里的「隐藏预览」（V0.1.5 维护者追加）：取消选中，预览区跟着收起，列表占满整列。
+   * 「更多」菜单里的「隐藏预览」和预览标题行的 ×（V0.1.5 维护者追加）：取消选中，预览区跟着收起，列表占满整列。
    * 预览区只在有选中项时出现，所以不另设「选中但不预览」的状态；再点任意一行就重新选中并展开预览。
    * 读取中的预览和插入一并作废。
    */
@@ -250,7 +250,7 @@ export class Library {
     this.cancelInsert()
     this.previewToken++
     this.update(library => ({ ...library, selected: null, preview: null }))
-    // 菜单是从底部那一行的「⋯」打开的话，按钮随预览一起消失，焦点没了着落：和收起侧栏一样交回编辑区（L-02）。
+    // 从底部那一行的「⋯」菜单或预览标题行的 × 收起时，按钮随预览一起消失，焦点没了着落：和收起侧栏一样交回编辑区（L-02）。
     // 等这次点击引起的渲染做完再判断。
     queueMicrotask(() => {
       if (nothingFocused()) this.ctx.editor.focus()
