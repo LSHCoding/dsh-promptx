@@ -3,6 +3,7 @@ import { errorReason, translate, type MessageKey } from '../../../shared/i18n/in
 import { folderOf } from '../../../shared/library-rules.ts'
 import type { SaveConflict } from '../../../shared/types.ts'
 import { applyAppearance } from '../appearance.ts'
+import { Icon } from '../components/icons.tsx'
 import { runTask } from '../controller/context.ts'
 import { formatShortcut, windowShortcut } from '../shortcuts.ts'
 import type { EntryEditorController } from './controller.ts'
@@ -23,7 +24,6 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
   const ready = state.load === 'ready'
   const frozen = snapshot?.freezeId != null
   const busy = state.action !== null || snapshot?.saving === true || frozen
-  const title = snapshot?.binding.title ?? t('entryEditor.mode')
   const currentFolder = folderOf(snapshot?.binding.relPath ?? '')
   const selectedFolder = state.metadata.folder ?? currentFolder
   // 恢复草稿中选过的文件夹可能已经被移走，仍显示该选择，用户可以换到新的目标。
@@ -48,12 +48,15 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
   }, [controller])
 
   const reason = state.error === null ? '' : errorReason(locale, state.error)
+  const relPath = snapshot?.binding.relPath ?? ''
+  const status = !ready ? null : frozen ? 'busy' : busy ? 'saving' : state.dirty ? 'unsaved' : 'saved'
+  // V0.1.5（界面方案第 16 条）：标题只在可编辑的大标题里出现一次，文件夹和标签压成一行，正文区更高。
   return (
     <main className="px-app px-entry-editor" aria-label={t('entryEditor.mode')}>
       <header className="px-entry-header">
-        <div className="px-entry-heading">
+        <div className="px-entry-crumb" title={relPath === '' ? undefined : relPath}>
           <span className="px-entry-mode">{t('entryEditor.mode')}</span>
-          <h1 title={title}>{title}</h1>
+          {relPath === '' ? null : <span className="px-entry-path">{relPath}</span>}
         </div>
         <div className="px-entry-actions">
           <button
@@ -66,46 +69,60 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
           >
             {t('entryEditor.save')}
           </button>
-          <button type="button" className="px-button" disabled={frozen} onClick={() => { runTask(controller.close()) }}>{t('common.close')}</button>
+          <button
+            type="button"
+            className="px-icon-button"
+            aria-label={t('common.close')}
+            title={t('common.close')}
+            disabled={frozen}
+            onClick={() => { runTask(controller.close()) }}
+          >
+            <Icon name="close" />
+          </button>
         </div>
       </header>
-      {snapshot === null ? null : <div className="px-entry-path" title={snapshot.binding.relPath}>{snapshot.binding.relPath}</div>}
       {snapshot === null ? null : (
         <div className="px-entry-metadata">
-          <label className="px-field">
-            <span className="px-field-label">{t('dialog.rename.titleField')}</span>
-            <input
-              className="px-input"
-              type="text"
-              value={state.metadata.title}
-              readOnly={!ready || frozen}
-              onChange={(event) => { controller.updateMetadata('title', event.target.value) }}
-            />
-          </label>
-          <label className="px-field">
-            <span className="px-field-label">{t('dialog.rename.tagsField')}</span>
-            <input
-              className="px-input"
-              type="text"
-              value={state.metadata.tags}
-              readOnly={!ready || frozen}
-              aria-describedby="entry-editor-tags-hint"
-              onChange={(event) => { controller.updateMetadata('tags', event.target.value) }}
-            />
-            <span className="px-field-hint" id="entry-editor-tags-hint">{t('dialog.rename.tagsHint')}</span>
-          </label>
-          <label className="px-field px-entry-folder">
-            <span className="px-field-label">{t('dialog.saveMetadata.folder')}</span>
-            <select
-              className="px-select"
-              value={selectedFolder}
-              disabled={!ready || busy || snapshot.binding.libraryDir !== snapshot.config?.libraryDir}
-              onChange={(event) => { controller.updateMetadata('folder', event.target.value) }}
-            >
-              <option value="">{t('library.uncategorized')}</option>
-              {folders.map(folder => <option key={folder} value={folder}>{folder}</option>)}
-            </select>
-          </label>
+          <input
+            className="px-entry-title"
+            type="text"
+            aria-label={t('dialog.rename.titleField')}
+            placeholder={t('dialog.rename.titleField')}
+            value={state.metadata.title}
+            readOnly={!ready || frozen}
+            spellCheck={false}
+            onChange={(event) => { controller.updateMetadata('title', event.target.value) }}
+          />
+          <div className="px-entry-fields">
+            <label className="px-pill" title={t('dialog.saveMetadata.folder')}>
+              <Icon name="folder" />
+              <select
+                aria-label={t('dialog.saveMetadata.folder')}
+                value={selectedFolder}
+                disabled={!ready || busy || snapshot.binding.libraryDir !== snapshot.config?.libraryDir}
+                onChange={(event) => { controller.updateMetadata('folder', event.target.value) }}
+              >
+                <option value="">{t('library.uncategorized')}</option>
+                {folders.map(folder => <option key={folder} value={folder}>{folder}</option>)}
+              </select>
+              <Icon name="chevron" size={14} className="px-pill-chevron" />
+            </label>
+            <label className="px-pill px-pill-grow" title={t('dialog.rename.tagsHint')}>
+              <Icon name="tag" />
+              <input
+                type="text"
+                aria-label={t('dialog.rename.tagsField')}
+                aria-describedby="entry-editor-tags-hint"
+                placeholder={t('entryEditor.tagsPlaceholder')}
+                value={state.metadata.tags}
+                readOnly={!ready || frozen}
+                spellCheck={false}
+                onChange={(event) => { controller.updateMetadata('tags', event.target.value) }}
+              />
+            </label>
+            {/* 有标签时占位文字看不到，规则仍要让读屏软件读到。 */}
+            <span className="px-visually-hidden" id="entry-editor-tags-hint">{t('dialog.rename.tagsHint')}</span>
+          </div>
         </div>
       )}
       <div className="px-editor-area">
@@ -132,9 +149,13 @@ export function EntryEditorApp({ controller }: { controller: EntryEditorControll
         ? <div className="px-entry-notice" role="alert">{translate(locale, 'entryEditor.actionFailed', { reason })}</div>
         : null}
       <footer className="px-entry-status" aria-live="polite">
-        {ready
-          ? <span>{t(frozen ? 'entryEditor.busy' : busy ? 'entryEditor.saving' : state.dirty ? 'entryEditor.unsaved' : 'entryEditor.saved')}</span>
-          : null}
+        {status === null
+          ? null
+          : (
+            <span className="px-entry-state" data-state={status}>
+              {t(status === 'busy' ? 'entryEditor.busy' : status === 'saving' ? 'entryEditor.saving' : status === 'unsaved' ? 'entryEditor.unsaved' : 'entryEditor.saved')}
+            </span>
+          )}
         {snapshot?.recovered === true ? <span>{t('entryEditor.recovered')}</span> : null}
         <span className="px-entry-scope">{t('entryEditor.scope')}</span>
       </footer>

@@ -21,6 +21,10 @@ export type IconName =
   | 'trash'
   | 'all'
   | 'inbox'
+  | 'search'
+  | 'send'
+  | 'chevron'
+  | 'tag'
 
 const PATHS: Readonly<Record<IconName, ReactElement>> = {
   library: (
@@ -108,12 +112,42 @@ const PATHS: Readonly<Record<IconName, ReactElement>> = {
       <path d="M2.5 9.5h3l1 1.5h3l1-1.5h3" />
     </>
   ),
+  search: (
+    <>
+      <circle cx="7" cy="7" r="4.25" />
+      <path d="m10.2 10.2 3.3 3.3" />
+    </>
+  ),
+  send: <path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" />,
+  chevron: <path d="m5 6.5 3 3 3-3" />,
+  tag: (
+    <>
+      <path d="M2.5 3.3v3.9a1 1 0 0 0 .3.7l5.3 5.3a1 1 0 0 0 1.4 0l3.4-3.4a1 1 0 0 0 0-1.4L7.6 3.1a1 1 0 0 0-.7-.3H3a.5.5 0 0 0-.5.5Z" />
+      <circle cx="5.4" cy="5.7" r="0.8" />
+    </>
+  ),
 }
 
-export function Icon({ name }: { name: IconName }): ReactElement {
+export interface IconProps {
+  name: IconName
+  size?: number
+  /** 圆形发送按钮里的箭头用粗一点的线。 */
+  strokeWidth?: number
+  className?: string
+}
+
+/** 线条图标，默认 16 × 16。 */
+export function Icon({ name, size = 16, strokeWidth = 1.3, className }: IconProps): ReactElement {
   return (
-    <svg className="px-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
-      <g fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      className={className === undefined ? 'px-icon' : `px-icon ${className}`}
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <g fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
         {PATHS[name]}
       </g>
     </svg>

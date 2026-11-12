@@ -1,7 +1,8 @@
 /*
- * PromptX 小窗的样式（需求 5.3 至 5.10、S-03，技术方案 4.7）。
+ * PromptX 小窗的样式（需求 5.3 至 5.10、S-03，技术方案 4.7；V0.1.5 界面方案）。
  * 颜色、字体、圆角、阴影只引用 dsh-theme.css 里的 dsh 变量，深色由 body[data-ds-dark-theme] 切换，观感和 dsh 一致。
- * 尺寸按需求 5.7：工具栏约 40、底栏 36、编辑区内边距 20、等宽字体约 14、行高 1.3。类名前缀 px-。
+ * 尺寸：各栏头部和底部都是 40（V0.1.5，分隔线连成一条）、编辑区内边距 20、等宽字体约 14、行高 1.6（V0.1.5 改自需求 5.7 的 1.3）。
+ * 类名前缀 px-。
  */
 
 html,
@@ -66,6 +67,16 @@ kbd {
   outline-offset: 1px;
 }
 
+/* 只给读屏软件的文字。 */
+.px-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* ───────────────────────── 窗口 ───────────────────────── */
 
 .px-app {
@@ -117,26 +128,63 @@ kbd {
   }
 }
 
-/* ───────────────────────── 工具栏 ───────────────────────── */
+/* ───────────────────────── 各栏的头部和底部 ───────────────────────── */
 
-.px-toolbar {
+/*
+ * V0.1.5：文件夹栏、列表栏、编辑区、聊天栏的头部和底部都是 40 高，分隔线画在同一条水平线上（界面方案第 1、2 条）。
+ * 高度包含分隔线（全局 box-sizing: border-box）。
+ */
+.px-pane-head,
+.px-pane-foot {
+  position: relative;
   display: flex;
   flex: none;
   align-items: center;
   gap: 2px;
   height: 40px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-base);
   user-select: none;
-  /* 小窗没有系统标题栏：拖动工具栏的空白处移动小窗，按钮区域不参与拖动（技术方案 5.4）。 */
+}
+
+.px-pane-head {
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.px-pane-foot {
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* 底部一行的按钮离窗口下沿太近，悬停提示改为向上弹出，免得被截掉。 */
+.px-pane-foot .px-icon-button[data-tip]::after {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/*
+ * 小窗没有系统标题栏：拖动各栏头部的空白处移动小窗（技术方案 5.4；V0.1.5 从工具栏扩大到文件夹栏头、列表栏头和聊天栏头）。
+ * 按钮、输入框和下拉框不参与拖动，否则点不动。
+ */
+.px-drag-region {
   -webkit-app-region: drag;
 }
 
-.px-toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+.px-drag-region :is(button, input, select, textarea, label) {
+  -webkit-app-region: no-drag;
+}
+
+.px-toolbar-sep {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 6px;
+  background: var(--dsw-alias-border-l3);
+}
+
+/* ───────────────────────── 工具栏 ───────────────────────── */
+
+.px-toolbar {
+  padding: 0 8px;
+  background: var(--dsw-alias-bg-base);
+  -webkit-app-region: drag;
 }
 
 .px-toolbar button {
@@ -179,6 +227,12 @@ kbd {
   cursor: default;
 }
 
+.px-icon-button-sm,
+.px-row-actions .px-icon-button {
+  width: 24px;
+  height: 24px;
+}
+
 /* 工具栏按钮的悬停提示：名称和当前快捷键（S-02）。停留片刻才出现，扫过时不闪。 */
 .px-icon-button[data-tip]::after {
   content: attr(data-tip);
@@ -217,6 +271,7 @@ kbd {
   flex: none;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   height: 28px;
   padding: 0 12px;
   border: 1px solid var(--dsw-alias-border-l3);
@@ -258,6 +313,24 @@ kbd {
   opacity: 0.9;
 }
 
+.px-button-sm {
+  height: 24px;
+  padding: 0 8px;
+  font: var(--dsw-font-xxs-12);
+}
+
+/* 按钮里的快捷键键帽（「复制并隐藏」「优化编辑区内容」）：颜色跟着按钮文字走，深浅主题和主按钮都适用。 */
+.px-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--dsw-radius-xs);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  font: 11px/1 var(--dsw-font-family);
+  letter-spacing: 0.5px;
+}
+
 .px-text-button {
   flex: none;
   padding: 2px 4px;
@@ -269,9 +342,14 @@ kbd {
   cursor: pointer;
 }
 
-.px-text-button:hover {
+.px-text-button:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+.px-text-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .px-input,
@@ -422,9 +500,10 @@ textarea.px-input {
   outline: none;
 }
 
+/* 行高 1.6（V0.1.5 界面方案第 10 条，改自需求 5.7 的 1.3）：中文段落和中英混排在 1.3 下行距偏紧。 */
 .px-editor .cm-scroller {
   font-family: inherit;
-  line-height: 1.3;
+  line-height: 1.6;
 }
 
 .px-editor .cm-content {
@@ -486,7 +565,7 @@ textarea.px-input {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 36px;
+  height: 40px;
   padding: 0 8px 0 12px;
   border-top: 1px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-secondary);
@@ -572,12 +651,8 @@ textarea.px-input {
 }
 
 .px-copy-button {
-  height: 26px;
-}
-
-.px-shortcut-hint {
-  color: var(--dsw-alias-label-tertiary);
-  font: var(--dsw-font-xxs-12);
+  gap: 8px;
+  padding: 0 6px 0 12px;
 }
 
 /* ───────────────────────── 库侧栏 ───────────────────────── */
@@ -605,13 +680,14 @@ textarea.px-input {
   overflow-y: auto;
 }
 
+.px-folders-list {
+  padding-top: 6px;
+}
+
 .px-folders-heading {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-top: 4px;
-  padding-right: 6px;
-  padding-bottom: 2px;
+  padding: 0 6px 0 16px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
 }
 
 .px-folders-heading > span {
@@ -619,9 +695,12 @@ textarea.px-input {
 }
 
 .px-folders-footer {
-  flex: none;
-  padding: 6px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding: 0 6px;
+}
+
+.px-folder-row {
+  position: relative;
+  width: 100%;
 }
 
 .px-folder {
@@ -632,7 +711,7 @@ textarea.px-input {
   height: 28px;
   padding-right: 8px;
   border: none;
-  border-radius: var(--dsw-radius-xs);
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   font: var(--dsw-font-xs-13);
@@ -656,6 +735,31 @@ textarea.px-input {
   white-space: nowrap;
 }
 
+/*
+ * 文件夹行上的删除按钮（V0.1.5 界面方案第 8 条）：悬停或键盘聚焦到这一行时出现。用透明度隐藏而不是 display: none，
+ * Tab 仍然能走到它；隐藏时不接收点击，免得点到看不见的按钮。
+ */
+.px-folder-action.px-icon-button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.px-folder-row:hover .px-folder-action,
+.px-folder-row:focus-within .px-folder-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.px-folder-row:hover .px-folder,
+.px-folder-row:focus-within .px-folder {
+  padding-right: 30px;
+}
+
 .px-list-column {
   display: flex;
   flex: 0 1 auto;
@@ -666,12 +770,44 @@ textarea.px-input {
 }
 
 .px-search {
-  flex: none;
-  padding: 8px 8px 4px;
+  padding: 0 8px;
 }
 
-.px-search .px-input {
+.px-search-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+
+.px-search-field > .px-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  pointer-events: none;
+}
+
+/* 平时是填充底色、没有描边，聚焦时出现描边（界面方案第 9 条）。 */
+.px-search-field input {
   width: 100%;
+  height: 28px;
+  padding: 0 8px 0 28px;
+  border: 1px solid transparent;
+  border-radius: var(--dsw-radius-sm);
+  outline: none;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+}
+
+.px-search-field input::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.px-search-field input:focus {
+  border-color: var(--dsw-alias-button-info-fill);
+  background: var(--dsw-specific-input-major);
 }
 
 .px-filters {
@@ -679,7 +815,7 @@ textarea.px-input {
   flex: none;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 8px;
+  padding: 8px 8px 6px;
 }
 
 .px-segmented {
@@ -713,18 +849,29 @@ textarea.px-input {
   min-width: 0;
 }
 
+/*
+ * 行内按钮的悬停提示即使隐藏也算进滚动范围，向右展开时撑出一条横向滚动条，内容还能左右滑动（V0.1.5 界面方案第 19 条）。
+ * 行内按钮的提示一律向左展开，列表区横向不滚动。
+ */
 .px-list-area {
   flex: 1;
   min-height: 96px;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
+.px-list {
+  padding: 0 6px 6px;
+}
+
+/* 列表行左右内缩、圆角，和文件夹行一样（界面方案第 7 条）。 */
 .px-row {
   display: flex;
   align-items: center;
   gap: 4px;
   height: 48px;
-  padding: 0 6px 0 12px;
+  padding: 0 4px 0 10px;
+  border-radius: var(--dsw-radius-sm);
   outline-offset: -2px;
   cursor: pointer;
 }
@@ -782,11 +929,6 @@ textarea.px-input {
   display: flex;
 }
 
-.px-row-actions .px-icon-button {
-  width: 24px;
-  height: 24px;
-}
-
 .px-unavailable {
   display: flex;
   flex-direction: column;
@@ -800,9 +942,11 @@ textarea.px-input {
 }
 
 /*
+ * 预览区只在选中条目后出现（V0.1.5 界面方案第 6 条）。
  * 预览区的高度（行内 style 的 height，默认 232，可拖动）只作为弹性基准，列表栏放不下时预览区先缩，最矮 128（需求 5.7）。
- * 不能用 flex: none：窗口矮于约 450 时，列表的最小 96 加上固定的预览高度超出列表栏，「插入到光标」和预览的 ⋯ 菜单被截掉
- * （审查 CR-07）。列表区是 flex: 1（基准 0）且最少 96，不参与收缩，所以缺的高度全部由预览区让出。
+ * 不能用 flex: none：窗口矮于约 450 时，列表的最小 96 加上固定的预览高度超出列表栏，底部那一行的「插入到光标」和 ⋯
+ * 被挤出窗口（审查 CR-07，V0.1.5 起这两个按钮在列表栏底部）。列表区是 flex: 1（基准 0）且最少 96，不参与收缩，
+ * 所以缺的高度全部由预览区让出。
  */
 .px-preview-area {
   display: flex;
@@ -851,7 +995,7 @@ textarea.px-input {
 .px-preview-body {
   flex: 1;
   min-height: 0;
-  padding: 4px 12px;
+  padding: 4px 12px 10px;
   overflow: auto;
 }
 
@@ -860,7 +1004,7 @@ textarea.px-input {
   color: var(--dsw-alias-label-secondary);
   font-family: var(--dsh-font-family-code-default);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
@@ -872,13 +1016,20 @@ textarea.px-input {
   font: var(--dsw-font-xxs-12);
 }
 
-.px-preview-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
+/* 列表栏底部：条目数和选中条目的操作，位置不随预览高度移动。 */
+.px-list-footer {
   gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding: 0 8px 0 16px;
+}
+
+.px-list-count {
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ───────────────────────── 菜单 ───────────────────────── */
@@ -942,13 +1093,12 @@ textarea.px-input {
 }
 
 .px-session-head {
-  display: flex;
-  flex: none;
-  align-items: center;
   gap: 8px;
-  height: 36px;
-  padding: 0 8px 0 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  padding: 0 8px 0 14px;
+}
+
+.px-session-head .px-toolbar-sep {
+  margin: 0 2px;
 }
 
 .px-session-title {
@@ -972,55 +1122,191 @@ textarea.px-input {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   min-height: 0;
-  padding: 12px;
+  padding: 16px 14px;
   overflow-y: auto;
+}
+
+/* 还没有会话（V0.1.5 界面方案第 12 条）。 */
+.px-session-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 290px;
+  margin: auto;
+  text-align: center;
+}
+
+.px-session-empty p {
+  margin: 0;
+}
+
+.px-session-empty-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.px-session-empty-title {
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-s-strong-14);
+}
+
+.px-session-empty-text {
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.px-session-empty-action {
+  margin: 8px 0 4px;
+  padding-right: 6px;
 }
 
 .px-round {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
 }
 
-.px-bubble {
-  padding: 8px 10px;
+/* 用户这一侧靠右，不再标「你」（读屏文字仍有）。 */
+.px-user-msg {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 8px 12px;
   border-radius: var(--dsw-radius-md);
+  background: var(--dsw-specific-bubble);
+  color: var(--dsw-alias-label-primary);
   font: var(--dsw-font-xs-13);
 }
 
-.px-bubble-user {
-  align-self: flex-end;
-  max-width: 90%;
-  background: var(--dsw-specific-bubble);
-}
-
-.px-bubble-reply {
-  border: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-base);
-}
-
-.px-bubble-label {
-  margin-bottom: 4px;
-  color: var(--dsw-alias-label-tertiary);
-  font: var(--dsw-font-xxs-12);
-}
-
-.px-bubble-text {
-  color: var(--dsw-alias-label-primary);
-  font-family: var(--dsh-font-family-code-default);
-  font-size: 12px;
-  line-height: 1.5;
+.px-user-msg-text {
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
 }
 
-/* 第一轮的输入是草稿全文，可能很长：限制高度，在气泡里滚动。 */
-.px-bubble-text-user {
-  max-height: 160px;
-  overflow-y: auto;
+.px-user-msg-label {
+  margin-bottom: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* 第一轮的整段 Prompt 默认最多四行，展开后显示全文（界面方案第 15 条）。 */
+.px-user-msg-draft {
+  display: -webkit-box;
+  overflow: hidden;
+  font-family: var(--dsh-font-family-code-default);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.px-user-msg[data-expanded] .px-user-msg-draft {
+  display: block;
+}
+
+.px-link-button {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+  cursor: pointer;
+}
+
+.px-link-button:hover {
+  color: var(--dsw-alias-label-primary);
+  text-decoration: underline;
+}
+
+.px-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.px-reply-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+}
+
+/* 说明文字用正文字体，改写稿才用等宽字体（界面方案第 14 条）。 */
+.px-reply-text {
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.px-candidate {
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-base);
+}
+
+/* 「应用」「复制」放在卡片头部，长改写稿也不用滚到底才能点。 */
+.px-candidate-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm) var(--dsw-radius-sm) 0 0;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.px-candidate-label {
+  flex: none;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xxs-strong-12);
+}
+
+.px-candidate-meta {
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.px-candidate-head .px-spinner {
+  margin-right: 4px;
+}
+
+.px-candidate-body {
+  max-height: 240px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  overflow: auto;
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsh-font-family-code-default);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 .px-round-status {
@@ -1028,7 +1314,6 @@ textarea.px-input {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-top: 6px;
   color: var(--dsw-alias-label-tertiary);
   font: var(--dsw-font-xxs-12);
 }
@@ -1041,23 +1326,84 @@ textarea.px-input {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
 }
 
-.px-followup {
-  display: flex;
+/* 一体式输入框：发送按钮在框内右下角，左下角是按键提示（界面方案第 13 条）。 */
+.px-composer-wrap {
   flex: none;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  padding: 0 12px 12px;
 }
 
-.px-followup-input {
+.px-composer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-specific-input-major);
+  cursor: text;
+}
+
+.px-composer:focus-within {
+  border-color: var(--dsw-alias-button-info-fill);
+}
+
+.px-composer textarea {
+  min-height: 44px;
+  max-height: 160px;
+  padding: 10px 12px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  line-height: 1.6;
+  resize: none;
+}
+
+.px-composer textarea::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.px-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 6px 12px;
+}
+
+.px-composer-hint {
   flex: 1;
   min-width: 0;
-  min-height: 56px;
-  max-height: 160px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.px-send {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-inverted);
+  cursor: pointer;
+}
+
+.px-send:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.px-send:disabled {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
 }
 
 /* ───────────────────────── 对话框 ───────────────────────── */
@@ -1107,22 +1453,29 @@ textarea.px-input {
   color: var(--dsw-alias-state-error-primary);
 }
 
+/*
+ * 整张表单共用一列标签宽度，输入框左边缘对齐（V0.1.5 界面方案第 17 条）。每个字段是 subgrid，
+ * label 元素仍包着输入框，点标签照样聚焦输入框。Electron 44（Chromium 142）支持 subgrid。
+ */
 .px-dialog-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
 }
 
 .px-field {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 4px 8px;
+  row-gap: 4px;
   font: var(--dsw-font-xs-13);
 }
 
 .px-field-label {
   color: var(--dsw-alias-label-secondary);
+  text-align: right;
 }
 
 .px-field-hint {

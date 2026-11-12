@@ -1,70 +1,160 @@
-/* 独立库条目编辑窗口；沿用主编辑器和 dsh 主题变量。 */
+/*
+ * 独立库条目编辑窗口；沿用主编辑器和 dsh 主题变量。
+ * V0.1.5（界面方案第 16 条）：头部一行放模式、相对路径和按钮；标题是可编辑的大标题，文件夹和标签压成一行，正文区更高。
+ */
 .px-entry-header {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 16px;
-  padding: 12px 16px;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 16px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
+  user-select: none;
   -webkit-app-region: drag;
 }
 
-.px-entry-heading {
+.px-entry-crumb {
+  display: flex;
   flex: 1;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font: var(--dsw-font-xxs-12);
+  white-space: nowrap;
 }
 
 .px-entry-mode {
+  flex: none;
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font: var(--dsw-font-xxs-strong-12);
 }
 
-.px-entry-heading h1 {
+.px-entry-path {
+  min-width: 0;
   overflow: hidden;
-  margin: 4px 0 0;
-  font-size: 15px;
-  font-weight: 600;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.px-entry-path::before {
+  content: '·';
+  margin-right: 6px;
 }
 
 .px-entry-actions {
   display: flex;
   flex: none;
-  gap: 8px;
+  align-items: center;
+  gap: 4px;
   -webkit-app-region: no-drag;
 }
 
-.px-entry-path {
-  flex: none;
-  overflow: hidden;
-  padding: 8px 16px;
-  color: var(--dsw-alias-label-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .px-entry-metadata {
-  display: grid;
   flex: none;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 12px;
-  padding: 0 16px 12px;
+  padding: 10px 16px 12px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
 }
 
-.px-entry-metadata .px-field {
-  grid-template-columns: auto minmax(0, 1fr);
+/* 平时看起来是标题文字，悬停出现底色，聚焦时是输入框。 */
+.px-entry-title {
+  display: block;
+  width: calc(100% + 7px);
+  margin: 0 0 6px -7px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--dsw-radius-sm);
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: 600 18px/28px var(--dsw-font-family);
 }
 
-.px-entry-metadata .px-input,
-.px-entry-metadata .px-select {
+.px-entry-title::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.px-entry-title:hover:not(:read-only) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.px-entry-title:focus {
+  border-color: var(--dsw-alias-button-info-fill);
+  background: var(--dsw-specific-input-major);
+}
+
+.px-entry-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.px-pill {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 50%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.px-pill:focus-within {
+  border-color: var(--dsw-alias-button-info-fill);
+}
+
+.px-pill-grow {
+  flex: 1;
+  max-width: none;
   min-width: 0;
 }
 
-.px-entry-folder {
-  grid-column: 1 / -1;
+.px-pill select {
+  min-width: 0;
+  padding: 0 18px 0 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  text-overflow: ellipsis;
+  appearance: none;
+  cursor: pointer;
+}
+
+.px-pill select:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+.px-pill-chevron {
+  position: absolute;
+  right: 6px;
+  pointer-events: none;
+}
+
+.px-pill input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+}
+
+.px-pill input::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.px-entry-editor .px-editor .cm-content {
+  padding: 16px 0;
 }
 
 .px-entry-notice {
@@ -82,13 +172,39 @@
   display: flex;
   flex: none;
   flex-wrap: wrap;
-  gap: 8px 16px;
+  align-items: center;
+  gap: 4px 16px;
+  min-height: 40px;
   padding: 10px 16px;
   border-top: 1px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font: var(--dsw-font-xxs-12);
+}
+
+/* 状态前的圆点：已保存是成功色，有未保存的修改是警示色，保存中和处理中是灰色。 */
+.px-entry-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.px-entry-state::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+}
+
+.px-entry-state[data-state='saved']::before {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.px-entry-state[data-state='unsaved']::before {
+  background: var(--dsw-alias-state-warn-primary);
 }
 
 .px-entry-scope {
   margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
 }

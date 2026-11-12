@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin with a small companion window. Press a global shortcut in any app and a prompt editor floats above it. Write a prompt, reuse one from your Markdown prompt library, or let the model configured in dsh rewrite it. Press ⌘↩ to copy the whole prompt; the window hides and focus returns to the app you were using, ready to paste.
 
-> Version v0.1.4. macOS is the supported platform. Windows and Linux are previews pending CI and manual verification.
+> Version v0.1.5. macOS is the supported platform. Windows and Linux are previews pending CI and manual verification.
 
 ## What it does
 
@@ -43,11 +43,11 @@ Restart dsh after installing or updating the plugin. On the first start, open th
 
 Clear, Chat, and Settings start without a shortcut. Leave any toolbar shortcut field blank to disable that binding.
 
-On first launch, the folder and prompt columns are visible on the left. Toggling the library adjusts the window width to preserve the editor width within display and window size limits.
+On first launch, the folder and prompt columns are visible on the left. Select a prompt to preview it below the list. Toggling the library adjusts the window width to preserve the editor width within display and window size limits.
 
-The toolbar sits above the editor. **Chat** shows or hides the panel on the right, which starts closed. Enter a prompt in the chat box and select **Send** to start a rewrite, then use the same box for follow-up requests. The toolbar's rewrite button uses the main editor draft. Select **Apply** on a result to update that draft. Clearing the conversation leaves the panel open. PromptX restores the editor width on restart within the available screen space.
+The toolbar sits above the editor, with the library toggle on the left and **Chat** on the right. **Chat** shows or hides the panel on the right, which starts closed. The button that hides the window stays in the window's top-right corner, in the chat header while the panel is open. In an empty chat panel, select **Optimize editor content**, or enter a prompt in the chat box and select **Send** to start a rewrite, then use the same box for follow-up requests. The toolbar's rewrite button and **Optimize editor content** use the main editor draft. Each rewrite appears in its own card. Select **Apply** on the card to update that draft. Clearing the conversation leaves the panel open. PromptX restores the editor width on restart within the available screen space.
 
-Double-click a library entry to insert its body at the editor's cursor, replacing any selected text. **Save** and the Save shortcut in the main window start a new library entry. The default dsh model suggests a title and tags. Review or edit them, choose a folder (default **Uncategorized**), and select **Confirm**. If the model can't suggest a unique title, you can enter the title and tags yourself. Use the folder column to create folders or move a selected folder and its contents to the library trash. Restore deleted folders from the trash.
+Double-click a library entry to insert its body at the editor's cursor, replacing any selected text. **Save** and the Save shortcut in the main window start a new library entry. The default dsh model suggests a title and tags. Review or edit them, choose a folder (default **Uncategorized**), and select **Save**. If the model can't suggest a unique title, you can enter the title and tags yourself. Use the folder column to create folders. Hover over a folder and select its delete button, or right-click it, to move the folder and its contents to the library trash. Restore deleted folders from the trash.
 
 Use **Open in editor** on a library entry to edit its body, title, tags, and folder in a separate window above PromptX. Separate tags with commas to keep phrases like `Code Review` together. **Save changes** and ⌘S / Ctrl+S update the selected entry and move it if you chose a different folder. Closing or switching away from unsaved edits asks whether to save, discard, or cancel. Unfinished entry edits have their own recovery draft.
 

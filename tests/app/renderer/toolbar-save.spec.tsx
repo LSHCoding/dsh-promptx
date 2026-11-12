@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { BridgeResult } from '../../../src/shared/bridge.ts'
 import type { SaveResult } from '../../../src/shared/types.ts'
 import type { AppController } from '../../../src/app/renderer/controller/app.ts'
@@ -49,8 +49,11 @@ describe('主窗口确认标题和标签后新建', () => {
     expect(bridge.callsTo('library.save')).toEqual([])
     const title = screen.getByRole('textbox', { name: '标题' }) as HTMLInputElement
     const tags = screen.getByRole('textbox', { name: /标签/ }) as HTMLInputElement
-    const folder = screen.getByRole('combobox', { name: '保存到文件夹' }) as HTMLSelectElement
-    const confirm = screen.getByRole('button', { name: '确认' })
+    const dialog = within(screen.getByRole('dialog', { name: '保存 Prompt' }))
+    const folder = dialog.getByRole('combobox', { name: '文件夹' }) as HTMLSelectElement
+    const confirm = dialog.getByRole('button', { name: '保存' })
+    // 模型生成的标题和标签第一次出现时注明来源（V0.1.5）。
+    expect(dialog.getByText('标题和标签由模型生成，可以修改。')).toBeTruthy()
     expect(title.value).toBe('建议标题')
     expect(tags.value).toBe('Writing Guide, 示例')
     expect(folder.selectedOptions[0]?.textContent).toBe('未分类')
@@ -93,7 +96,7 @@ describe('主窗口确认标题和标签后新建', () => {
     expect(saveAsNew.disabled).toBe(true)
     fireEvent.click(saveAsNew)
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '确认' }))
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '保存' }))
       await settle()
     })
     expect(bridge.callsTo('library.save')).toHaveLength(1)
@@ -115,7 +118,10 @@ describe('主窗口确认标题和标签后新建', () => {
       await settle()
     })
     const title = screen.getByRole('textbox', { name: '标题' })
-    const confirm = screen.getByRole('button', { name: '确认' }) as HTMLButtonElement
+    const dialog = within(screen.getByRole('dialog'))
+    const confirm = dialog.getByRole('button', { name: '保存' }) as HTMLButtonElement
+    expect(dialog.getByText('未能生成标题和标签，可以手动填写后保存。')).toBeTruthy()
+    expect(dialog.queryByText('标题和标签由模型生成，可以修改。')).toBeNull()
     expect(document.activeElement).toBe(title)
     expect(confirm.disabled).toBe(true)
     fireEvent.change(title, { target: { value: '   ' } })

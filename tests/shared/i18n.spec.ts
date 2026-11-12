@@ -87,7 +87,6 @@ describe('两份字典', () => {
     expect(zh['library.empty']).toBe('还没有保存的 Prompt')
     expect(zh['library.noMatch']).toBe('没有匹配的 Prompt')
     expect(zh['library.searchPlaceholder']).toBe('搜索 Prompt')
-    expect(zh['library.selectHint']).toBe('选择一个 Prompt 查看内容')
     expect(zh['library.untitled']).toBe('未命名 Prompt')
     expect(zh['dialog.unsaved.title']).toBe('当前编辑器有未保存的内容')
     expect(translate('zh', 'dialog.unsaved.message', { title: '代码审查清单' })).toBe('载入「代码审查清单」会替换当前编辑器内容，要先怎么处理？')

@@ -72,8 +72,9 @@ export function StatusBar(props: StatusBarProps): ReactElement {
           onClick={props.onCopy}
         >
           {t('status.copyAndHide')}
+          {/* 快捷键放在按钮里的键帽上（V0.1.5）。键帽只是提示，按钮的可访问名称仍是「复制并隐藏」。 */}
+          {props.copyShortcut === '' ? null : <kbd className="px-kbd" aria-hidden="true">{props.copyShortcut}</kbd>}
         </button>
-        {props.copyShortcut === '' ? null : <kbd className="px-shortcut-hint">{props.copyShortcut}</kbd>}
       </div>
     </footer>
   )

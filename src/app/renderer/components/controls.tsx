@@ -1,4 +1,4 @@
-// 小窗里复用的小控件：图标按钮（带悬停提示）、「更多」菜单、可拖动的分隔线。
+// 小窗里复用的小控件：图标按钮（带悬停提示）、「更多」菜单和右键菜单、可拖动的分隔线。
 
 import { useRef, type MouseEvent, type PointerEvent, type ReactElement } from 'react'
 import { runTask } from '../controller/context.ts'
@@ -8,7 +8,10 @@ import { useAppState, useController, useT } from './hooks.ts'
 
 export interface IconButtonProps {
   icon: IconName
+  /** 可访问名称；没有 tip 时也是悬停提示的文字。 */
   label: string
+  /** 悬停提示的文字与可访问名称不同时传入，例如名称带上文件夹名，提示只写动作。 */
+  tip?: string
   /** 当前生效的快捷键（已按平台格式化）；空串时悬停提示里不显示。 */
   shortcut?: string
   pressed?: boolean
@@ -23,9 +26,10 @@ export interface IconButtonProps {
 
 export function IconButton(props: IconButtonProps): ReactElement {
   const t = useT()
+  const text = props.tip ?? props.label
   const tip = props.shortcut === undefined || props.shortcut === ''
-    ? props.label
-    : t('common.withShortcut', { label: props.label, shortcut: props.shortcut })
+    ? text
+    : t('common.withShortcut', { label: text, shortcut: props.shortcut })
   return (
     <button
       type="button"
@@ -53,8 +57,23 @@ export interface MenuItem {
   onSelect: () => void
 }
 
+/**
+ * 右键菜单：由 openMenu 以指针位置为锚点打开，这里只负责在菜单属于自己时显示。
+ * 和 MenuButton 共用 store 里的菜单状态，同一时间只开一个菜单，Esc 和点击别处都能关掉。
+ */
+export function ContextMenu({ menuId, items }: { menuId: string; items: MenuItem[] }): ReactElement | null {
+  const menu = useAppState(state => (state.menu?.id === menuId ? state.menu : null))
+  return menu === null ? null : <MenuPopup anchor={menu.anchor} items={items} />
+}
+
 /** 「更多」按钮和它的菜单。菜单状态放在 store 里，Esc 和点击别处都能先把它关掉（技术方案 5.5）。 */
-export function MenuButton({ menuId, label, items, icon = 'more' }: { menuId: string; label: string; items: MenuItem[]; icon?: IconName }): ReactElement {
+export function MenuButton({ menuId, label, items, icon = 'more', className }: {
+  menuId: string
+  label: string
+  items: MenuItem[]
+  icon?: IconName
+  className?: string
+}): ReactElement {
   const controller = useController()
   const menu = useAppState(state => (state.menu?.id === menuId ? state.menu : null))
   const open = menu !== null
@@ -65,6 +84,7 @@ export function MenuButton({ menuId, label, items, icon = 'more' }: { menuId: st
         label={label}
         pressed={open}
         tipAlign="end"
+        {...(className === undefined ? {} : { className })}
         onClick={(event) => {
           event.stopPropagation()
           if (open) {
@@ -85,9 +105,11 @@ function MenuPopup({ anchor, items }: { anchor: MenuState['anchor']; items: Menu
   const viewportWidth = document.documentElement.clientWidth || window.innerWidth
   const viewportHeight = document.documentElement.clientHeight || window.innerHeight
   // 菜单右边沿对齐按钮右边沿；按钮在窗口下半部分时向上弹出，免得被窗口底边截掉。
+  // 右键菜单的锚点是指针所在的一个点：从指针处向右展开，文件夹栏贴着窗口左边，向左展开会超出窗口。
+  const atPoint = anchor.left === anchor.right
   const placeAbove = anchor.bottom > viewportHeight * 0.6
   const style = {
-    right: Math.max(4, viewportWidth - anchor.right),
+    ...(atPoint ? { left: Math.max(4, anchor.left) } : { right: Math.max(4, viewportWidth - anchor.right) }),
     ...(placeAbove ? { bottom: Math.max(4, viewportHeight - anchor.top + 4) } : { top: anchor.bottom + 4 }),
   }
   return (

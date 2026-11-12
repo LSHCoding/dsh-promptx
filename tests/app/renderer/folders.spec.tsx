@@ -43,8 +43,8 @@ describe('文件夹栏', () => {
     controller = app
     await app.library.open()
     render(<ControllerContext.Provider value={app}><LibraryPane /><DialogHost /></ControllerContext.Provider>)
-    const deleteFolder = screen.getByRole('button', { name: '删除所选文件夹' }) as HTMLButtonElement
-    expect(deleteFolder.disabled).toBe(true)
+    // 「全部」「未分类」和回收站没有删除按钮；栏头只有「新建文件夹」（V0.1.5）。
+    expect(screen.queryAllByRole('button', { name: /^删除文件夹/ })).toEqual([])
     fireEvent.click(screen.getByRole('button', { name: '新建文件夹' }))
     const createDialog = within(screen.getByRole('dialog'))
     fireEvent.change(createDialog.getByRole('textbox', { name: '文件夹名称' }), { target: { value: '写作' } })
@@ -53,7 +53,9 @@ describe('文件夹栏', () => {
       await settle()
     })
     expect(screen.getByRole('button', { name: '写作' }).getAttribute('aria-current')).toBe('true')
-    expect(deleteFolder.disabled).toBe(false)
+    // 删除按钮在文件夹行上，名称带着文件夹，提示只写动作。
+    const deleteFolder = screen.getByRole('button', { name: '删除文件夹「写作」' })
+    expect(deleteFolder.getAttribute('data-tip')).toBe('删除文件夹')
     fireEvent.click(deleteFolder)
     expect(bridge.callsTo('library.deleteFolder')).toHaveLength(0)
     await act(async () => {
@@ -76,5 +78,33 @@ describe('文件夹栏', () => {
     })
     expect(bridge.callsTo('trash.restore')).toMatchObject([{ file: trashedFolder.file, target: 'original' }])
     expect(screen.getByRole('button', { name: '写作' })).toBeDefined()
+  })
+
+  it('右键文件夹弹出菜单，从菜单删除同样先确认；「全部」「未分类」没有菜单', async () => {
+    const bridge = new FakeBridge()
+    bridge.handle('library.list', () => ok(listResult([], { folders: ['写作'] })))
+    bridge.handle('library.deleteFolder', () => ok({ trashFile: '.promptx-folder-1' }))
+    const app = await startController(bridge)
+    controller = app
+    await app.library.open()
+    render(<ControllerContext.Provider value={app}><LibraryPane /><DialogHost /></ControllerContext.Provider>)
+    fireEvent.contextMenu(screen.getByRole('button', { name: '全部' }), { clientX: 20, clientY: 60 })
+    expect(screen.queryByRole('menu')).toBeNull()
+
+    expect(fireEvent.contextMenu(screen.getByRole('button', { name: '写作' }), { clientX: 40, clientY: 120 })).toBe(false)
+    const menu = screen.getByRole('menu')
+    // 文件夹栏贴着窗口左边，菜单从指针处向右展开。
+    expect(menu.style.left).toBe('40px')
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole('menuitem', { name: '删除文件夹' }))
+      await settle()
+    })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(bridge.callsTo('library.deleteFolder')).toHaveLength(0)
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除' }))
+      await settle()
+    })
+    expect(bridge.callsTo('library.deleteFolder')).toMatchObject([{ folder: '写作' }])
   })
 })

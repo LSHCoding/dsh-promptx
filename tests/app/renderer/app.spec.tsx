@@ -130,11 +130,13 @@ describe('草稿载入（F-01）', () => {
 })
 
 describe('工具栏（需求 5.3、S-02）', () => {
-  it('左组 库、保存、优化、清空、聊天；右组 设置、关闭；悬停提示带当前快捷键', async () => {
+  it('左端库，分隔线后保存、优化、清空；右端设置、聊天、隐藏小窗；悬停提示带当前快捷键', async () => {
     const bridge = new FakeBridge()
     bridge.handle('draft.load', () => ok({ record: draftRecord('有内容') }))
     await mountApp(bridge)
     const bar = within(toolbar())
+    expect(bar.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['库', '保存', '优化', '清空', '设置', '聊天', '隐藏小窗'])
+    expect(toolbar().querySelectorAll('.px-toolbar-sep')).toHaveLength(2)
     const tip = (name: string) => bar.getByRole('button', { name }).getAttribute('data-tip')
     expect(tip('库')).toBe('库（⌘L）')
     expect(tip('保存')).toBe('保存（⌘S）')
@@ -142,21 +144,21 @@ describe('工具栏（需求 5.3、S-02）', () => {
     expect(tip('清空')).toBe('清空')
     expect(tip('聊天')).toBe('聊天')
     expect(tip('设置')).toBe('设置')
-    expect(tip('关闭')).toBe('关闭（Esc）')
+    expect(tip('隐藏小窗')).toBe('隐藏小窗（Esc）')
   })
 
   it('小窗收到更新后，同一个快捷键出现在工具栏提示并触发动作', async () => {
     const bridge = new FakeBridge()
     await mountApp(bridge)
     const chat = within(toolbar()).getByRole('button', { name: '聊天' })
-    const close = within(toolbar()).getByRole('button', { name: '关闭' })
+    const close = within(toolbar()).getByRole('button', { name: '隐藏小窗' })
     act(() => {
       bridge.emit('config', config({
         windowShortcuts: { ...DEFAULT_TOOLBAR_SHORTCUTS, shortcutChat: 'Command+J', shortcutClose: '' },
       }))
     })
     expect(chat.getAttribute('data-tip')).toBe('聊天（⌘J）')
-    expect(close.getAttribute('data-tip')).toBe('关闭')
+    expect(close.getAttribute('data-tip')).toBe('隐藏小窗')
     await act(async () => {
       fireEvent.keyDown(editorContent(), { key: 'j', code: 'KeyJ', metaKey: true })
       await settle()
@@ -182,10 +184,14 @@ describe('工具栏（需求 5.3、S-02）', () => {
     })
     const panel = screen.getByRole('complementary', { name: '优化会话' })
     expect(panel.contains(bar)).toBe(false)
-    expect(panel.querySelector('.px-session-messages')?.childElementCount).toBe(0)
+    expect(panel.querySelectorAll('.px-round')).toHaveLength(0)
+    expect(within(panel).getByText('优化编辑区里的 Prompt')).toBeTruthy()
     expect(within(panel).getByRole('textbox', { name: '输入要优化的 Prompt…' })).toBeTruthy()
     expect(within(panel).getByRole<HTMLButtonElement>('button', { name: '发送' }).disabled).toBe(true)
     expect(chat.getAttribute('aria-pressed')).toBe('true')
+    // 隐藏小窗的按钮始终在窗口最右侧那一栏：聊天栏打开时在聊天栏头，工具栏里不再有。
+    expect(within(bar).queryByRole('button', { name: '隐藏小窗' })).toBeNull()
+    expect(within(panel).getByRole('button', { name: '隐藏小窗' }).getAttribute('data-tip')).toBe('隐藏小窗（Esc）')
 
     await act(async () => {
       fireEvent.click(chat)
@@ -193,6 +199,7 @@ describe('工具栏（需求 5.3、S-02）', () => {
     })
     expect(screen.queryByRole('complementary', { name: '优化会话' })).toBeNull()
     expect(chat.getAttribute('aria-pressed')).toBe('false')
+    expect(within(bar).getByRole('button', { name: '隐藏小窗' })).toBeTruthy()
   })
 
   it('Windows 上悬停提示写成 Ctrl+…', async () => {
@@ -263,7 +270,7 @@ describe('工具栏（需求 5.3、S-02）', () => {
       await settle()
     })
     const panel = screen.getByRole('complementary', { name: '优化会话' })
-    expect(panel.querySelector('.px-session-messages')?.childElementCount).toBe(1)
+    expect(panel.querySelectorAll('.px-round')).toHaveLength(1)
     await act(async () => {
       fireEvent.click(within(panel).getByRole('button', { name: '清空会话' }))
       await settle()
@@ -271,14 +278,15 @@ describe('工具栏（需求 5.3、S-02）', () => {
     expect(within(toolbar()).getByRole('button', { name: '聊天' })).toBe(chat)
     expect(chat.getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByRole('complementary', { name: '优化会话' })).toBe(panel)
-    expect(panel.querySelector('.px-session-messages')?.childElementCount).toBe(0)
+    expect(panel.querySelectorAll('.px-round')).toHaveLength(0)
+    expect(within(panel).getByText('优化编辑区里的 Prompt')).toBeTruthy()
     expect(within(panel).getByRole('textbox', { name: '输入要优化的 Prompt…' })).toBeTruthy()
   })
 
-  it('点「关闭」隐藏小窗；点按钮不抢编辑区的焦点', async () => {
+  it('点「隐藏小窗」隐藏小窗；点按钮不抢编辑区的焦点', async () => {
     const bridge = new FakeBridge()
     await mountApp(bridge)
-    const close = within(toolbar()).getByRole('button', { name: '关闭' })
+    const close = within(toolbar()).getByRole('button', { name: '隐藏小窗' })
     expect(fireEvent.mouseDown(close)).toBe(false)
     await act(async () => {
       fireEvent.click(close)
@@ -419,7 +427,9 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(nested.style.paddingLeft).toBe('24px')
     expect(within(nav).getByRole('button', { name: '全部' }).getAttribute('aria-current')).toBe('true')
     expect(screen.getByText('还没有保存的 Prompt')).toBeTruthy()
-    expect(screen.getByText('选择一个 Prompt 查看内容')).toBeTruthy()
+    // 没有选中条目时不留空白的预览区（V0.1.5）。
+    expect(document.querySelector('.px-preview-area')).toBeNull()
+    expect(screen.queryByRole('separator', { name: '调整预览高度' })).toBeNull()
   })
 
   it('有筛选但没有结果：「没有匹配的 Prompt」', async () => {
@@ -520,7 +530,7 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(bridge.window.hide).not.toHaveBeenCalled()
   })
 
-  it('选中一条：预览显示完整正文，「插入到光标」插进编辑区', async () => {
+  it('选中一条：预览区这时才展开，显示完整正文；列表栏底部的「插入到光标」插进编辑区', async () => {
     const bridge = new FakeBridge()
     const meta = entry('a.md', { title: '模板' })
     bridge.handle('library.list', () => ok(listResult([meta])))
@@ -529,10 +539,21 @@ describe('库侧栏（L-02 至 L-11）', () => {
     await act(async () => {
       await controller.library.open()
     })
+    const footer = document.querySelector<HTMLElement>('.px-list-footer')
+    if (footer === null) throw new Error('no list footer')
+    expect(footer.textContent).toBe('1 个 Prompt')
+    expect(document.querySelector('.px-preview-area')).toBeNull()
+    expect(within(footer).queryByRole('button', { name: '插入到光标' })).toBeNull()
+    // 行内按钮的提示向左展开，隐藏的提示不会撑出横向滚动条（V0.1.5 界面方案第 19 条）。
+    const actions = (rows()[0] as HTMLElement).querySelectorAll('.px-row-actions button')
+    expect([...actions].map(button => button.getAttribute('data-tip-align'))).toEqual(['end', 'end', 'end'])
     await act(async () => {
       fireEvent.click(rows()[0] as HTMLElement)
       await settle()
     })
+    expect(document.querySelector('.px-preview-area')).not.toBeNull()
+    expect(screen.getByRole('separator', { name: '调整预览高度' })).toBeTruthy()
+    expect(within(footer).getByRole('button', { name: '更多' })).toBeTruthy()
     expect(document.querySelector('.px-preview-text')?.textContent).toBe('# 写作助手\n\n要求')
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: '插入到光标' }))
@@ -631,9 +652,13 @@ describe('库侧栏（L-02 至 L-11）', () => {
   it('窗口矮、预览区被压矮时，拖分隔线从实际显示的高度算起，往上拖不超过列表区的余量（审查 CR-07）', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.list', () => ok(listResult([entry('a.md')])))
+    bridge.handle('library.read', () => ok(readResult(entry('a.md'), '正文')))
     const controller = await mountApp(bridge)
     await act(async () => {
       await controller.library.open()
+    })
+    await act(async () => {
+      await controller.library.select('a.md')
     })
     expect(controller.store.getState().panes.previewHeight).toBe(232)
     // jsdom 不排版：假装窗口很矮，CSS 把预览区压到 150，列表区已经是最小的 96。

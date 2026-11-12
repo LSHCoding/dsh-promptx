@@ -76,10 +76,18 @@ describe('独立库条目编辑窗口', () => {
   it('载入指定正文、标题与路径，保存目标明确，初始化不调用主窗口草稿或库API', async () => {
     const { controller, bridge } = await mount()
     expect(controller.editor.getText()).toBe('原正文')
-    expect(screen.getByRole('heading', { name: '评审助手' })).toBeTruthy()
+    // V0.1.5：标题只在可编辑的大标题里出现一次，头部显示模式和相对路径。
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '标题' }).value).toBe('评审助手')
+    expect(screen.queryByRole('heading', { name: '评审助手' })).toBeNull()
     expect(screen.getByText('写作/评审.md')).toBeTruthy()
+    expect(screen.getByText('编辑库中提示词')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: '标签' }).getAttribute('placeholder')).toBe('添加标签，用逗号分隔，最多 5 个')
+    expect(screen.getByRole('textbox', { name: '标签' }).getAttribute('aria-describedby')).toBe('entry-editor-tags-hint')
+    expect(document.getElementById('entry-editor-tags-hint')?.textContent).toBe('用逗号分隔，最多 5 个')
     expect(screen.getByText('保存只更新当前库条目')).toBeTruthy()
+    expect(screen.getByText('修改已保存').getAttribute('data-state')).toBe('saved')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: '关闭' })).toBeTruthy()
     expect(bridge.calls).toEqual([])
     expect(bridge.entryEditor.update).not.toHaveBeenCalled()
     expect(document.title).toBe('编辑 Prompt：评审助手')
@@ -113,7 +121,7 @@ describe('独立库条目编辑窗口', () => {
     const { controller, bridge } = await mount()
     act(() => { type(controller, '修改') })
     expect(bridge.entryEditor.update).toHaveBeenLastCalledWith('原正文修改', { anchor: 5, head: 5 }, 1)
-    expect(screen.getByText('有未保存的修改')).toBeTruthy()
+    expect(screen.getByText('有未保存的修改').getAttribute('data-state')).toBe('unsaved')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(false)
     act(() => { controller.editor.runCommand(undo) })
     expect(controller.editor.getText()).toBe('原正文')
@@ -150,7 +158,7 @@ describe('独立库条目编辑窗口', () => {
 
   it('预选条目当前文件夹，只改为未分类即可保存并显示更新的路径', async () => {
     const { controller, bridge } = await mount()
-    const folder = screen.getByRole<HTMLSelectElement>('combobox', { name: '保存到文件夹' })
+    const folder = screen.getByRole<HTMLSelectElement>('combobox', { name: '文件夹' })
     const save = screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' })
     expect(folder.value).toBe('写作')
     expect([...folder.options].map(option => option.textContent)).toEqual(['未分类', '写作', '代码'])
@@ -179,7 +187,7 @@ describe('独立库条目编辑窗口', () => {
     const metadata = { title: '评审助手', tags: '', savedTags: [], folder: '代码' }
     const initial = snapshot({ metadata, recovered: true, conflict: 'destinationOccupied' })
     const { bridge } = await mount(new FakeBridge(), initial)
-    const folder = screen.getByRole<HTMLSelectElement>('combobox', { name: '保存到文件夹' })
+    const folder = screen.getByRole<HTMLSelectElement>('combobox', { name: '文件夹' })
     expect(folder.value).toBe('代码')
     expect(screen.getByRole('alert').textContent).toContain('所选文件夹内已有同名文件或文件夹')
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '保存修改' }).disabled).toBe(false)
@@ -257,7 +265,7 @@ describe('独立库条目编辑窗口', () => {
     })
     expect(controller.editor.getText()).toBe('另一条正文')
     expect(controller.editor.getSelection()).toEqual({ anchor: 0, head: 0 })
-    expect(screen.getByRole('heading', { name: '另一条' })).toBeTruthy()
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '标题' }).value).toBe('另一条')
     expect(controller.editor.runCommand(undo)).toBe(false)
   })
 

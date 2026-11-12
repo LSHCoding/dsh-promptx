@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractCandidate } from '../../src/shared/candidate.ts'
+import { extractCandidate, locateCandidate, splitReply } from '../../src/shared/candidate.ts'
 
 const lines = (...parts: string[]): string => parts.join('\n')
 
@@ -250,5 +250,76 @@ describe('extractCandidate：没有候选', () => {
 
   it('空的 prompt 块不会盖过前面完整的候选', () => {
     expect(extractCandidate(lines('```prompt', '有效', '```', '```prompt', '', '```'))).toBe('有效')
+  })
+})
+
+describe('locateCandidate：候选的位置', () => {
+  it('给出开头行和结尾围栏行的行号，内容和 extractCandidate 相同', () => {
+    const reply = lines('说明一句。', '', '````prompt', '# 标题', '正文', '````', '', '补充。')
+    expect(locateCandidate(reply)).toEqual({ text: '# 标题\n正文', start: 2, end: 5 })
+    expect(extractCandidate(reply)).toBe('# 标题\n正文')
+  })
+
+  it('多个候选时取最后一个完整的', () => {
+    expect(locateCandidate(lines('```prompt', '第一版', '```', '```prompt', '第二版', '```'))).toEqual({ text: '第二版', start: 3, end: 5 })
+  })
+
+  it('CRLF 按一个换行计行号', () => {
+    expect(locateCandidate('说明\r\n```prompt\r\n内容\r\n```')).toEqual({ text: '内容', start: 1, end: 3 })
+  })
+
+  it('没有候选时为 null', () => {
+    expect(locateCandidate('只有说明')).toBeNull()
+    expect(locateCandidate(lines('```prompt', '没写完'))).toBeNull()
+  })
+})
+
+describe('splitReply：会话栏的说明、改写稿和后文', () => {
+  it('完整的候选：说明、正文、后文分开，去掉首尾空行', () => {
+    expect(splitReply(lines('', '改写如下：', '', '````prompt', '# 标题', '', '正文', '````', '', '有疑问可以追问。', ''), false)).toEqual({
+      before: '改写如下：',
+      candidate: '# 标题\n\n正文',
+      after: '有疑问可以追问。',
+      open: false,
+    })
+  })
+
+  it('没有候选：整段回复作为说明', () => {
+    expect(splitReply(lines('', '这段 Prompt 已经很清楚，不需要改写。', ''), false)).toEqual({
+      before: '这段 Prompt 已经很清楚，不需要改写。',
+      candidate: null,
+      after: '',
+      open: false,
+    })
+  })
+
+  it('还在生成时，没收尾的 prompt 块当作正在写的改写稿', () => {
+    expect(splitReply(lines('改写如下：', '````prompt', '# 标题', '正文写到一半'), true)).toEqual({
+      before: '改写如下：',
+      candidate: '# 标题\n正文写到一半',
+      after: '',
+      open: true,
+    })
+  })
+
+  it('生成结束后没收尾的块不算候选，回复原样作为说明', () => {
+    const reply = lines('改写如下：', '````prompt', '没写完')
+    expect(splitReply(reply, false)).toEqual({ before: reply, candidate: null, after: '', open: false })
+  })
+
+  it('还在生成、候选已经收尾时按完整的候选分段', () => {
+    expect(splitReply(lines('```prompt', '内容', '```', '后面还在写'), true)).toEqual({
+      before: '',
+      candidate: '内容',
+      after: '后面还在写',
+      open: false,
+    })
+  })
+
+  it('边界有歧义、提取不到候选时，整段作为说明', () => {
+    const reply = lines('```prompt', '外层', '```', '内层？', '```')
+    expect(extractCandidate(reply)).toBeNull()
+    expect(splitReply(reply, false).candidate).toBeNull()
+    expect(splitReply(reply, false).before).toBe(reply)
   })
 })

@@ -112,9 +112,12 @@ export class LibrarySave {
 
     while (true) {
       if (request === null) {
+        // 模型给出的标题和标签第一次出现时注明来源；手填、重试和报错后重新打开时，表单里已经是用户确认或改过的内容。
+        const generated = !manual && retry === null && formError === undefined
         const choice = await this.dialogs.open({
           title: text(this.ctx, 'dialog.saveMetadata.title'),
           ...(manual ? { message: text(this.ctx, 'dialog.saveMetadata.manual') } : {}),
+          ...(generated ? { message: text(this.ctx, 'dialog.saveMetadata.generated') } : {}),
           ...(formError === undefined ? {} : { error: formError }),
           buttons: [
             dialogButton(this.ctx, 'cancel', 'common.cancel'),
