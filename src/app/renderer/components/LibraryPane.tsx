@@ -6,6 +6,7 @@ import { useLayoutEffect, useRef, type ReactElement } from 'react'
 import { relativeTime } from '../../../shared/i18n/index.ts'
 import { folderOf } from '../../../shared/library-rules.ts'
 import { PANE_LIMITS } from '../../../shared/layout.ts'
+import { tagColorIndex } from '../../../shared/tag-colors.ts'
 import type { EntryMeta, FolderSel, LibraryScope, TrashEntry } from '../../../shared/types.ts'
 import { listErrorMessage, previewErrorMessage, unavailableMessage } from '../controller/context.ts'
 import type { FolderChoice } from '../controller/library.ts'
@@ -350,6 +351,11 @@ function entryMenu(entry: EntryMeta, t: Translate, controller: ReturnType<typeof
   ]
 }
 
+/** 标签：颜色按标签名算出（V0.1.5 维护者追加），同一个标签在列表和预览里是同一个颜色。 */
+function TagChip({ tag }: { tag: string }): ReactElement {
+  return <span className="px-tag" data-color={tagColorIndex(tag)}>{tag}</span>
+}
+
 /**
  * 选中后预览区才展开，列表区会矮下一截：把选中的行滚到可见的位置，免得被预览盖住。
  * jsdom 没有 scrollIntoView，所以按可选方法调用。
@@ -403,7 +409,7 @@ function EntryRow({ entry, selected, now }: { entry: EntryMeta; selected: boolea
         </div>
         <div className="px-row-meta">
           <span>{relativeTime(entry.updatedAt, now, locale)}</span>
-          {entry.tags.slice(0, 2).map(tag => <span key={tag} className="px-tag">{tag}</span>)}
+          {entry.tags.slice(0, 2).map(tag => <TagChip key={tag} tag={tag} />)}
           {entry.status === 'unreadable' ? <span className="px-badge">{t('library.badge.unreadable')}</span> : null}
           {entry.status === 'invalid-meta' ? <span className="px-badge">{t('library.badge.invalidMeta')}</span> : null}
         </div>
@@ -452,7 +458,7 @@ function Preview(): ReactElement | null {
         </div>
         <div className="px-preview-meta">
           <span>{relativeTime(entry.updatedAt, Date.now(), locale)}</span>
-          {entry.tags.map(tag => <span key={tag} className="px-tag">{tag}</span>)}
+          {entry.tags.map(tag => <TagChip key={tag} tag={tag} />)}
         </div>
       </div>
       <div className="px-preview-body">

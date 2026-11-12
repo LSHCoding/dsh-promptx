@@ -43,7 +43,7 @@ Restart dsh after installing or updating the plugin. On the first start, open th
 
 Clear, Chat, and Settings start without a shortcut. Leave any toolbar shortcut field blank to disable that binding.
 
-On first launch, the folder and prompt columns are visible on the left. Select a prompt to preview it below the list; choose **Hide preview** from **More** to close it. Toggling the library adjusts the window width to preserve the editor width within display and window size limits.
+On first launch, the folder and prompt columns are visible on the left. Select a prompt to preview it below the list; choose **Hide preview** from **More** to close it. Each tag gets a color from its name, so it looks the same everywhere. Toggling the library adjusts the window width to preserve the editor width within display and window size limits.
 
 The toolbar sits above the editor, with the library toggle on the left and **Chat** on the right. **Chat** shows or hides the panel on the right, which starts closed. The button that hides the window stays in the window's top-right corner, in the chat header while the panel is open. In an empty chat panel, select **Optimize editor content**, or enter a prompt in the chat box and select **Send** to start a rewrite, then use the same box for follow-up requests. The toolbar's rewrite button and **Optimize editor content** use the main editor draft. Each rewrite appears in its own card. Select **Apply** on the card to update that draft. Clearing the conversation leaves the panel open. PromptX restores the editor width on restart within the available screen space.
 

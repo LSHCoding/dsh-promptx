@@ -5,6 +5,7 @@ import { undo } from '@codemirror/commands'
 import { DEFAULT_PREFS, type BridgeResult } from '../../../src/shared/bridge.ts'
 import type { DraftRecord } from '../../../src/shared/types.ts'
 import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../../src/shared/window-shortcuts.ts'
+import { tagColorIndex } from '../../../src/shared/tag-colors.ts'
 import { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { App } from '../../../src/app/renderer/components/App.tsx'
 import {
@@ -503,6 +504,11 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(first.getByRole('img', { name: '已收藏' })).toBeTruthy()
     expect(first.getByText('3 小时前')).toBeTruthy()
     expect(first.getByText('写作')).toBeTruthy()
+    // 标签按标签名上色（V0.1.5 追加），列表行只显示前两个标签。
+    expect([...(firstRow as HTMLElement).querySelectorAll('.px-tag')].map(tag => [tag.textContent, tag.getAttribute('data-color')])).toEqual([
+      ['写作', String(tagColorIndex('写作'))],
+      ['示例', String(tagColorIndex('示例'))],
+    ])
     expect(first.queryByText('第三个')).toBeNull()
     expect(first.getByRole('button', { name: '在编辑器中打开' })).toBeTruthy()
     expect(first.getByRole('button', { name: '删除' })).toBeTruthy()

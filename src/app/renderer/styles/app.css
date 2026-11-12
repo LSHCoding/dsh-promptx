@@ -405,11 +405,114 @@ textarea.px-input {
   font: var(--dsw-font-xxs-12);
 }
 
+/*
+ * 标签按标签名自动上色（V0.1.5 维护者追加，配色方案 A「雾霭」，色号由 shared/tag-colors.ts 算出）。
+ * dsh 主题里没有足够多的低饱和色相，这是 AGENTS.md 代码风格里记下的例外：标签配色用字面颜色值，只定义在这里，
+ * 浅色、深色各一套。浅色是很浅的底和同色相的深色字，深色是压暗的底和提亮的字，文字对比度都不低于 5.8 : 1。
+ * 增删颜色时同步改 TAG_COLOR_COUNT，下面的色号从 0 开始连续编号。
+ */
+body {
+  --px-tag-0-bg: #e7efe8;
+  --px-tag-0-fg: #3b5e4a; /* 鼠尾草 */
+  --px-tag-1-bg: #e5ecf5;
+  --px-tag-1-fg: #345579; /* 雾蓝 */
+  --px-tag-2-bg: #f2e7ef;
+  --px-tag-2-fg: #6f4466; /* 藕荷 */
+  --px-tag-3-bg: #f4ecdd;
+  --px-tag-3-fg: #745627; /* 沙金 */
+  --px-tag-4-bg: #f5e6e0;
+  --px-tag-4-fg: #86473a; /* 陶土 */
+  --px-tag-5-bg: #e0f0ec;
+  --px-tag-5-fg: #2b635a; /* 青瓷 */
+  --px-tag-6-bg: #ebe8f6;
+  --px-tag-6-fg: #4f4682; /* 薰衣草 */
+  --px-tag-7-bg: #dfeef2;
+  --px-tag-7-fg: #285e6e; /* 黛青 */
+  --px-tag-8-bg: #eceedd;
+  --px-tag-8-fg: #565f2b; /* 苔绿 */
+  --px-tag-9-bg: #f6e6e9;
+  --px-tag-9-fg: #84404f; /* 烟粉 */
+}
+
+body[data-ds-dark-theme] {
+  --px-tag-0-bg: #1f2c25;
+  --px-tag-0-fg: #a6cdb4;
+  --px-tag-1-bg: #1c2735;
+  --px-tag-1-fg: #a3c1e3;
+  --px-tag-2-bg: #2f2230;
+  --px-tag-2-fg: #d9afd0;
+  --px-tag-3-bg: #2f271a;
+  --px-tag-3-fg: #e0c48e;
+  --px-tag-4-bg: #33211c;
+  --px-tag-4-fg: #e9b2a3;
+  --px-tag-5-bg: #182d29;
+  --px-tag-5-fg: #96d2c6;
+  --px-tag-6-bg: #24223a;
+  --px-tag-6-fg: #bab2ea;
+  --px-tag-7-bg: #172b31;
+  --px-tag-7-fg: #93cddd;
+  --px-tag-8-bg: #282b1a;
+  --px-tag-8-fg: #c7ce92;
+  --px-tag-9-bg: #34212a;
+  --px-tag-9-fg: #e7a9b8;
+}
+
 .px-tag {
-  padding: 0 4px;
+  padding: 0 6px;
   border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-bg-module-platform);
   color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-strong-12);
+}
+
+.px-tag[data-color='0'] {
+  background: var(--px-tag-0-bg);
+  color: var(--px-tag-0-fg);
+}
+
+.px-tag[data-color='1'] {
+  background: var(--px-tag-1-bg);
+  color: var(--px-tag-1-fg);
+}
+
+.px-tag[data-color='2'] {
+  background: var(--px-tag-2-bg);
+  color: var(--px-tag-2-fg);
+}
+
+.px-tag[data-color='3'] {
+  background: var(--px-tag-3-bg);
+  color: var(--px-tag-3-fg);
+}
+
+.px-tag[data-color='4'] {
+  background: var(--px-tag-4-bg);
+  color: var(--px-tag-4-fg);
+}
+
+.px-tag[data-color='5'] {
+  background: var(--px-tag-5-bg);
+  color: var(--px-tag-5-fg);
+}
+
+.px-tag[data-color='6'] {
+  background: var(--px-tag-6-bg);
+  color: var(--px-tag-6-fg);
+}
+
+.px-tag[data-color='7'] {
+  background: var(--px-tag-7-bg);
+  color: var(--px-tag-7-fg);
+}
+
+.px-tag[data-color='8'] {
+  background: var(--px-tag-8-bg);
+  color: var(--px-tag-8-fg);
+}
+
+.px-tag[data-color='9'] {
+  background: var(--px-tag-9-bg);
+  color: var(--px-tag-9-fg);
 }
 
 .px-badge {
