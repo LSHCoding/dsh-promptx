@@ -154,6 +154,7 @@ export const zh = {
   'library.unreadable.not-utf8': '文件不是 UTF-8 编码，无法打开',
   'library.unreadable.read-failed': '文件读取失败',
   'library.action.open': '在编辑器中打开',
+  'library.action.hidePreview': '隐藏预览',
   'library.action.delete': '删除',
   'library.action.rename': '重命名 / 标签…',
   'library.action.copyBody': '复制正文',

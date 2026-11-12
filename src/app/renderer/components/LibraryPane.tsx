@@ -320,11 +320,24 @@ function EntryList(): ReactElement {
   )
 }
 
-/** 「更多」菜单（列表行和列表栏底部共用）：在编辑器中打开、重命名 / 标签…、复制正文、收藏 / 取消收藏、删除（L-04）。 */
-function entryMenu(entry: EntryMeta, t: Translate, controller: ReturnType<typeof useController>): MenuItem[] {
+/**
+ * 「更多」菜单（列表行和列表栏底部共用）：在编辑器中打开、重命名 / 标签…、复制正文、收藏 / 取消收藏、删除（L-04）。
+ * 这一条正在预览时，最上面多一项「隐藏预览」（V0.1.5 维护者追加），用分隔线和对条目本身的操作分开。
+ */
+function entryMenu(entry: EntryMeta, t: Translate, controller: ReturnType<typeof useController>, previewing: boolean): MenuItem[] {
   const unreadable = entry.status === 'unreadable'
+  const hide: MenuItem[] = previewing
+    ? [{ id: 'hidePreview', label: t('library.action.hidePreview'), onSelect: () => { controller.library.hidePreview() } }]
+    : []
   return [
-    { id: 'open', label: t('library.action.open'), disabled: unreadable, onSelect: () => { run(controller.library.openEntry(entry.relPath)) } },
+    ...hide,
+    {
+      id: 'open',
+      label: t('library.action.open'),
+      disabled: unreadable,
+      separatorBefore: previewing,
+      onSelect: () => { run(controller.library.openEntry(entry.relPath)) },
+    },
     { id: 'rename', label: t('library.action.rename'), disabled: unreadable, onSelect: () => { run(controller.library.rename(entry.relPath)) } },
     { id: 'copy', label: t('library.action.copyBody'), disabled: unreadable, onSelect: () => { run(controller.library.copyBody(entry.relPath)) } },
     {
@@ -418,7 +431,7 @@ function EntryRow({ entry, selected, now }: { entry: EntryMeta; selected: boolea
             run(controller.library.remove(entry.relPath))
           }}
         />
-        <MenuButton menuId={menuId} label={t('common.more')} items={entryMenu(entry, t, controller)} />
+        <MenuButton menuId={menuId} label={t('common.more')} items={entryMenu(entry, t, controller, selected)} />
       </div>
     </div>
   )
@@ -490,7 +503,7 @@ function ListFooter(): ReactElement {
             >
               {t('library.insert')}
             </button>
-            <MenuButton menuId={`preview:${preview.entry.relPath}`} label={t('common.more')} items={entryMenu(preview.entry, t, controller)} />
+            <MenuButton menuId={`preview:${preview.entry.relPath}`} label={t('common.more')} items={entryMenu(preview.entry, t, controller, true)} />
           </>
         )}
     </div>

@@ -530,6 +530,68 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(bridge.window.hide).not.toHaveBeenCalled()
   })
 
+  it('「更多」里的「隐藏预览」收起预览：只出现在正在预览的条目上，行内和底部的「⋯」都有（V0.1.5 追加）', async () => {
+    const bridge = new FakeBridge()
+    const first = entry('a.md', { title: '第一条' })
+    const second = entry('b.md', { title: '第二条' })
+    bridge.handle('library.list', () => ok(listResult([first, second])))
+    bridge.handle('library.read', ({ relPath }) => ok(readResult(relPath === 'a.md' ? first : second, '正文')))
+    const controller = await mountApp(bridge)
+    await act(async () => {
+      await controller.library.open()
+    })
+    await act(async () => {
+      fireEvent.click(rows()[0] as HTMLElement)
+      await settle()
+    })
+    expect(document.querySelector('.px-preview-area')).not.toBeNull()
+
+    // 没在预览的那一行，菜单里没有「隐藏预览」。
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: '更多' }))
+    expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: '隐藏预览' })).toBeNull()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    // 正在预览的那一行：「隐藏预览」排在最上面，下面一条分隔线隔开对条目本身的操作。
+    fireEvent.click(within(rows()[0] as HTMLElement).getByRole('button', { name: '更多' }))
+    const rowMenu = screen.getByRole('menu')
+    expect(within(rowMenu).getAllByRole('menuitem').map(item => item.textContent)).toEqual([
+      '隐藏预览', '在编辑器中打开', '重命名 / 标签…', '复制正文', '收藏', '删除',
+    ])
+    expect(rowMenu.querySelectorAll('[role="separator"]')).toHaveLength(1)
+    await act(async () => {
+      fireEvent.click(within(rowMenu).getByRole('menuitem', { name: '隐藏预览' }))
+      await settle()
+    })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.querySelector('.px-preview-area')).toBeNull()
+    expect(rows()[0]?.getAttribute('aria-selected')).toBe('false')
+    expect(controller.store.getState().library.selected).toBeNull()
+    expect(document.querySelector('.px-list-footer')?.textContent).toBe('2 个 Prompt')
+
+    // 底部那一行的「⋯」同样可以收起；按钮随预览消失后，焦点交回编辑区。
+    await act(async () => {
+      fireEvent.click(rows()[1] as HTMLElement)
+      await settle()
+    })
+    const footer = document.querySelector<HTMLElement>('.px-list-footer')
+    if (footer === null) throw new Error('no list footer')
+    fireEvent.click(within(footer).getByRole('button', { name: '更多' }))
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: '隐藏预览' }))
+      await settle()
+    })
+    expect(document.querySelector('.px-preview-area')).toBeNull()
+    expect(within(footer).queryByRole('button', { name: '更多' })).toBeNull()
+    expect(document.activeElement?.closest('.cm-editor')).not.toBeNull()
+
+    // 再点一行，重新选中并展开预览。
+    await act(async () => {
+      fireEvent.click(rows()[0] as HTMLElement)
+      await settle()
+    })
+    expect(document.querySelector('.px-preview-area')).not.toBeNull()
+  })
+
   it('选中一条：预览区这时才展开，显示完整正文；列表栏底部的「插入到光标」插进编辑区', async () => {
     const bridge = new FakeBridge()
     const meta = entry('a.md', { title: '模板' })

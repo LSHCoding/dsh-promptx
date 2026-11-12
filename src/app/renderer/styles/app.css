@@ -1076,6 +1076,12 @@ textarea.px-input {
   cursor: default;
 }
 
+.px-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--dsw-alias-border-l2);
+}
+
 .px-menu-item-danger {
   color: var(--dsw-alias-state-error-primary);
 }

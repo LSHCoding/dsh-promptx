@@ -1,6 +1,6 @@
 // 小窗里复用的小控件：图标按钮（带悬停提示）、「更多」菜单和右键菜单、可拖动的分隔线。
 
-import { useRef, type MouseEvent, type PointerEvent, type ReactElement } from 'react'
+import { Fragment, useRef, type MouseEvent, type PointerEvent, type ReactElement } from 'react'
 import { runTask } from '../controller/context.ts'
 import type { MenuState } from '../state/state.ts'
 import { Icon, type IconName } from './icons.tsx'
@@ -54,6 +54,8 @@ export interface MenuItem {
   label: string
   disabled?: boolean
   danger?: boolean
+  /** 在这一项上方画一条分隔线，把不同性质的操作分开（例如「隐藏预览」和对条目本身的操作）。 */
+  separatorBefore?: boolean
   onSelect: () => void
 }
 
@@ -122,19 +124,21 @@ function MenuPopup({ anchor, items }: { anchor: MenuState['anchor']; items: Menu
       }}
     >
       {items.map(item => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          className={`px-menu-item${item.danger === true ? ' px-menu-item-danger' : ''}`}
-          disabled={item.disabled}
-          onClick={() => {
-            controller.closeMenu()
-            item.onSelect()
-          }}
-        >
-          {item.label}
-        </button>
+        <Fragment key={item.id}>
+          {item.separatorBefore === true ? <div className="px-menu-separator" role="separator" /> : null}
+          <button
+            type="button"
+            role="menuitem"
+            className={`px-menu-item${item.danger === true ? ' px-menu-item-danger' : ''}`}
+            disabled={item.disabled}
+            onClick={() => {
+              controller.closeMenu()
+              item.onSelect()
+            }}
+          >
+            {item.label}
+          </button>
+        </Fragment>
       ))}
     </div>
   )

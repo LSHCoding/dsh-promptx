@@ -153,6 +153,7 @@ export const en: Record<keyof typeof zh, string> = {
   'library.unreadable.not-utf8': 'The file isn\'t UTF-8 and can\'t be opened',
   'library.unreadable.read-failed': 'The file couldn\'t be read',
   'library.action.open': 'Open in editor',
+  'library.action.hidePreview': 'Hide preview',
   'library.action.delete': 'Delete',
   'library.action.rename': 'Rename / Tags…',
   'library.action.copyBody': 'Copy content',
