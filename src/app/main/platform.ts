@@ -51,12 +51,25 @@ export interface TrayHandle {
   destroy(): void
 }
 
+/** 窗口加载的界面：主窗口、独立条目编辑窗口、设置窗口（同一个 index.html，按 hash 区分）。 */
+export type WindowPage = 'main' | 'entry-editor' | 'settings'
+
 export interface WindowCreateOptions {
   width: number
   height: number
   backgroundColor: string
   parent?: MainWindow
-  entryEditor?: boolean
+  /** 缺省为 main。 */
+  page?: WindowPage
+  /** 缺省为主窗口的最小尺寸（shared/layout.ts 的 MIN_WINDOW）。 */
+  minWidth?: number
+  minHeight?: number
+}
+
+export interface ChooseDirectoryOptions {
+  title: string
+  /** 对话框打开时所在的目录；不存在时由系统决定。 */
+  defaultPath: string
 }
 
 export interface MessageBoxOptions {
@@ -98,6 +111,8 @@ export interface CompanionPlatform {
   workAreaFor(bounds: Rect): Rect
   readonly clipboard: ClipboardLike
   openExternal(url: string): Promise<void>
+  /** 用系统的文件管理器打开目录（shell.openPath）。失败时以 Error 拒绝。 */
+  openPath(path: string): Promise<void>
   readonly shortcuts: ShortcutBackend & { unregisterAll(): void }
   /** macOS 上读系统快捷键的 plist XML；其他平台没有。 */
   readonly readSystemHotkeys: (() => Promise<string | null>) | undefined
@@ -105,6 +120,8 @@ export interface CompanionPlatform {
   /** 建好隐藏的窗口并开始加载界面。 */
   createWindow(options: WindowCreateOptions): MainWindow
   showMessageBox(window: MainWindow, options: MessageBoxOptions): Promise<number>
+  /** 系统的选择文件夹对话框（可新建文件夹）；取消时为 null。 */
+  chooseDirectory(window: MainWindow, options: ChooseDirectoryOptions): Promise<string | null>
   /** 建不出来（例如桌面环境没有托盘）时返回 null。 */
   createTray(onAction: (action: TrayAction) => void): TrayHandle | null
   onBeforeQuit(listener: (prevent: () => void) => void): void

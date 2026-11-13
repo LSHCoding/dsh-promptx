@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ActionResult } from '../../src/client/api.ts'
 import { ConfigPage, type ConfigPageApi } from '../../src/client/ConfigPage.tsx'
 import type { PromptxTranslate } from '../../src/client/locale.ts'
-import { DEFAULT_INSTRUCTION } from '../../src/shared/instructions.ts'
 import type { ConfigUpdateResult, ErrorInfo, PanelStatus } from '../../src/shared/types.ts'
 import { createFakeStore, deferred, installRejectionTraps, makeStatus, tEn, tZh, type FakeStore } from './fixtures.ts'
 
@@ -33,12 +32,11 @@ function fakeApi(): FakeApi {
 function renderPage(status: PanelStatus | null, options: {
   error?: ErrorInfo | null
   t?: PromptxTranslate
-  language?: 'zh' | 'en'
   api?: FakeApi
 } = {}): { store: FakeStore; api: FakeApi; unmount: () => void; container: HTMLElement } {
   const store = createFakeStore({ status, error: options.error ?? null })
   const api = options.api ?? fakeApi()
-  const view = render(<ConfigPage t={options.t ?? tZh} store={store} api={api} language={options.language ?? 'zh'} />)
+  const view = render(<ConfigPage t={options.t ?? tZh} store={store} api={api} />)
   return { store, api, unmount: view.unmount, container: view.container }
 }
 
@@ -49,8 +47,7 @@ function withoutPid(status: PanelStatus): PanelStatus {
 
 const saveButton = (name = '保存'): HTMLButtonElement => screen.getByRole<HTMLButtonElement>('button', { name })
 const input = (label: string): HTMLInputElement => screen.getByLabelText<HTMLInputElement>(label)
-const switchOf = (label: string): HTMLButtonElement => screen.getByRole<HTMLButtonElement>('switch', { name: label })
-const middleDotLabel = '连打「·」转反引号 / 代码块'
+const select = (label: string): HTMLSelectElement => screen.getByLabelText<HTMLSelectElement>(label)
 const statusLine = (container: HTMLElement): string => container.querySelector('[data-promptx-status]')?.textContent ?? ''
 const runtimeLine = (container: HTMLElement): string => container.querySelector('[data-promptx-runtime]')?.textContent ?? ''
 
@@ -61,41 +58,56 @@ async function flush(): Promise<void> {
   })
 }
 
+describe('页面内容（V0.1.6 追加 1、追加 3）', () => {
+  it('只留小窗一组：状态、运行时、下载源、全局快捷键；顶部说明其他设置在设置窗口里', () => {
+    const { container } = renderPage(makeStatus())
+    expect(screen.getAllByRole('heading').map(heading => heading.textContent)).toEqual(['小窗'])
+    expect(container.querySelector('[data-promptx-more-settings]')?.textContent).toContain(
+      '工具栏快捷键、中文输入转换、Prompt 库和优化指令在 PromptX 设置窗口里修改。',
+    )
+    for (const gone of ['库目录', '优化指令', '删除前确认']) expect(screen.queryByLabelText(gone)).toBeNull()
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '恢复默认指令' })).toBeNull()
+  })
+
+  it('「打开 PromptX 设置」立即让小程序打开设置窗口；失败时写原因；小窗没在运行时不可用', async () => {
+    const api = fakeApi()
+    api.companion.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: { code: 'promptx/channel/closed' } })
+    const { store } = renderPage(makeStatus(), { api })
+    const open = screen.getByRole<HTMLButtonElement>('button', { name: '打开 PromptX 设置' })
+    fireEvent.click(open)
+    expect(api.companion).toHaveBeenLastCalledWith('settings')
+    await flush()
+    fireEvent.click(open)
+    await flush()
+    expect(screen.getByText('操作没有完成：连接断开了')).toBeTruthy()
+    act(() => {
+      store.set({ status: makeStatus({ seq: 2, companion: { state: 'stopped' } }), error: null })
+    })
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '打开 PromptX 设置' }).disabled).toBe(true)
+  })
+})
+
 describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
   it('改动先暂存，一次保存只发一个请求，只带改过的字段', async () => {
     const { api } = renderPage(makeStatus())
     expect(saveButton().disabled).toBe(true)
 
-    fireEvent.change(input('库目录'), { target: { value: '/Users/me/Prompts' } })
-    fireEvent.click(switchOf(middleDotLabel))
     fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
-    // 改了又改回去的字段不算改动。
-    fireEvent.click(switchOf('删除前确认'))
-    fireEvent.click(switchOf('删除前确认'))
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
     expect(api.saveConfig).not.toHaveBeenCalled()
     expect(saveButton().disabled).toBe(false)
-
     fireEvent.click(saveButton())
     expect(api.saveConfig).toHaveBeenCalledTimes(1)
-    expect(api.saveConfig).toHaveBeenCalledWith({ libraryDir: '/Users/me/Prompts', convertMiddleDot: false, runtimeSource: 'mirror' })
+    expect(api.saveConfig).toHaveBeenCalledWith({ runtimeSource: 'mirror', globalShortcut: 'Control+Alt+K' })
     await flush()
   })
 
-  it('两个输入转换默认开启，各自暂存并随保存一次提交', async () => {
-    const { api } = renderPage(makeStatus())
-    const dot = switchOf(middleDotLabel)
-    const yen = switchOf('输入「¥」转「$」/ 行间公式')
-    expect(dot.getAttribute('aria-checked')).toBe('true')
-    expect(yen.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(dot)
-    expect(yen.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(yen)
-    expect(api.saveConfig).not.toHaveBeenCalled()
-    fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenCalledWith({ convertMiddleDot: false, convertYen: false })
-    await flush()
-    expect(dot.getAttribute('aria-checked')).toBe('false')
-    expect(yen.getAttribute('aria-checked')).toBe('false')
+  it('改了又改回去的字段不算改动', () => {
+    renderPage(makeStatus())
+    fireEvent.change(input('下载源'), { target: { value: 'official' } })
+    fireEvent.change(input('下载源'), { target: { value: 'auto' } })
+    expect(saveButton().disabled).toBe(true)
   })
 
   it('没有改动时「保存」不可用；没有「取消」按钮', () => {
@@ -109,61 +121,60 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     const api = fakeApi()
     api.saveConfig.mockImplementation(() => reply.promise)
     const { store } = renderPage(makeStatus(), { api })
-    fireEvent.change(input('库目录'), { target: { value: ' /Users/me/Prompts ' } })
+    fireEvent.change(input('全局快捷键'), { target: { value: ' alt+ctrl+k ' } })
     fireEvent.click(saveButton())
 
     const saving = saveButton('保存中…')
     expect(saving.disabled).toBe(true)
-    expect(input('库目录').disabled).toBe(true)
-    expect(switchOf(middleDotLabel).disabled).toBe(true)
+    expect(input('全局快捷键').disabled).toBe(true)
+    expect(input('下载源').disabled).toBe(true)
     // 提交规范化后的值，输入框也换成它。
-    expect(api.saveConfig).toHaveBeenCalledWith({ libraryDir: '/Users/me/Prompts' })
-    expect(input('库目录').value).toBe('/Users/me/Prompts')
+    expect(api.saveConfig).toHaveBeenCalledWith({ globalShortcut: 'Control+Alt+K' })
+    expect(input('全局快捷键').value).toBe('Control+Alt+K')
 
     await act(async () => {
       reply.resolve({ ok: true })
       await reply.promise
     })
-    expect(input('库目录').disabled).toBe(false)
-    expect(screen.queryByRole('status')).toBeNull()
+    expect(input('全局快捷键').disabled).toBe(false)
 
     act(() => {
       const next = makeStatus({ seq: 2 })
-      store.set({ status: { ...next, config: { ...next.config, libraryDir: '/Users/me/Prompts' } }, error: null })
+      store.set({ status: { ...next, config: { ...next.config, globalShortcut: 'Control+Alt+K' } }, error: null })
     })
-    expect(input('库目录').value).toBe('/Users/me/Prompts')
+    expect(input('全局快捷键').value).toBe('Control+Alt+K')
     expect(saveButton().disabled).toBe(true)
   })
 
   it('Host 返回字段错误：错误显示在字段下面，暂存的值保留，给出提示；改了这个字段后错误消失', async () => {
     const api = fakeApi()
-    api.saveConfig.mockResolvedValue({ ok: false, errors: { libraryDir: 'library-dir-reserved' } })
+    api.saveConfig.mockResolvedValue({ ok: false, errors: { globalShortcut: 'shortcut-conflict' } })
     renderPage(makeStatus(), { api })
-    fireEvent.change(input('库目录'), { target: { value: '/Users/me/.dsh/sessions' } })
-    fireEvent.click(switchOf(middleDotLabel))
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
+    fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
     fireEvent.click(saveButton())
     await flush()
 
-    const field = input('库目录')
-    expect(field.value).toBe('/Users/me/.dsh/sessions')
+    const field = input('全局快捷键')
+    expect(field.value).toBe('Control+Alt+K')
     expect(field.getAttribute('aria-invalid')).toBe('true')
     const message = document.getElementById(field.getAttribute('aria-describedby') ?? '')
-    expect(message?.textContent).toBe('库目录不能放在 dsh 的数据目录里（默认的 promptx/library 除外）。')
-    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('false')
+    expect(message?.textContent).toBe('此组合已被另一个 PromptX 动作使用。')
+    expect(select('下载源').value).toBe('mirror')
     expect(screen.getByRole('status').textContent).toBe('有设置没有通过检查，改动已保留，改好后再保存。')
     expect(saveButton().disabled).toBe(true)
 
-    fireEvent.change(input('库目录'), { target: { value: '/Users/me/Prompts' } })
-    expect(input('库目录').getAttribute('aria-invalid')).toBeNull()
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+J' } })
+    expect(input('全局快捷键').getAttribute('aria-invalid')).toBeNull()
     expect(screen.queryByRole('status')).toBeNull()
     expect(saveButton().disabled).toBe(false)
   })
 
   it('Host 的其他字段错误也显示在各自下面', async () => {
     const api = fakeApi()
-    api.saveConfig.mockResolvedValue({ ok: false, errors: { convertMiddleDot: 'value-invalid', globalShortcut: 'shortcut-invalid' } })
+    api.saveConfig.mockResolvedValue({ ok: false, errors: { runtimeSource: 'value-invalid', globalShortcut: 'shortcut-invalid' } })
     renderPage(makeStatus(), { api })
-    fireEvent.click(switchOf(middleDotLabel))
+    fireEvent.change(input('下载源'), { target: { value: 'official' } })
     fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
     fireEvent.click(saveButton())
     await flush()
@@ -178,12 +189,12 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockResolvedValueOnce({ ok: false, errors: {} })
     renderPage(makeStatus(), { api })
-    fireEvent.change(input('优化指令'), { target: { value: '请把 Prompt 改得更短。' } })
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
 
     fireEvent.click(saveButton())
     await flush()
     expect(screen.getByRole('status').textContent).toBe('没有保存成功：dsh 的设置服务暂时不可用。改动已保留，可以再试一次。')
-    expect(input('优化指令').value).toBe('请把 Prompt 改得更短。')
+    expect(input('全局快捷键').value).toBe('Control+Alt+K')
     expect(saveButton().disabled).toBe(false)
 
     fireEvent.click(saveButton())
@@ -196,24 +207,12 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     expect(api.saveConfig).toHaveBeenCalledTimes(3)
   })
 
-  it('页面自己能查出的错误：相对路径的库目录、不合法的快捷键，「保存」不可用', () => {
+  it('页面自己能查出的错误：不合法的快捷键，「保存」不可用', () => {
     renderPage(makeStatus())
-    fireEvent.change(input('库目录'), { target: { value: 'Prompts' } })
-    expect(input('库目录').getAttribute('aria-invalid')).toBe('true')
-    expect(screen.getByText('库目录要写绝对路径，或以 ~ 开头。')).toBeTruthy()
-    expect(saveButton().disabled).toBe(true)
-    fireEvent.change(input('库目录'), { target: { value: '~/Prompts' } })
-    expect(saveButton().disabled).toBe(false)
-
     fireEvent.change(input('全局快捷键'), { target: { value: 'Shift+P' } })
     expect(input('全局快捷键').getAttribute('aria-invalid')).toBe('true')
     expect(saveButton().disabled).toBe(true)
-  })
-
-  it('Windows 上的库目录按盘符判断（按运行 dsh 的电脑的平台）', () => {
-    renderPage(makeStatus({ platform: 'win32' }))
-    fireEvent.change(input('库目录'), { target: { value: 'D:\\Prompts' } })
-    expect(input('库目录').getAttribute('aria-invalid')).toBeNull()
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Shift+P' } })
     expect(saveButton().disabled).toBe(false)
   })
 
@@ -235,104 +234,76 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     await flush()
   })
 
-  it('「恢复默认指令」只把指令框暂存为空，占位文字是默认指令', async () => {
-    const status = makeStatus()
-    const { api } = renderPage({ ...status, config: { ...status.config, optimizeInstruction: '自定义指令' } })
-    const textarea = input('优化指令')
-    expect(textarea.value).toBe('自定义指令')
-    expect(textarea.placeholder).toBe(DEFAULT_INSTRUCTION.zh)
-
-    const restore = screen.getByRole<HTMLButtonElement>('button', { name: '恢复默认指令' })
-    fireEvent.click(restore)
-    expect(input('优化指令').value).toBe('')
-    expect(restore.disabled).toBe(true)
-    expect(api.saveConfig).not.toHaveBeenCalled()
-
-    fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenCalledWith({ optimizeInstruction: '' })
-    await flush()
-  })
-
-  it('默认指令的占位文字跟着界面语言', () => {
-    renderPage(makeStatus(), { t: tEn, language: 'en' })
-    expect(input('Optimization instruction').placeholder).toBe(DEFAULT_INSTRUCTION.en)
-  })
-
-  it('库目录的占位文字是当前生效的库目录', () => {
-    renderPage(makeStatus())
-    expect(input('库目录').placeholder).toBe('/Users/me/.dsh/promptx/library')
-  })
-
   it('别处改了配置：没暂存的字段显示新值，暂存着的字段保持用户的值', () => {
     const { store } = renderPage(makeStatus())
     fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
     act(() => {
       const next = makeStatus({ seq: 5 })
-      store.set({ status: { ...next, config: { ...next.config, libraryDir: '/Shared/Prompts', globalShortcut: 'Control+Alt+J' } }, error: null })
+      store.set({ status: { ...next, config: { ...next.config, runtimeSource: 'official', globalShortcut: 'Control+Alt+J' } }, error: null })
     })
-    expect(input('库目录').value).toBe('/Shared/Prompts')
+    expect(select('下载源').value).toBe('official')
     expect(input('全局快捷键').value).toBe('Control+Alt+K')
   })
 
   it('保存成功后、Host 的新配置还没到：字段显示刚保存的值，「保存」不可用，不会把同样的改动再提交一遍', async () => {
     const { api, store } = renderPage(makeStatus())
-    fireEvent.change(input('库目录'), { target: { value: '/Users/me/Prompts' } })
-    fireEvent.click(switchOf(middleDotLabel))
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
+    fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
     fireEvent.click(saveButton())
     await flush()
     expect(api.saveConfig).toHaveBeenCalledTimes(1)
-    expect(input('库目录').value).toBe('/Users/me/Prompts')
-    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('false')
+    expect(input('全局快捷键').value).toBe('Control+Alt+K')
+    expect(select('下载源').value).toBe('mirror')
     expect(saveButton().disabled).toBe(true)
 
     // 期间来了一次配置没变的状态（例如下载进度）：仍按刚保存的值显示。
     act(() => {
       store.set({ status: makeStatus({ seq: 2, companionPid: 4243 }), error: null })
     })
-    expect(input('库目录').value).toBe('/Users/me/Prompts')
+    expect(input('全局快捷键').value).toBe('Control+Alt+K')
     expect(saveButton().disabled).toBe(true)
 
     // 新配置到了：和刚保存的一样，页面不跳动。
     act(() => {
       const next = makeStatus({ seq: 3 })
-      store.set({ status: { ...next, config: { ...next.config, libraryDir: '/Users/me/Prompts', convertMiddleDot: false } }, error: null })
+      store.set({ status: { ...next, config: { ...next.config, globalShortcut: 'Control+Alt+K', runtimeSource: 'mirror' } }, error: null })
     })
-    expect(input('库目录').value).toBe('/Users/me/Prompts')
-    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('false')
+    expect(input('全局快捷键').value).toBe('Control+Alt+K')
+    expect(select('下载源').value).toBe('mirror')
     expect(saveButton().disabled).toBe(true)
 
-    // 之后配置又被改回保存前的样子（别的页面改的）：照 Host 显示，刚才那次保存的值不会又冒出来。
+    // 之后配置又被改回保存前的样子（别处改的）：照 Host 显示，刚才那次保存的值不会又冒出来。
     act(() => {
       store.set({ status: makeStatus({ seq: 4 }), error: null })
     })
-    expect(input('库目录').value).toBe('')
-    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('true')
+    expect(input('全局快捷键').value).toBe('Control+P')
+    expect(select('下载源').value).toBe('auto')
     expect(saveButton().disabled).toBe(true)
   })
 
   it('保存成功后 Host 报来的值和提交的不同（别处同时改了）：以 Host 为准', async () => {
     const { store } = renderPage(makeStatus())
-    fireEvent.change(input('库目录'), { target: { value: '/Users/me/Prompts' } })
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
     fireEvent.click(saveButton())
     await flush()
     act(() => {
       const next = makeStatus({ seq: 2 })
-      store.set({ status: { ...next, config: { ...next.config, libraryDir: '/Shared/Prompts' } }, error: null })
+      store.set({ status: { ...next, config: { ...next.config, globalShortcut: 'Control+Alt+J' } }, error: null })
     })
-    expect(input('库目录').value).toBe('/Shared/Prompts')
+    expect(input('全局快捷键').value).toBe('Control+Alt+J')
     expect(saveButton().disabled).toBe(true)
   })
 
   it('保存成功、新配置还没到时又改回原值：算改动，提交原值', async () => {
     const { api } = renderPage(makeStatus())
-    fireEvent.click(switchOf(middleDotLabel))
+    fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
     fireEvent.click(saveButton())
     await flush()
-    fireEvent.click(switchOf(middleDotLabel))
-    expect(switchOf(middleDotLabel).getAttribute('aria-checked')).toBe('true')
+    fireEvent.change(input('下载源'), { target: { value: 'auto' } })
+    expect(select('下载源').value).toBe('auto')
     expect(saveButton().disabled).toBe(false)
     fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenLastCalledWith({ convertMiddleDot: true })
+    expect(api.saveConfig).toHaveBeenLastCalledWith({ runtimeSource: 'auto' })
     await flush()
   })
 
@@ -360,31 +331,6 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     expect(input('全局快捷键').value).toBe('Control+Alt+J')
   })
 
-  it('只有空白的优化指令和 Host 一样按「用默认指令」处理，提交空串', async () => {
-    const status = makeStatus()
-    const { api } = renderPage({ ...status, config: { ...status.config, optimizeInstruction: '自定义指令' } })
-    fireEvent.change(input('优化指令'), { target: { value: '  \n ' } })
-    fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenCalledWith({ optimizeInstruction: '' })
-    await flush()
-    expect(input('优化指令').value).toBe('')
-    expect(saveButton().disabled).toBe(true)
-  })
-
-  it('指令本来就是默认（空）时只输入空白不算改动', () => {
-    renderPage(makeStatus())
-    fireEvent.change(input('优化指令'), { target: { value: '   ' } })
-    expect(saveButton().disabled).toBe(true)
-  })
-
-  it('有内容的指令原样提交，不去掉首尾空白', async () => {
-    const { api } = renderPage(makeStatus())
-    fireEvent.change(input('优化指令'), { target: { value: '  只改错字。\n' } })
-    fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenCalledWith({ optimizeInstruction: '  只改错字。\n' })
-    await flush()
-  })
-
   it('保存进行中离开页面：回复回来后不再更新已卸载的组件', async () => {
     const reply = deferred<ConfigUpdateResult>()
     const api = fakeApi()
@@ -392,11 +338,11 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const { unmount } = renderPage(makeStatus(), { api })
-      fireEvent.click(switchOf(middleDotLabel))
+      fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
       fireEvent.click(saveButton())
       unmount()
       await act(async () => {
-        reply.resolve({ ok: false, errors: { convertMiddleDot: 'value-invalid' } })
+        reply.resolve({ ok: false, errors: { runtimeSource: 'value-invalid' } })
         await reply.promise
       })
       expect(errors).not.toHaveBeenCalled()
@@ -407,68 +353,40 @@ describe('暂存与保存（design-spec 4.4，独立审查 COV-02）', () => {
 
   it('离开页面丢弃没保存的改动', () => {
     const { store, unmount } = renderPage(makeStatus())
-    fireEvent.change(input('库目录'), { target: { value: '/tmp/unsaved' } })
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Control+Alt+K' } })
     unmount()
-    render(<ConfigPage t={tZh} store={store} api={fakeApi()} language="zh" />)
-    expect(input('库目录').value).toBe('')
+    render(<ConfigPage t={tZh} store={store} api={fakeApi()} />)
+    expect(input('全局快捷键').value).toBe('Control+P')
   })
 })
 
-describe('开关', () => {
+describe('控件', () => {
   it('旧配置启用了失焦隐藏时，设置页也不显示该开关', () => {
     const { config } = makeStatus()
     renderPage(makeStatus({ config: { ...config, hideOnBlur: true } }))
     expect(screen.queryByRole('switch', { name: '失焦时隐藏' })).toBeNull()
   })
 
-  it('role="switch" 和 aria-checked 跟着切换；点标签文字也能切换', () => {
-    renderPage(makeStatus())
-    const dot = switchOf(middleDotLabel)
-    expect(dot.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(dot)
-    expect(dot.getAttribute('aria-checked')).toBe('false')
-    fireEvent.click(screen.getByText(middleDotLabel))
-    expect(dot.getAttribute('aria-checked')).toBe('true')
-
-    const confirm = switchOf('删除前确认')
-    expect(confirm.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(confirm)
-    expect(switchOf('删除前确认').getAttribute('aria-checked')).toBe('false')
-  })
-
   it('每个控件都有可见的名字，可以用键盘到达', () => {
     renderPage(makeStatus())
-    for (const label of ['库目录', '全局快捷键', '优化指令', '下载源']) expect(input(label).tabIndex).toBe(0)
-    for (const label of [middleDotLabel, '删除前确认']) expect(switchOf(label).tagName).toBe('BUTTON')
-    for (const name of ['录制', '重启小窗', '显示小窗', '删除运行时', '恢复默认指令', '保存']) {
+    for (const label of ['全局快捷键', '下载源']) expect(input(label).tabIndex).toBe(0)
+    for (const name of ['打开 PromptX 设置', '录制', '重启小窗', '显示小窗', '删除运行时', '保存']) {
       expect(screen.getByRole('button', { name }).tagName).toBe('BUTTON')
     }
   })
 })
 
 describe('快捷键录制', () => {
-  it('工具栏快捷键可以录制、停用，暂存后一次提交', async () => {
+  it('全局快捷键和某个工具栏快捷键（在设置窗口里改的）落在同一组键上时提示冲突', async () => {
     const { api } = renderPage(makeStatus())
-    const record = screen.getByRole('button', { name: '录制「显示或隐藏聊天」快捷键' })
-    fireEvent.click(record)
-    fireEvent.keyDown(record, { key: 'ArrowRight', code: 'ArrowRight', metaKey: true })
-    expect(input('显示或隐藏聊天').value).toBe('Command+Right')
-    fireEvent.change(input('关闭小窗'), { target: { value: '' } })
-    expect(api.saveConfig).not.toHaveBeenCalled()
-    fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenCalledWith({ shortcutChat: 'Command+Right', shortcutClose: '' })
-    await flush()
-  })
-
-  it('同一个实际按键占用另一个 PromptX 快捷键时提示冲突', async () => {
-    const { api } = renderPage(makeStatus())
-    fireEvent.change(input('显示或隐藏聊天'), { target: { value: 'Cmd+S' } })
-    expect(input('显示或隐藏聊天').getAttribute('aria-invalid')).toBe('true')
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Cmd+S' } })
+    expect(input('全局快捷键').getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText('此组合已被另一个 PromptX 动作使用。')).toBeTruthy()
     expect(saveButton().disabled).toBe(true)
-    fireEvent.change(input('保存 Prompt'), { target: { value: '' } })
+    fireEvent.change(input('全局快捷键'), { target: { value: 'Cmd+Alt+S' } })
     expect(saveButton().disabled).toBe(false)
     fireEvent.click(saveButton())
-    expect(api.saveConfig).toHaveBeenCalledWith({ shortcutChat: 'Command+S', shortcutSave: '' })
+    expect(api.saveConfig).toHaveBeenCalledWith({ globalShortcut: 'Command+Alt+S' })
     await flush()
   })
 
@@ -514,7 +432,7 @@ describe('快捷键录制', () => {
     const api = fakeApi()
     api.saveConfig.mockImplementation(() => reply.promise)
     renderPage(makeStatus(), { api })
-    fireEvent.click(switchOf(middleDotLabel))
+    fireEvent.change(input('下载源'), { target: { value: 'mirror' } })
     fireEvent.click(saveButton())
     expect(screen.getByRole<HTMLButtonElement>('button', { name: '录制' }).disabled).toBe(true)
     await act(async () => {
@@ -914,7 +832,7 @@ describe('整页状态', () => {
   it('连接中断时保留上次的状态，并提示正在重连', () => {
     renderPage(makeStatus(), { error: { code: 'promptx/channel/timeout' } })
     expect(screen.getByText('和 PromptX 插件的连接断了，正在重连；下面显示的可能不是最新状态。')).toBeTruthy()
-    expect(input('库目录')).toBeTruthy()
+    expect(input('全局快捷键')).toBeTruthy()
   })
 
   it('样式随组件渲染，类名都带 promptx- 前缀，只用 dsh 的主题变量上色', () => {
@@ -928,10 +846,12 @@ describe('整页状态', () => {
   })
 
   it('英文界面（需求 S-03）', () => {
-    const { container } = renderPage(makeStatus(), { t: tEn, language: 'en' })
+    const { container } = renderPage(makeStatus(), { t: tEn })
     expect(statusLine(container)).toBe('Running · Global shortcut ⌃P is active · Runtime 44.10.2')
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy()
     expect(screen.queryByRole('switch', { name: 'Hide when inactive' })).toBeNull()
-    expect(screen.getByRole('heading', { name: 'Prompt library' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'PromptX window' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open PromptX settings' })).toBeTruthy()
+    expect(container.querySelector('[data-promptx-more-settings]')?.textContent).toContain('PromptX settings window')
   })
 })

@@ -168,8 +168,19 @@ export class FakeBridge implements PromptxBridge {
     copyText: vi.fn(async (_text: string): Promise<BridgeResult<null>> => ok(null)),
     getBounds: vi.fn(async (): Promise<WindowBounds> => ({ ...this.bounds })),
     setWidth: vi.fn(async (width: number, anchor: 'left' | 'right'): Promise<WindowBounds> => this.applyWidth(width, anchor)),
-    openSettings: vi.fn(async (): Promise<BridgeResult<{ navigated: boolean }>> => ok({ navigated: true })),
+    openSettings: vi.fn<PromptxBridge['window']['openSettings']>(async () => ok(null)),
     setMinWidth: vi.fn<(width: number) => void>(),
+  }
+
+  /** 设置窗口的接口：主窗口不用它；设置页的用例按需替换这些处理函数。 */
+  readonly settings = {
+    getState: vi.fn<PromptxBridge['settings']['getState']>(async () => fail('promptx/channel/closed')),
+    update: vi.fn<PromptxBridge['settings']['update']>(async () => ok({ ok: true as const })),
+    chooseLibraryDir: vi.fn<PromptxBridge['settings']['chooseLibraryDir']>(async () => ok(null)),
+    openLibraryDir: vi.fn<PromptxBridge['settings']['openLibraryDir']>(async () => ok(null)),
+    openInDsh: vi.fn<PromptxBridge['settings']['openInDsh']>(async () => ok({ navigated: false })),
+    setRecording: vi.fn<PromptxBridge['settings']['setRecording']>(),
+    close: vi.fn<PromptxBridge['settings']['close']>(async () => {}),
   }
 
   readonly prefs = {

@@ -216,6 +216,27 @@ export const CONFIG_PAGE_CSS = `
   margin: 0;
 }
 
+/* 顶部「其他设置在 PromptX 设置窗口里」：说明在左，「打开 PromptX 设置」在右，窄时按钮换到下一行。 */
+.promptx-more + .promptx-section,
+.promptx-notice + .promptx-more {
+  margin-top: 12px;
+}
+
+.promptx-more-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.promptx-more-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .promptx-button {
   box-sizing: border-box;
   display: inline-flex;

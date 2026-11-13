@@ -7,6 +7,7 @@ import { PromptxError } from './shared/errors.ts'
 import type {
   Binding,
   CompanionStatus,
+  ConfigUpdateResult,
   ErrorInfo,
   FolderSel,
   LibraryScope,
@@ -14,6 +15,7 @@ import type {
   PromptMetadata,
   RestoreTarget,
   SaveMode,
+  SettingsData,
   TextSelection,
 } from './shared/types.ts'
 
@@ -24,6 +26,10 @@ export interface CompanionHandlerDeps {
   optimize: OptimizeApi
   suggestMetadata: (text: string) => Promise<PromptMetadata | null>
   openSettings: () => { open: string | null; navigated: boolean }
+  /** 设置窗口要显示的配置和说明（V0.1.6）。 */
+  getSettings: () => SettingsData
+  /** 设置窗口提交的改动：和 dsh 配置页同一个更新函数（web/config-update.ts），补丁的形状由它检查。 */
+  updateSettings: (patch: unknown) => Promise<ConfigUpdateResult>
   onStatus: (status: CompanionStatus) => void
   onRestartRequest: () => void
 }
@@ -138,6 +144,8 @@ export function attachCompanionHandlers(peer: HostPeer, deps: CompanionHandlerDe
   peer.handle('optimize.state', () => ({ session: deps.optimize.state() }))
 
   peer.handle('host.openSettings', () => deps.openSettings())
+  peer.handle('settings.get', () => deps.getSettings())
+  peer.handle('settings.update', params => deps.updateSettings(record(params).patch))
 
   peer.on('status', (status) => {
     // 字段不合格的整条忽略：Host 拿 locale 选优化指令的语言、拿 rendererError 给配置页显示，不能用半截数据。

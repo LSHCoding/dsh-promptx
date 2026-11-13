@@ -49,7 +49,7 @@ export const CONFIG_FIELDS = [
   ...TOOLBAR_SHORTCUT_FIELDS, 'hideOnBlur', 'runtimeSource',
 ] as const satisfies readonly (keyof PromptxConfig)[]
 
-export type CompanionAction = 'restart' | 'show'
+export type CompanionAction = 'restart' | 'show' | 'settings'
 export type RuntimeAction = 'download' | 'delete'
 
 /**

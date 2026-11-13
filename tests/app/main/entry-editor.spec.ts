@@ -56,7 +56,7 @@ function setup(recovery: DraftRecord | null = null) {
   const createWindow = platform.createWindow.bind(platform)
   platform.createWindow = (options) => {
     const window = createWindow(options) as FakeWindow
-    if (options.entryEditor === true) window.onSend = (event, payload) => {
+    if (options.page === 'entry-editor') window.onSend = (event, payload) => {
       if (event !== 'entryEditor.state' || !autoPrepare) return
       const snapshot = payload as EntryEditorSnapshot
       if (snapshot.freezeId === null) return
@@ -88,7 +88,7 @@ describe('独立条目编辑窗口', () => {
   it('只打开子窗，目标由主进程绑定，不读取或改写主草稿', async () => {
     const h = setup()
     expect(await h.manager.open('a.md')).toEqual({ ok: true, value: null })
-    expect(h.child().options).toMatchObject({ parent: h.parent, entryEditor: true })
+    expect(h.child().options).toMatchObject({ parent: h.parent, page: 'entry-editor' })
     expect(h.child().visible).toBe(true)
     expect(h.manager.getState()).toMatchObject({ ok: true, value: { text: '原文', binding: { relPath: 'a.md' } } })
     expect(h.requests.map(call => call.method)).toEqual(['entryDraft.load', 'library.read', 'library.folders', 'entryDraft.save'])

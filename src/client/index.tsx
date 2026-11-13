@@ -101,21 +101,12 @@ export function apply(ctx: ClientContext): void {
     reporter.report()
   }), 'promptx: locale change')
 
-  const ConfigEntry = createConfigEntry({
-    store: loop,
-    api,
-    language: () => resolveLanguage(ctx.locale.getLocale().active),
-  })
+  const ConfigEntry = createConfigEntry({ store: loop, api })
   ctx.effect(() => ctx.slots.inject(CONFIG_SLOT, () => ctx.slots.register({
     name: CONFIG_SLOT,
     key: BUNDLE_NAME,
     locale: LOCALE_NS,
   }, ConfigEntry)), 'promptx: config page')
-}
-
-/** design-spec 4.7：以 zh 开头的界面语言用中文，其余用英文。 */
-function resolveLanguage(locale: string): 'zh' | 'en' {
-  return locale.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
 /** slot 渲染配置页时给的 props：插件页的 owner props（view）加上 dsh 按 `locale: 'promptx'` 注入的 `t`。 */
@@ -124,11 +115,11 @@ interface ConfigEntryProps {
   readonly t: PromptxTranslate
 }
 
-function createConfigEntry(deps: { store: StatusStore; api: PromptxApi; language: () => 'zh' | 'en' }): (props: ConfigEntryProps) => ReactNode {
+function createConfigEntry(deps: { store: StatusStore; api: PromptxApi }): (props: ConfigEntryProps) => ReactNode {
   return function PromptxConfigEntry({ view, t }: ConfigEntryProps): ReactNode {
     // bundle 的配置只以 page 渲染；summary 是 slot 契约里的一句话概述，这里也给出，换到别的位置时不至于空着。
     if (view === 'summary') return t('summary')
-    // 切换界面语言时 dsh 会换一个新的 t 重新渲染这里，所以在渲染时读当前语言就能跟上。
-    return <ConfigPage t={t} store={deps.store} api={deps.api} language={deps.language()} />
+    // 切换界面语言时 dsh 会换一个新的 t 重新渲染这里，文案跟着 t 走。
+    return <ConfigPage t={t} store={deps.store} api={deps.api} />
   }
 }

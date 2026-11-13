@@ -7,8 +7,11 @@
 
 import type { BridgeResult, EntryMetadataFields, Prefs, ResolvedConfig, WindowBounds } from '../../shared/bridge.ts'
 import { RENDERER_FORWARDED_METHODS, type RendererForwardedMethod } from '../../shared/protocol.ts'
+import { isSettingsSection, sanitizeSettingsPatch } from '../../shared/settings.ts'
+import type { SettingsSection } from '../../shared/types.ts'
 import { IPC_CHANNELS } from './channels.ts'
 import type { EntryEditorManager } from './entry-editor.ts'
+import type { SettingsWindowManager } from './settings-window.ts'
 
 export interface IpcEventLike {
   sender: unknown
@@ -38,7 +41,8 @@ export interface IpcHandlers {
   copyText(text: string): Promise<BridgeResult<null>>
   getBounds(): WindowBounds
   setWidth(width: number, anchor: 'left' | 'right'): WindowBounds
-  openSettings(): Promise<BridgeResult<{ navigated: boolean }>>
+  /** 打开设置窗口；section 不合法时按没传处理。 */
+  openSettings(section: SettingsSection | undefined): BridgeResult<null>
   getPrefs(): Prefs
   ready(info: ReadyInfo): void
   flushed(id: number): void
@@ -153,7 +157,7 @@ export function registerIpcHandlers(ipc: IpcMainLike, options: RegisterIpcOption
     return handlers.setWidth(width, anchor)
   })
 
-  handle(IPC_CHANNELS.windowOpenSettings, () => handlers.openSettings())
+  handle(IPC_CHANNELS.windowOpenSettings, ([section]) => handlers.openSettings(isSettingsSection(section) ? section : undefined))
 
   handle(IPC_CHANNELS.prefsGet, () => handlers.getPrefs())
 
@@ -230,6 +234,34 @@ export function registerEntryEditorIpc(
     const metadata = entryMetadataFields(fields)
     if (metadata === null) return
     editor.prepared(id, generation as number, text, { anchor: selection.anchor as number, head: selection.head as number }, metadata)
+  })
+}
+
+/** 设置窗口的通道（V0.1.6）：只接受设置窗口自己的 webContents；补丁先查类型和字段，Host 再完整校验。 */
+export function registerSettingsIpc(ipc: IpcMainLike, getSettings: () => SettingsWindowManager | null): void {
+  const trusted = (channel: string, sender: unknown): SettingsWindowManager => {
+    const settings = getSettings()
+    if (settings === null || !settings.isSender(sender)) throw new UntrustedSenderError(channel)
+    return settings
+  }
+  const handle = (channel: string, run: (settings: SettingsWindowManager, args: unknown[]) => unknown): void => {
+    ipc.handle(channel, (event, ...args) => run(trusted(channel, event.sender), args))
+  }
+  handle(IPC_CHANNELS.settingsGetState, settings => settings.getState())
+  handle(IPC_CHANNELS.settingsUpdate, (settings, [patch]) => {
+    const sanitized = sanitizeSettingsPatch(patch)
+    return sanitized === null ? { ok: false, error: INVALID } : settings.update(sanitized)
+  })
+  handle(IPC_CHANNELS.settingsChooseLibraryDir, settings => settings.chooseLibraryDir())
+  handle(IPC_CHANNELS.settingsOpenLibraryDir, settings => settings.openLibraryDir())
+  handle(IPC_CHANNELS.settingsOpenInDsh, settings => settings.openInDsh())
+  handle(IPC_CHANNELS.settingsClose, (settings) => {
+    settings.close()
+  })
+  ipc.on(IPC_CHANNELS.settingsRecording, (event, active) => {
+    const settings = getSettings()
+    if (settings === null || !settings.isSender(event.sender) || typeof active !== 'boolean') return
+    settings.setRecording(active)
   })
 }
 

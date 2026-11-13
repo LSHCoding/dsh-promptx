@@ -27,7 +27,7 @@ describe('配置页文案', () => {
     expect(zh.companionWaitingRuntime).toBe('小窗正在准备')
     expect(zh.restartCompanion).toBe('重启小窗')
     expect(zh.showCompanion).toBe('显示小窗')
-    expect(zh.restoreDefaultInstruction).toBe('恢复默认指令')
+    expect(zh.openSettingsWindow).toBe('打开 PromptX 设置')
     expect(zh.save).toBe('保存')
     expect(zh.saving).toBe('保存中…')
     expect(zh.retry).toBe('重试')

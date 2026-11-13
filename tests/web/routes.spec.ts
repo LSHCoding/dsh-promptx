@@ -35,6 +35,7 @@ interface Calls {
   updateConfig: unknown[]
   restart: number
   show: number
+  settings: number
   download: number
   remove: number
   reports: ClientStateReport[]
@@ -44,7 +45,7 @@ interface Calls {
 function setup(overrides: Partial<RouteDeps> = {}, options: { e2e?: boolean; pollTimeoutMs?: number } = {}) {
   const time = manualClock(50_000_000)
   const store = new StatusStore(statusPieces(), { now: time.now })
-  const calls: Calls = { updateConfig: [], restart: 0, show: 0, download: 0, remove: 0, reports: [], e2e: [] }
+  const calls: Calls = { updateConfig: [], restart: 0, show: 0, settings: 0, download: 0, remove: 0, reports: [], e2e: [] }
   const removeResult: RuntimeRemoveResult = { removed: ['44.10.2-darwin-arm64'], inUseBy: [{ profile: 'work', version: '44.10.1' }] }
   const e2e = (command: E2eCommand) => {
     calls.e2e.push(command)
@@ -63,6 +64,9 @@ function setup(overrides: Partial<RouteDeps> = {}, options: { e2e?: boolean; pol
       },
       show: () => {
         calls.show += 1
+      },
+      settings: () => {
+        calls.settings += 1
       },
     },
     runtime: {
@@ -374,7 +378,9 @@ describe('companion and runtime routes', () => {
     const { routes, calls } = setup()
     await expect(call(routes, ROUTE_PATHS.companion, { body: { action: 'restart' } })).resolves.toMatchObject({ status: 200, body: { ok: true } })
     await expect(call(routes, ROUTE_PATHS.companion, { body: { action: 'show' } })).resolves.toMatchObject({ status: 200, body: { ok: true } })
-    expect(calls).toMatchObject({ restart: 1, show: 1 })
+    // V0.1.6 追加 3：插件页的「打开 PromptX 设置」。
+    await expect(call(routes, ROUTE_PATHS.companion, { body: { action: 'settings' } })).resolves.toMatchObject({ status: 200, body: { ok: true } })
+    expect(calls).toMatchObject({ restart: 1, show: 1, settings: 1 })
   })
 
   it('runs the runtime actions and reports versions another profile still uses', async () => {
@@ -401,7 +407,7 @@ describe('companion and runtime routes', () => {
       expect(reply.status, JSON.stringify(body)).toBe(400)
       expect(reply.body.ok).toBe(false)
     }
-    expect(calls).toMatchObject({ restart: 0, show: 0, download: 0, remove: 0 })
+    expect(calls).toMatchObject({ restart: 0, show: 0, settings: 0, download: 0, remove: 0 })
   })
 
   it('answers a business failure with 409 and its error code, anything else with 500', async () => {
@@ -411,12 +417,17 @@ describe('companion and runtime routes', () => {
         show: () => {
           throw new Error('peer closed')
         },
+        settings: () => {
+          throw new PromptxError('promptx/channel/closed')
+        },
       },
     })
     const business = await call(routes, ROUTE_PATHS.companion, { body: { action: 'restart' } })
     expect(business).toMatchObject({ status: 409, body: { ok: false, error: { code: 'promptx/runtime/download-failed', detail: 'ECONNRESET' } } })
     const internal = await call(routes, ROUTE_PATHS.companion, { body: { action: 'show' } })
     expect(internal).toMatchObject({ status: 500, body: { ok: false, error: { code: 'promptx/internal', detail: 'peer closed' } } })
+    const closed = await call(routes, ROUTE_PATHS.companion, { body: { action: 'settings' } })
+    expect(closed).toMatchObject({ status: 409, body: { ok: false, error: { code: 'promptx/channel/closed' } } })
   })
 })
 

@@ -479,7 +479,7 @@ export class EntryEditorManager {
     if (this.window !== null && !this.window.isDestroyed()) return
     const theme = this.options.config()?.resolvedTheme ?? 'light'
     this.window = this.options.platform.createWindow({
-      width: 680, height: 540, backgroundColor: WINDOW_BACKGROUND[theme], parent: this.options.parent, entryEditor: true,
+      width: 680, height: 540, backgroundColor: WINDOW_BACKGROUND[theme], parent: this.options.parent, page: 'entry-editor',
     })
     this.window.onClose((prevent) => {
       if (this.disposed) return

@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin with a small companion window. Press a global shortcut in any app and a prompt editor floats above it. Write a prompt, reuse one from your Markdown prompt library, or let the model configured in dsh rewrite it. Press ⌘↩ to copy the whole prompt; the window hides and focus returns to the app you were using, ready to paste.
 
-> Version v0.1.5. macOS is the supported platform. Windows and Linux are previews pending CI and manual verification.
+> Version v0.1.6. macOS is the supported platform. Windows and Linux are previews pending CI and manual verification.
 
 ## What it does
 
@@ -18,7 +18,7 @@ PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 
 - DeepSeek Harness 0.2.2-rc.1 or a later 0.2.x release (desktop app or `dsh web`).
 - macOS 13 or later (Apple silicon or Intel). Windows 10/11 and Linux are previews.
-- Network access on first run: the companion window runs on Electron 44.10.2 (about 125–160 MB), which PromptX downloads once into the dsh data directory and verifies against SHA-256 checksums shipped with the plugin. The download uses a mirror in mainland China first and falls back to GitHub; you can choose the source in the plugin settings.
+- Network access on first run: the companion window runs on Electron 44.10.2 (about 125–160 MB), which PromptX downloads once into the dsh data directory and verifies against SHA-256 checksums shipped with the plugin. The download uses a mirror in mainland China first and falls back to GitHub; you can choose the source in PromptX settings or on the plugin page in dsh.
 
 ## Install from a local checkout
 
@@ -51,9 +51,9 @@ Double-click a library entry to insert its body at the editor's cursor, replacin
 
 Use **Open in editor** on a library entry to edit its body, title, tags, and folder in a separate window above PromptX. Separate tags with commas to keep phrases like `Code Review` together. **Save changes** and ⌘S / Ctrl+S update the selected entry and move it if you chose a different folder. Closing or switching away from unsaved edits asks whether to save, discard, or cancel. Unfinished entry edits have their own recovery draft.
 
-With input conversions enabled, typing two `·` characters produces two backticks; a third creates a code block. Two `¥` or `￥` characters produce `$$`; a third creates a display math block. Single characters and pasted text are preserved. Each conversion can be undone, and each feature has its own switch in the plugin settings.
+With input conversions enabled, typing two `·` characters produces two backticks; a third creates a code block. Two `¥` or `￥` characters produce `$$`; a third creates a display math block. Single characters and pasted text are preserved. Each conversion can be undone, and each feature has its own switch in PromptX settings.
 
-The menu bar (macOS) or tray icon has Show/Hide, Reset window position, Settings…, and Restart window. Use the gear in the editor toolbar to open PromptX settings in dsh. The seven toolbar shortcuts can be changed there alongside the global shortcut, library folder, delete confirmation, input conversions, rewrite instruction, and runtime download source.
+The menu bar (macOS) or tray icon has Show/Hide, Reset window position, Settings…, and Restart window. The gear in the editor toolbar and Settings… open the PromptX settings window above the editor, without switching to dsh. Change the global shortcut and the seven toolbar shortcuts by recording a key combination, choose the library folder with the system folder picker, and adjust delete confirmation, input conversions, the rewrite instruction, and the runtime download source. Each change takes effect immediately. The PromptX plugin page in dsh keeps what has to work even when the window isn't running: the window status, Show window, Restart window, runtime download and deletion, the download source, and the global shortcut. Its Open PromptX settings button opens the settings window, and the settings window's About section links back to the plugin page.
 
 ## Where data lives
 
@@ -77,7 +77,7 @@ PromptX stores your library and drafts locally. When you save a new prompt or re
 npx @deepseek-ai/dsh plugin --profile <your profile> remove dsh-promptx
 ```
 
-Removing the plugin keeps your library and draft. To reclaim disk space, delete the runtime from the PromptX settings page before removing the plugin, or delete `promptx/runtime/` in the dsh data directory afterwards.
+Removing the plugin keeps your library and draft. To reclaim disk space, delete the runtime from the PromptX plugin page in dsh before removing the plugin, or delete `promptx/runtime/` in the dsh data directory afterwards.
 
 ## Development
 

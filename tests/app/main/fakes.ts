@@ -6,7 +6,15 @@ import { PassThrough } from 'node:stream'
 import { IPC_CHANNELS } from '../../../src/app/main/channels.ts'
 import type { ClipboardLike } from '../../../src/app/main/clipboard.ts'
 import type { IpcEventLike, IpcMainLike } from '../../../src/app/main/ipc.ts'
-import type { CompanionPlatform, MainWindow, MessageBoxOptions, TrayHandle, WindowCreateOptions, WindowEventName } from '../../../src/app/main/platform.ts'
+import type {
+  ChooseDirectoryOptions,
+  CompanionPlatform,
+  MainWindow,
+  MessageBoxOptions,
+  TrayHandle,
+  WindowCreateOptions,
+  WindowEventName,
+} from '../../../src/app/main/platform.ts'
 import type { TrayAction, TrayModel } from '../../../src/app/main/tray-model.ts'
 import type { WorkspaceOptions } from '../../../src/app/main/window-controller.ts'
 import type { BridgeEventName, BridgeResult } from '../../../src/shared/bridge.ts'
@@ -313,6 +321,12 @@ export class FakePlatform implements CompanionPlatform {
   readonly calls: string[] = []
   readonly windows: FakeWindow[] = []
   readonly opened: string[] = []
+  /** shell.openPath 打开过的目录。 */
+  readonly openedPaths: string[] = []
+  openPathFails = false
+  /** 选择文件夹对话框的调用和下一次的回答（null 表示取消）。 */
+  readonly chosen: { window: MainWindow; options: ChooseDirectoryOptions }[] = []
+  chooseDirectoryAnswer: string | null = null
   languages: string[]
   dark: boolean
   themeSource = 'system'
@@ -442,6 +456,17 @@ export class FakePlatform implements CompanionPlatform {
     if (this.openFails) return Promise.reject(new Error('no handler'))
     this.opened.push(url)
     return Promise.resolve()
+  }
+
+  openPath(path: string): Promise<void> {
+    if (this.openPathFails) return Promise.reject(new Error(`Failed to open path ${path}`))
+    this.openedPaths.push(path)
+    return Promise.resolve()
+  }
+
+  chooseDirectory(window: MainWindow, options: ChooseDirectoryOptions): Promise<string | null> {
+    this.chosen.push({ window, options })
+    return Promise.resolve(this.chooseDirectoryAnswer)
   }
 
   createWindow(options: WindowCreateOptions): MainWindow {

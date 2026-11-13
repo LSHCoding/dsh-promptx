@@ -8,16 +8,17 @@ import { CompanionApp, type CompanionTimings } from '../../../src/app/main/app.t
 import { IPC_CHANNELS } from '../../../src/app/main/channels.ts'
 import { companionPaths, type CompanionEnv, type CompanionPaths } from '../../../src/app/main/env.ts'
 import { physicalShortcutKey, shortcutLockPath } from '../../../src/app/main/shortcut-lock.ts'
-import type { EntryEditorSnapshot, ResolvedConfig } from '../../../src/shared/bridge.ts'
+import type { EntryEditorSnapshot, ResolvedConfig, SettingsSnapshot } from '../../../src/shared/bridge.ts'
 import { PromptxError } from '../../../src/shared/errors.ts'
 import { initialWindowBounds } from '../../../src/shared/layout.ts'
 import { PROTOCOL_VERSION, RPC_ERROR, type E2eResult, type HelloResult } from '../../../src/shared/protocol.ts'
-import type { CompanionStatus, LibraryReadResult } from '../../../src/shared/types.ts'
+import type { CompanionStatus, ConfigUpdateResult, LibraryReadResult, SettingsData } from '../../../src/shared/types.ts'
 import {
   BASE_CONFIG,
   FakeHost,
   FakePlatform,
   FakeRenderer,
+  FakeWindow,
   sleep,
   until,
   WORK_AREA,
@@ -409,6 +410,24 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
     expect(harness.platform.window.visible).toBe(true)
   })
 
+  it('opens the settings window on the Host settings command, also when it came before the window existed (V0.1.6 追加 3)', async () => {
+    const harness = start()
+    harness.host.peer.handle('settings.get', () => SETTINGS_DATA)
+    await until(() => harness.app.mode !== null, 2000, 'hello')
+    harness.host.peer.notify('window.command', { command: 'settings' })
+    await sleep(20)
+    harness.platform.ready()
+    await until(() => harness.platform.windows.some(window => window.options.page === 'settings' && window.visible), 2000, 'pending settings')
+    expect(harness.platform.window.visible).toBe(true)
+    // 小窗隐藏后再收到：先显示小窗，再打开设置窗口。
+    await sleep(160)
+    harness.platform.shortcuts.press('Control+P')
+    expect(harness.platform.window.visible).toBe(false)
+    harness.host.peer.notify('window.command', { command: 'settings' })
+    await until(() => harness.platform.window.visible && settingsWindow(harness.platform).visible, 2000, 'settings after hide')
+    expect(harness.platform.windows.filter(window => window.options.page === 'settings')).toHaveLength(1)
+  })
+
   it('only hides on a system close (Alt+F4) and does not exit (TC-11)', async () => {
     const { platform } = await boot()
     platform.shortcuts.press('Control+P')
@@ -458,20 +477,63 @@ describe('showing and hiding (F-01, F-02, D10)', () => {
   })
 })
 
+const SETTINGS_DATA: SettingsData = {
+  config: {
+    libraryDir: '', confirmDelete: true, convertMiddleDot: true, convertYen: true, optimizeInstruction: '', globalShortcut: 'Control+P',
+    shortcutLibrary: 'CommandOrControl+L', shortcutSave: 'CommandOrControl+S', shortcutOptimize: 'CommandOrControl+Shift+O',
+    shortcutClear: '', shortcutChat: '', shortcutSettings: '', shortcutClose: 'Escape', hideOnBlur: false, runtimeSource: 'auto',
+  },
+  effectiveLibraryDir: '/Users/me/.dsh/promptx/library',
+  defaultLibraryDir: '/Users/me/.dsh/promptx/library',
+  defaultShortcut: 'Control+P',
+  defaultInstruction: { zh: '默认指令', en: 'Default instruction' },
+  platform: 'darwin',
+  hostVersion: '0.1.6',
+  profile: 'promptx-dev',
+  runtime: { version: '44.10.2', source: 'mirror' },
+}
+
+function settingsWindow(platform: FakePlatform): FakeWindow {
+  const window = platform.windows.find(item => item.options.page === 'settings')
+  if (window === undefined) throw new Error('no settings window')
+  return window
+}
+
+function settingsInvoke(platform: FakePlatform, channel: string, ...args: unknown[]): Promise<unknown> {
+  return platform.ipc.invoke(settingsWindow(platform).sender, channel, ...args)
+}
+
+function lastSnapshot(window: FakeWindow): SettingsSnapshot {
+  const sent = window.sent.filter(item => item.event === 'settings.state').at(-1)
+  if (sent === undefined) throw new Error('no settings snapshot')
+  return sent.payload as SettingsSnapshot
+}
+
 describe('tray menu (F-05)', () => {
   it('shows, hides, resets the position, opens settings and asks the Host to restart', async () => {
     const { platform, host } = await boot()
-    host.peer.handle('host.openSettings', () => ({ open: 'dsh://open', navigated: false }))
+    let dshRequests = 0
+    host.peer.handle('host.openSettings', () => {
+      dshRequests++
+      return { open: 'dsh://open', navigated: false }
+    })
+    host.peer.handle('settings.get', () => SETTINGS_DATA)
     platform.clickTray('toggle')
     expect(platform.window.visible).toBe(true)
     await until(() => platform.tray?.last?.items.some(item => item.kind === 'action' && item.label === 'Hide PromptX') === true, 2000, 'label')
     platform.window.setBounds({ x: 5000, y: 5000, width: 600, height: 400 })
     platform.clickTray('reset-position')
     expect(platform.window.bounds).toEqual(initialWindowBounds(WORK_AREA))
+    // V0.1.6：「设置…」打开 PromptX 自己的设置窗口，不再唤起 dsh。小窗隐藏时先显示小窗。
+    platform.window.hide()
     platform.clickTray('settings')
-    await until(() => platform.opened.length === 1, 2000, 'open settings')
-    expect(platform.opened).toEqual(['dsh://open'])
-    expect(platform.window.visible).toBe(false)
+    expect(platform.window.visible).toBe(true)
+    expect(platform.windows).toHaveLength(2)
+    expect(settingsWindow(platform).options).toMatchObject({ page: 'settings', parent: platform.window, minWidth: 600, minHeight: 440 })
+    expect(settingsWindow(platform).visible).toBe(true)
+    await sleep(20)
+    expect(platform.opened).toEqual([])
+    expect(dshRequests).toBe(0)
     platform.clickTray('restart')
     await until(() => host.of('host.restartCompanion').length === 1, 2000, 'restart')
   })
@@ -541,31 +603,20 @@ describe('renderer requests over IPC (5.3, 9)', () => {
     expect(platform.window.visible).toBe(true)
   })
 
-  it('opens settings: dsh://open hides at once; a page that navigated keeps the toast for a moment', async () => {
+  it('opens the settings window from the main window instead of dsh (V0.1.6)', async () => {
     const { platform, host, renderer } = await boot()
-    const replies = [{ open: 'dsh://open', navigated: true }, { open: null, navigated: true }]
-    host.peer.handle('host.openSettings', () => replies.shift() ?? { open: null, navigated: false })
-    platform.shortcuts.press('Control+P')
-    await expect(renderer.invoke(IPC_CHANNELS.windowOpenSettings)).resolves.toEqual({ ok: true, value: { navigated: true } })
-    expect(platform.opened).toEqual(['dsh://open'])
-    expect(platform.window.visible).toBe(false)
-
-    await sleep(160)
-    platform.shortcuts.press('Control+P')
-    await expect(renderer.invoke(IPC_CHANNELS.windowOpenSettings)).resolves.toEqual({ ok: true, value: { navigated: true } })
-    expect(platform.window.visible).toBe(true)
-    await until(() => !platform.window.visible, 2000, 'delayed hide')
-    expect(platform.opened).toEqual(['dsh://open'])
-  })
-
-  it('reports a settings failure and keeps the window', async () => {
-    const { platform, host, renderer } = await boot()
+    let dshRequests = 0
     host.peer.handle('host.openSettings', () => {
-      throw new PromptxError('promptx/settings/unavailable')
+      dshRequests++
+      return { open: 'dsh://open', navigated: true }
     })
+    host.peer.handle('settings.get', () => SETTINGS_DATA)
     platform.shortcuts.press('Control+P')
-    await expect(renderer.invoke(IPC_CHANNELS.windowOpenSettings)).resolves.toEqual({ ok: false, error: { code: 'promptx/settings/unavailable' } })
+    await expect(renderer.invoke(IPC_CHANNELS.windowOpenSettings)).resolves.toEqual({ ok: true, value: null })
     expect(platform.window.visible).toBe(true)
+    expect(settingsWindow(platform).visible && settingsWindow(platform).focused).toBe(true)
+    expect(dshRequests).toBe(0)
+    expect(platform.opened).toEqual([])
   })
 
   it('reads bounds, sets the width and follows the minimum width of the open panes (COV-13)', async () => {
@@ -592,6 +643,223 @@ describe('renderer requests over IPC (5.3, 9)', () => {
     expect(prefs.window).toMatchObject({ x: 222, y: 111 })
     expect(prefs.panes).toMatchObject({ library: true, listWidth: 280 })
     await expect(renderer.invoke(IPC_CHANNELS.prefsGet)).resolves.toMatchObject({ panes: { library: true } })
+  })
+})
+
+describe('settings window (V0.1.6)', () => {
+  async function openSettings(options: StartOptions = {}) {
+    const harness = await boot(options)
+    let data: SettingsData = structuredClone(SETTINGS_DATA)
+    const patches: unknown[] = []
+    // RpcPeer 不允许重复登记处理函数：用例要换回复时改这两个变量。
+    let update: (patch: unknown) => ConfigUpdateResult = () => ({ ok: true })
+    let dsh: () => { open: string | null; navigated: boolean } = () => ({ open: null, navigated: false })
+    harness.host.peer.handle('settings.get', () => data)
+    harness.host.peer.handle('settings.update', ({ patch }) => {
+      patches.push(patch)
+      return update(patch)
+    })
+    harness.host.peer.handle('host.openSettings', () => dsh())
+    harness.platform.shortcuts.press('Control+P')
+    await expect(harness.renderer.invoke(IPC_CHANNELS.windowOpenSettings)).resolves.toEqual({ ok: true, value: null })
+    const child = settingsWindow(harness.platform)
+    await until(() => child.sent.some(item => item.event === 'settings.state' && (item.payload as SettingsSnapshot).data !== null), 2000, 'snapshot')
+    return {
+      ...harness, child, patches,
+      setData: (next: SettingsData) => { data = next },
+      setUpdate: (next: typeof update) => { update = next },
+      setDsh: (next: typeof dsh) => { dsh = next },
+    }
+  }
+
+  it('opens one child window over the main window and pushes the Host data, the shortcut status and the versions', async () => {
+    const { platform, renderer, child } = await openSettings()
+    expect(child.calls).toContain('setBounds')
+    const { x, y, width, height } = child.bounds
+    expect(x >= WORK_AREA.x && y >= WORK_AREA.y).toBe(true)
+    expect(x + width <= WORK_AREA.x + WORK_AREA.width && y + height <= WORK_AREA.y + WORK_AREA.height).toBe(true)
+    expect(lastSnapshot(child)).toMatchObject({
+      data: SETTINGS_DATA,
+      error: null,
+      electronVersion: '44.10.2',
+      section: { seq: 0, section: 'shortcuts' },
+      shortcut: { accelerator: 'Control+P', registered: true },
+      config: { resolvedLocale: 'en' },
+    })
+    expect(child.calls).toContain('title PromptX Settings')
+    const state = settingsInvoke(platform, IPC_CHANNELS.settingsGetState)
+    await expect(state).resolves.toMatchObject({ ok: true, value: { data: SETTINGS_DATA } })
+    // 再打开不新建窗口，按入口切分区。
+    await renderer.invoke(IPC_CHANNELS.windowOpenSettings, 'library')
+    expect(platform.windows.filter(window => window.options.page === 'settings')).toHaveLength(1)
+    expect(lastSnapshot(child).section).toEqual({ seq: 1, section: 'library' })
+    await renderer.invoke(IPC_CHANNELS.windowOpenSettings)
+    expect(lastSnapshot(child).section).toEqual({ seq: 1, section: 'library' })
+  })
+
+  it('closes back to the main window, closes with it, and does not come back on the next show', async () => {
+    const { app, platform, renderer, child } = await openSettings()
+    await settingsInvoke(platform, IPC_CHANNELS.settingsClose)
+    expect(child.visible).toBe(false)
+    expect(platform.window.focused).toBe(true)
+    // 系统发起的关闭只隐藏，窗口留着下次直接显示。
+    await renderer.invoke(IPC_CHANNELS.windowOpenSettings)
+    child.close()
+    expect(child.visible).toBe(false)
+    expect(child.destroyed).toBe(false)
+    // 主窗口隐藏时一起关闭；再呼出时焦点在主窗口，设置窗口不跟着回来。
+    await renderer.invoke(IPC_CHANNELS.windowOpenSettings)
+    await sleep(160)
+    platform.shortcuts.press('Control+P')
+    expect(platform.window.visible).toBe(false)
+    expect(child.visible).toBe(false)
+    await sleep(160)
+    platform.shortcuts.press('Control+P')
+    expect(platform.window.visible).toBe(true)
+    expect(child.visible).toBe(false)
+    await app.shutdown('test', 0, null)
+    expect(child.destroyed).toBe(true)
+  })
+
+  it('forwards valid patches to the Host, refreshes on config pushes, and refuses other senders and bad patches', async () => {
+    const { platform, host, renderer, child, patches, setData, setUpdate } = await openSettings()
+    const accepted = settingsInvoke(platform, IPC_CHANNELS.settingsUpdate, { convertYen: false })
+    await expect(accepted).resolves.toEqual({ ok: true, value: { ok: true } })
+    expect(patches).toEqual([{ convertYen: false }])
+    for (const bad of [null, [], {}, { convertYen: 'no' }, { unknownField: true }, { libraryDir: 42 }]) {
+      await expect(settingsInvoke(platform, IPC_CHANNELS.settingsUpdate, bad)).resolves.toEqual({
+        ok: false, error: { code: 'promptx/internal', detail: 'invalid arguments' },
+      })
+    }
+    expect(patches).toHaveLength(1)
+    // 主窗口的 webContents 不能用设置窗口的通道。
+    await expect(renderer.invoke(IPC_CHANNELS.settingsUpdate, { convertYen: true })).rejects.toThrow('untrusted sender')
+    await expect(renderer.invoke(IPC_CHANNELS.settingsChooseLibraryDir)).rejects.toThrow('untrusted sender')
+    // Host 推来新配置（dsh 页面改的、或者刚写入的）：设置窗口重新取一次。
+    setData({ ...SETTINGS_DATA, config: { ...SETTINGS_DATA.config, convertYen: false } })
+    host.peer.notify('config', { ...BASE_CONFIG, convertYen: false })
+    await until(() => lastSnapshot(child).data?.config.convertYen === false, 2000, 'refresh after config')
+    // Host 拒绝时字段错误原样交给页面。
+    setUpdate(() => ({ ok: false, errors: { libraryDir: 'library-dir-reserved' } }))
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsUpdate, { libraryDir: '/Users/me/.dsh/sessions' })).resolves.toEqual({
+      ok: true, value: { ok: false, errors: { libraryDir: 'library-dir-reserved' } },
+    })
+  })
+
+  it('answers an update only after pushing a snapshot read after the write (V0.1.6 追加 2)', async () => {
+    const { platform, child, setData, setUpdate } = await openSettings()
+    // 扮演 dsh：settings.update 返回时新值已经应用到插件（dsh-config-editor 的 edit）。
+    setUpdate((patch) => {
+      setData({ ...SETTINGS_DATA, config: { ...SETTINGS_DATA.config, ...(patch as object) } })
+      return { ok: true }
+    })
+    const sentBefore = child.sent.length
+    const answered = settingsInvoke(platform, IPC_CHANNELS.settingsUpdate, { convertMiddleDot: false })
+    await expect(answered).resolves.toEqual({ ok: true, value: { ok: true } })
+    // 回复到达时，最新的快照已经推出去，而且是写入之后取的。
+    const pushed = child.sent.slice(sentBefore).filter(item => item.event === 'settings.state')
+    expect(pushed.length).toBeGreaterThan(0)
+    expect(lastSnapshot(child).data?.config.convertMiddleDot).toBe(false)
+  })
+
+  it('reports a fetch failure in the snapshot and keeps the window', async () => {
+    const harness = await boot()
+    harness.host.peer.handle('settings.get', () => {
+      throw new PromptxError('promptx/settings/unavailable')
+    })
+    harness.platform.shortcuts.press('Control+P')
+    await harness.renderer.invoke(IPC_CHANNELS.windowOpenSettings)
+    const child = settingsWindow(harness.platform)
+    await until(() => child.sent.some(item => item.event === 'settings.state' && (item.payload as SettingsSnapshot).error !== null), 2000, 'error')
+    expect(lastSnapshot(child)).toMatchObject({ data: null, error: { code: 'promptx/settings/unavailable' } })
+    expect(child.visible).toBe(true)
+  })
+
+  it('records the global shortcut instead of toggling while the settings window records one', async () => {
+    const { platform, renderer, child } = await openSettings()
+    // 只认设置窗口发来的录制状态。
+    renderer.send(IPC_CHANNELS.settingsRecording, true)
+    platform.ipc.send(child.sender, IPC_CHANNELS.settingsRecording, true)
+    await sleep(160)
+    platform.shortcuts.press('Control+P')
+    expect(platform.window.visible).toBe(true)
+    expect(child.sent.filter(item => item.event === 'settings.shortcutPressed').map(item => item.payload)).toEqual([{ accelerator: 'Control+P' }])
+    platform.ipc.send(child.sender, IPC_CHANNELS.settingsRecording, false)
+    await sleep(160)
+    platform.shortcuts.press('Control+P')
+    expect(platform.window.visible).toBe(false)
+  })
+
+  it('chooses and opens the library folder through the platform, using the Host path only', async () => {
+    const { platform, child, logger } = await openSettings()
+    platform.chooseDirectoryAnswer = '/Users/me/Prompts'
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsChooseLibraryDir)).resolves.toEqual({ ok: true, value: '/Users/me/Prompts' })
+    expect(platform.chosen.at(-1)).toMatchObject({ window: child, options: { title: 'Choose the prompt library folder', defaultPath: SETTINGS_DATA.effectiveLibraryDir } })
+    platform.chooseDirectoryAnswer = null
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsChooseLibraryDir)).resolves.toEqual({ ok: true, value: null })
+    // 打开的目录取自 Host 的生效库目录，页面传来的参数一律不用。
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsOpenLibraryDir, '/etc')).resolves.toEqual({ ok: true, value: null })
+    expect(platform.openedPaths).toEqual([SETTINGS_DATA.effectiveLibraryDir])
+    platform.openPathFails = true
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsOpenLibraryDir)).resolves.toEqual({ ok: false, error: { code: 'promptx/library/unavailable' } })
+    expect(JSON.stringify(logger.entries).includes('/Users/me/.dsh')).toBe(false)
+  })
+
+  it('opens dsh from the About section: dsh://open hides at once; a page that navigated hides after a moment; failures keep the window', async () => {
+    const { platform, renderer, child, setDsh } = await openSettings()
+    const replies = [{ open: 'dsh://open', navigated: true }, { open: null, navigated: true }]
+    setDsh(() => replies.shift() ?? { open: null, navigated: false })
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsOpenInDsh)).resolves.toEqual({ ok: true, value: { navigated: true } })
+    expect(platform.opened).toEqual(['dsh://open'])
+    expect(platform.window.visible).toBe(false)
+    expect(child.visible).toBe(false)
+
+    await sleep(160)
+    platform.shortcuts.press('Control+P')
+    await renderer.invoke(IPC_CHANNELS.windowOpenSettings)
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsOpenInDsh)).resolves.toEqual({ ok: true, value: { navigated: true } })
+    expect(platform.window.visible).toBe(true)
+    await until(() => !platform.window.visible, 2000, 'delayed hide')
+    expect(platform.opened).toEqual(['dsh://open'])
+
+    setDsh(() => {
+      throw new PromptxError('promptx/settings/unavailable')
+    })
+    await sleep(160)
+    platform.shortcuts.press('Control+P')
+    await renderer.invoke(IPC_CHANNELS.windowOpenSettings)
+    await expect(settingsInvoke(platform, IPC_CHANNELS.settingsOpenInDsh)).resolves.toEqual({ ok: false, error: { code: 'promptx/settings/unavailable' } })
+    expect(platform.window.visible).toBe(true)
+  })
+
+  it('runs the e2e settings round trip: open, read, toggle the yen conversion through the Host and put it back', async () => {
+    const harness = await boot({ hello: { mode: 'e2e' } })
+    const { platform, host } = harness
+    let data: SettingsData = structuredClone(SETTINGS_DATA)
+    const patches: unknown[] = []
+    host.peer.handle('settings.get', () => data)
+    host.peer.handle('settings.update', ({ patch }) => {
+      patches.push(patch)
+      const convertYen = (patch as { convertYen: boolean }).convertYen
+      data = { ...data, config: { ...data.config, convertYen } }
+      setTimeout(() => { host.peer.notify('config', { ...BASE_CONFIG, convertYen }) }, 5)
+      return { ok: true }
+    })
+    // 扮演设置页：窗口建好后来取一次快照。
+    const create = platform.createWindow.bind(platform)
+    platform.createWindow = (options) => {
+      const window = create(options)
+      if (options.page === 'settings') {
+        setTimeout(() => {
+          platform.ipc.invoke((window as FakeWindow).sender, IPC_CHANNELS.settingsGetState).catch(() => {})
+        }, 10)
+      }
+      return window
+    }
+    const result: E2eResult = await host.peer.request('e2e.run', { action: 'settings' })
+    expect(result).toMatchObject({ ok: true, data: { windowCreated: true, stateRequested: true, toggled: true, reverted: true } })
+    expect(patches).toEqual([{ convertYen: false }, { convertYen: true }])
+    expect(settingsWindow(platform).visible).toBe(false)
   })
 })
 

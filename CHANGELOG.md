@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6 — 2026-11-13
+
+- Open PromptX settings in a window of their own from the toolbar gear, the Settings shortcut, the library's Open settings button, and Settings… in the menu bar or tray, instead of switching to the plugin page in dsh. Shortcuts, Editor, Prompt library, Optimize, and About sections cover every setting, and each change takes effect immediately.
+- Record shortcuts by pressing the keys, with conflicts reported before they are saved. Choose the library folder with the system folder picker and open it in the file manager. Start a custom rewrite instruction from the default text.
+- Trim the plugin page in dsh to what must work while the window isn't running: the window status, Show window and Restart window, runtime download and deletion, the download source, and the global shortcut. Open PromptX settings on that page opens the settings window, and the About section of the settings window links back to the plugin page.
+- Both places edit the same configuration, and the last saved change to a setting wins. The settings window shows the saved value as soon as the change is written.
+
 ## 0.1.5 — 2026-11-12
 
 - Align the headers and footers of the library, editor, and chat columns, and let the empty space in each header move the window. Put the library toggle at the left of the toolbar and Settings and Chat at the right. Keep the hide-window button in the window's top-right corner, in the chat header while the chat panel is open.

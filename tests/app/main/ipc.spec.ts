@@ -57,7 +57,7 @@ function createMocks() {
     copyText: vi.fn((_text: string) => Promise.resolve({ ok: true as const, value: null })),
     getBounds: vi.fn(() => BOUNDS),
     setWidth: vi.fn((_width: number, _anchor: 'left' | 'right') => BOUNDS),
-    openSettings: vi.fn(() => Promise.resolve({ ok: true as const, value: { navigated: false } })),
+    openSettings: vi.fn((_section: string | undefined) => ({ ok: true as const, value: null })),
     getPrefs: vi.fn(() => DEFAULT_PREFS),
     ready: vi.fn((_info: { editorMounted: boolean; draftLoaded: boolean }) => {}),
     flushed: vi.fn((_id: number) => {}),
@@ -94,6 +94,8 @@ describe('IPC channels', () => {
   it('lists exactly the bridge events', () => {
     const expected: Record<BridgeEventName, true> = {
       'entryEditor.state': true,
+      'settings.state': true,
+      'settings.shortcutPressed': true,
       'config': true,
       'optimize.event': true,
       'library.changed': true,
@@ -109,7 +111,8 @@ describe('IPC channels', () => {
   it('registers a handler for every channel the preload uses', () => {
     const { ipc } = setup()
     const registered = [...ipc.handlers.keys(), ...ipc.listeners.keys()].sort()
-    const expected = Object.values(IPC_CHANNELS).filter(channel => channel !== IPC_CHANNELS.event && !channel.startsWith('promptx:entryEditor.')).sort()
+    const expected = Object.values(IPC_CHANNELS).filter(channel => channel !== IPC_CHANNELS.event
+      && !channel.startsWith('promptx:entryEditor.') && !channel.startsWith('promptx:settings.')).sort()
     expect(registered).toEqual(expected)
   })
 })
@@ -223,7 +226,13 @@ describe('registerIpcHandlers: window and prefs', () => {
     expect(ipc.invoke(IPC_CHANNELS.windowGetBounds, OWN)).toEqual(BOUNDS)
     expect(ipc.invoke(IPC_CHANNELS.prefsGet, OWN)).toEqual(DEFAULT_PREFS)
     expect(ipc.invoke(IPC_CHANNELS.getConfig, OWN)).toBeNull()
-    await expect(ipc.invoke(IPC_CHANNELS.windowOpenSettings, OWN)).resolves.toEqual({ ok: true, value: { navigated: false } })
+    expect(ipc.invoke(IPC_CHANNELS.windowOpenSettings, OWN)).toEqual({ ok: true, value: null })
+    expect(handlers.openSettings).toHaveBeenLastCalledWith(undefined)
+    ipc.invoke(IPC_CHANNELS.windowOpenSettings, OWN, 'library')
+    expect(handlers.openSettings).toHaveBeenLastCalledWith('library')
+    // 不认识的分区按没传处理，不把任意字符串交给设置窗口。
+    ipc.invoke(IPC_CHANNELS.windowOpenSettings, OWN, 'constructor')
+    expect(handlers.openSettings).toHaveBeenLastCalledWith(undefined)
   })
 
   it('validates the send channels and drops malformed messages', () => {

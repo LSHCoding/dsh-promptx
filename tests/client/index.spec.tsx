@@ -217,14 +217,15 @@ describe('Client 入口', () => {
     fake.unload()
   })
 
-  it('配置页的默认指令按当前界面语言取', async () => {
+  it('配置页按注入的 t 显示，只有小窗一组（V0.1.6 追加 3）', async () => {
     const fake = createFakeContext()
     fake.setLocale('en-US')
     apply(fake.ctx)
     statusRequests[0]!.reply.resolve(jsonResponse(makeStatus()))
     await settle()
     render(createElement(fake.registrations[0]!.component, { view: 'page', t: tZh }))
-    expect(screen.getByLabelText<HTMLTextAreaElement>('优化指令').placeholder).toBe(makeStatus().defaultInstruction.en)
+    expect(screen.getAllByRole('heading').map(heading => heading.textContent)).toEqual(['小窗'])
+    expect(screen.getByRole('button', { name: '打开 PromptX 设置' })).toBeTruthy()
     fake.unload()
   })
 

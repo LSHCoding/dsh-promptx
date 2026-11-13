@@ -15,10 +15,11 @@ import {
   type Prefs,
   type PromptxBridge,
   type ResolvedConfig,
+  type SettingsSnapshot,
   type WindowBounds,
 } from '../../shared/bridge.ts'
 import { RENDERER_FORWARDED_METHODS, type CompanionRequests, type RendererForwardedMethod } from '../../shared/protocol.ts'
-import type { ErrorInfo } from '../../shared/types.ts'
+import type { ConfigUpdateResult, ErrorInfo } from '../../shared/types.ts'
 import { BRIDGE_EVENT_NAMES, IPC_CHANNELS } from '../main/channels.ts'
 
 type Listener = (payload: unknown) => void
@@ -113,6 +114,33 @@ const bridge: PromptxBridge = {
       }
     },
   },
+  settings: {
+    getState() {
+      return invokeResult<SettingsSnapshot>(IPC_CHANNELS.settingsGetState, failure('promptx/channel/closed'))
+    },
+    update(patch) {
+      return invokeResult<ConfigUpdateResult>(IPC_CHANNELS.settingsUpdate, failure('promptx/channel/closed'), patch)
+    },
+    chooseLibraryDir() {
+      return invokeResult<string | null>(IPC_CHANNELS.settingsChooseLibraryDir, failure('promptx/channel/closed'))
+    },
+    openLibraryDir() {
+      return invokeResult<null>(IPC_CHANNELS.settingsOpenLibraryDir, failure('promptx/channel/closed'))
+    },
+    openInDsh() {
+      return invokeResult<{ navigated: boolean }>(IPC_CHANNELS.settingsOpenInDsh, failure('promptx/settings/unavailable'))
+    },
+    setRecording(active) {
+      ipcRenderer.send(IPC_CHANNELS.settingsRecording, active)
+    },
+    async close() {
+      try {
+        await ipcRenderer.invoke(IPC_CHANNELS.settingsClose)
+      } catch {
+        // 窗口关闭过程中来源失效时无需继续处理。
+      }
+    },
+  },
   platform: process.platform,
   call,
   on,
@@ -152,8 +180,8 @@ const bridge: PromptxBridge = {
     setWidth(width, anchor) {
       return invokeValue<WindowBounds>(IPC_CHANNELS.windowSetWidth, width, anchor)
     },
-    openSettings() {
-      return invokeResult<{ navigated: boolean }>(IPC_CHANNELS.windowOpenSettings, failure('promptx/settings/unavailable'))
+    openSettings(section) {
+      return invokeResult<null>(IPC_CHANNELS.windowOpenSettings, failure('promptx/settings/unavailable'), ...(section === undefined ? [] : [section]))
     },
     setMinWidth(width) {
       ipcRenderer.send(IPC_CHANNELS.windowSetMinWidth, width)

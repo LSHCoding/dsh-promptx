@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect, toolbarSpan } from '../../../src/app/main/placement.ts'
+import { boundsForReset, boundsForShow, centerOver, growToMinimum, minimumSize, resizeWidth, sameRect, toolbarSpan } from '../../../src/app/main/placement.ts'
 import { DEFAULT_PREFS } from '../../../src/shared/bridge.ts'
 import { initialWindowBounds, type Rect } from '../../../src/shared/layout.ts'
 import { trapProcessErrors } from './helpers.ts'
@@ -109,5 +109,23 @@ describe('sameRect', () => {
   it('compares all four numbers', () => {
     expect(sameRect({ x: 1, y: 2, width: 3, height: 4 }, { x: 1, y: 2, width: 3, height: 4 })).toBe(true)
     expect(sameRect({ x: 1, y: 2, width: 3, height: 4 }, { x: 1, y: 2, width: 3, height: 5 })).toBe(false)
+  })
+})
+
+describe('centerOver (V0.1.6 settings window)', () => {
+  const SIZE = { width: 720, height: 540 }
+
+  it('centres the child over the parent', () => {
+    expect(centerOver({ x: 230, y: 135, width: 980, height: 600 }, SIZE, MAIN)).toEqual({ x: 360, y: 165, width: 720, height: 540 })
+  })
+
+  it('keeps the child inside the work area when the parent sits near an edge or is smaller than the child', () => {
+    expect(centerOver({ x: 0, y: 25, width: 520, height: 360 }, SIZE, MAIN)).toEqual({ x: 0, y: 25, width: 720, height: 540 })
+    expect(centerOver({ x: 1200, y: 600, width: 520, height: 360 }, SIZE, MAIN)).toEqual({ x: 720, y: 360, width: 720, height: 540 })
+  })
+
+  it('shrinks the child to a work area smaller than its size', () => {
+    const small: Rect = { x: 0, y: 0, width: 640, height: 480 }
+    expect(centerOver({ x: 0, y: 0, width: 640, height: 480 }, SIZE, small)).toEqual({ x: 0, y: 0, width: 640, height: 480 })
   })
 })

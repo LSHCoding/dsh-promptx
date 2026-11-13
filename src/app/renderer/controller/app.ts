@@ -6,7 +6,7 @@ import { DEFAULT_PREFS, type Prefs } from '../../../shared/bridge.ts'
 import { PANE_LIMITS } from '../../../shared/layout.ts'
 import { resolveLocale } from '../../../shared/i18n/index.ts'
 import { isBlank } from '../../../shared/text-metrics.ts'
-import type { ErrorInfo } from '../../../shared/types.ts'
+import type { ErrorInfo, SettingsSection } from '../../../shared/types.ts'
 import { isComposingKey } from '../appearance.ts'
 import { createEditorController, type EditorController } from '../editor/controller.ts'
 import { focusWithin, nothingFocused } from '../focus.ts'
@@ -323,18 +323,16 @@ export class AppController {
     return this.saver.saveAsNew()
   }
 
-  /** 工具栏「设置」：打开 dsh 插件页里 PromptX 的配置页（技术方案 4.8），主进程随后隐藏小窗。 */
-  async openSettings(): Promise<void> {
+  /** 工具栏「设置」、「打开设置」快捷键、库侧栏的「打开设置」：打开 PromptX 自己的设置窗口（V0.1.6），小窗不隐藏。 */
+  async openSettings(section?: SettingsSection): Promise<void> {
     this.toasts.beginAction()
     this.closeMenu()
     this.draft.flushSoon()
-    const result = await this.bridge.window.openSettings()
+    const result = await this.bridge.window.openSettings(section)
     if (!result.ok) {
-      // 「无法打开插件配置：{原因}」的前缀就是 settings/unavailable 自己的文案，认不出原因时不再说两遍（审查 CR-04）。
+      // 「无法打开设置：{原因}」的前缀就是 settings/unavailable 自己的文案，认不出原因时不再说两遍（审查 CR-04）。
       this.toasts.error(failure(this.ctx, 'toast.settingsFailed', 'promptx/settings/unavailable', result.error))
-      return
     }
-    if (result.value.navigated) this.toasts.success(text(this.ctx, 'toast.settingsOpened'))
   }
 
   /** 切换库侧栏前收起弹出菜单。 */

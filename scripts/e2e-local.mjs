@@ -236,6 +236,27 @@ try {
   check('toolbar shortcut applied live in renderer', shortcutState.data?.renderer?.chatShortcut === chatProbe)
   await api('config', { patch: { globalShortcut: original, shortcutChat: originalChat } })
 
+  // 6a. V0.1.6 追加：插件页的「打开 PromptX 设置」经 /companion 的 settings 动作让小程序打开设置窗口。
+  const openSettings = await api('companion', { action: 'settings' })
+  let settingsState = await api('e2e', { command: { action: 'state' } })
+  const settingsDeadline = Date.now() + 5_000
+  while (settingsState.data?.settingsVisible !== true && Date.now() < settingsDeadline) {
+    await sleep(100)
+    settingsState = await api('e2e', { command: { action: 'state' } })
+  }
+  check('plugin page opens the settings window', openSettings.ok === true && settingsState.data?.settingsVisible === true
+    && settingsState.data?.visible === true, JSON.stringify({ ok: openSettings.ok, settingsVisible: settingsState.data?.settingsVisible }))
+
+  // 6b. V0.1.6 设置窗口：真实子窗加载设置页并来取快照，经 settings.update 写入 profile，Host 再把新配置推回小窗。
+  // 设置窗口已经开着（上一步），这一步结束时关掉它。
+  const yenBefore = (await api('status?since=-1')).config.convertYen
+  const settingsRun = await api('e2e', { command: { action: 'settings' } })
+  check('settings window loads and requests its state', settingsRun.ok === true && settingsRun.data.windowCreated === true
+    && settingsRun.data.stateRequested === true, JSON.stringify(settingsRun.data ?? settingsRun))
+  check('settings window writes a setting through the Host and puts it back', settingsRun.data?.toggled === true && settingsRun.data?.reverted === true)
+  const yenAfter = (await api('status?since=-1')).config.convertYen
+  check('settings round trip leaves the profile as it was', yenAfter === yenBefore, `${yenBefore} -> ${yenAfter}`)
+
   // 7. 用真实 Electron 的布局核对工具栏、空白聊天栏和重启宽度。
   const rendererState = async () => (await api('e2e', { command: { action: 'state' } })).data?.renderer
   const beforeChat = await rendererState()

@@ -83,7 +83,8 @@ describe('两份字典', () => {
     expect(translate('zh', 'status.optimizing', { model: 'M' })).toBe('正在用 M 优化，可继续编辑。')
     expect(zh['error.promptx/optimize/no-model']).toBe('dsh 里还没有可用的模型，请先在 dsh 设置中配置模型。')
     expect(translate('zh', 'library.unavailable', { reason: 'R' })).toBe('库目录不可用：R')
-    expect(zh['library.openSettings']).toBe('打开插件配置')
+    // V0.1.6：库目录不可用时的按钮打开 PromptX 自己的设置窗口，不再是 dsh 的插件配置（V0.1.6 design-spec 2）。
+    expect(zh['library.openSettings']).toBe('打开设置')
     expect(zh['library.empty']).toBe('还没有保存的 Prompt')
     expect(zh['library.noMatch']).toBe('没有匹配的 Prompt')
     expect(zh['library.searchPlaceholder']).toBe('搜索 Prompt')

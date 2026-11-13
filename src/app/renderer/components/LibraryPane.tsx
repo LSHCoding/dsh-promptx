@@ -302,7 +302,7 @@ function EntryList(): ReactElement {
           type="button"
           className="px-button"
           onClick={() => {
-            run(controller.openSettings())
+            run(controller.openSettings('library'))
           }}
         >
           {t('library.openSettings')}

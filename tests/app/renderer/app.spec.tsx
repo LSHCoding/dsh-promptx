@@ -443,7 +443,7 @@ describe('库侧栏（L-02 至 L-11）', () => {
     expect(screen.getByText('没有匹配的 Prompt')).toBeTruthy()
   })
 
-  it('库目录不可用：说明原因和「打开插件配置」，编辑照常可用（L-01）', async () => {
+  it('库目录不可用：说明原因和「打开设置」，编辑照常可用（L-01）', async () => {
     const bridge = new FakeBridge()
     bridge.handle('library.list', () => ok(listResult([], { state: 'unavailable', error: { code: 'promptx/library/unavailable', detail: 'EACCES: permission denied' } })))
     const controller = await mountApp(bridge)
@@ -452,10 +452,11 @@ describe('库侧栏（L-02 至 L-11）', () => {
     })
     expect(screen.getByText('库目录不可用：没有权限')).toBeTruthy()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '打开插件配置' }))
+      fireEvent.click(screen.getByRole('button', { name: '打开设置' }))
       await settle()
     })
-    expect(bridge.window.openSettings).toHaveBeenCalledTimes(1)
+    // 直接打开设置窗口的「Prompt 库」分区（V0.1.6）。
+    expect(bridge.window.openSettings).toHaveBeenCalledWith('library')
     expect(editorContent().getAttribute('contenteditable')).toBe('true')
   })
 

@@ -62,10 +62,11 @@ export interface RouteDeps {
   store: StatusStore
   /** 配置页「保存」：createConfigUpdater 的结果。 */
   updateConfig: (patch: unknown) => Promise<ConfigUpdateResult>
-  /** 配置页的「重启小窗」「显示小窗」。抛 PromptxError 时以 409 返回错误码。 */
+  /** 配置页的「重启小窗」「显示小窗」「打开 PromptX 设置」。抛 PromptxError 时以 409 返回错误码。 */
   companion: {
     restart: () => Promise<void> | void
     show: () => Promise<void> | void
+    settings: () => Promise<void> | void
   }
   /** 配置页的「下载 / 重试」「删除运行时」。 */
   runtime: {
@@ -154,8 +155,11 @@ function buildRoutes(deps: RouteDeps, logger: Pick<HostLogger, 'warn'>): FetchRo
         case 'show':
           await deps.companion.show()
           break
+        case 'settings':
+          await deps.companion.settings()
+          break
         default:
-          throw new BadRequest('action must be restart or show')
+          throw new BadRequest('action must be restart, show or settings')
       }
       return json(200, { ok: true })
     }),

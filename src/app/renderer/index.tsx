@@ -7,6 +7,8 @@ import { AppController, fallbackLocale } from './controller/app.ts'
 import { runTask } from './controller/context.ts'
 import { EntryEditorApp } from './entry-editor/App.tsx'
 import { EntryEditorController } from './entry-editor/controller.ts'
+import { SettingsApp } from './settings/App.tsx'
+import { SettingsController } from './settings/controller.ts'
 
 function main(): void {
   const container = document.getElementById('root')
@@ -15,6 +17,13 @@ function main(): void {
   if (bridge === null) {
     // 只有在小程序之外直接打开 index.html 时才会走到这里。
     container.textContent = 'PromptX: the preload bridge is missing.'
+    return
+  }
+  if (window.location.hash === '#settings') {
+    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const controller = new SettingsController(bridge, { locale: fallbackLocale(), theme: dark ? 'dark' : 'light' })
+    createRoot(container).render(<SettingsApp controller={controller} />)
+    runTask(controller.start())
     return
   }
   if (window.location.hash === '#entry-editor') {

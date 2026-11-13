@@ -32,7 +32,7 @@ import { PromptxError, toErrorInfo } from './shared/errors.ts'
 import { translate } from './shared/i18n/index.ts'
 import { DEFAULT_INSTRUCTION } from './shared/instructions.ts'
 import type { CompanionMode, E2eCommand, E2eResult } from './shared/protocol.ts'
-import type { CompanionConfig, CompanionState, ErrorInfo, PanelStatus, PromptxConfig } from './shared/types.ts'
+import type { CompanionConfig, CompanionState, ErrorInfo, PanelStatus, PromptxConfig, SettingsData } from './shared/types.ts'
 import { readToolbarShortcuts } from './shared/window-shortcuts.ts'
 import { type Appearance, type AppearanceLocale, mapLocaleTag, resolveAppearance, resolveInstructionLocale } from './web/appearance.ts'
 import { checkLibraryRoot, createConfigUpdater, type LocationContext } from './web/config-update.ts'
@@ -225,6 +225,33 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
     },
   })
 
+  // dsh 配置页的「保存」和设置窗口的改动共用这一个更新函数：同一套校验，按调用顺序串行写入。
+  const updateConfig = createConfigUpdater({
+    locationContext,
+    currentConfig: () => readConfig(config),
+    platform: process.platform,
+    apply: async (patch: Partial<PromptxConfig>) => {
+      if (settings === undefined) throw new PromptxError('promptx/settings/unavailable')
+      await settings.update(SETTINGS_NAMESPACE, patch)
+    },
+  })
+
+  /** 设置窗口要显示的内容（V0.1.6 design-spec 4）。 */
+  const settingsData = (): SettingsData => {
+    const status = runtime.status()
+    return {
+      config: readConfig(config),
+      effectiveLibraryDir: effectiveLibraryDir(),
+      defaultLibraryDir: paths.defaultLibrary,
+      defaultShortcut: DEFAULT_SHORTCUT,
+      defaultInstruction: { zh: DEFAULT_INSTRUCTION.zh, en: DEFAULT_INSTRUCTION.en },
+      platform: process.platform,
+      hostVersion: pkg.version,
+      profile: profile.name,
+      runtime: { version: status.version, ...(status.source === undefined ? {} : { source: status.source }) },
+    }
+  }
+
   const supervisor: CompanionSupervisor = new CompanionSupervisor({
     prepareLaunch: async (signal) => {
       const install = await runtime.ensure(signal)
@@ -249,6 +276,8 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
           getLlm, getModel, hasTitle: title => library.hasTitle(title), signal: metadataAbort.signal,
         }),
         openSettings,
+        getSettings: settingsData,
+        updateSettings: patch => updateConfig(patch),
         onStatus: (status) => {
           companionLocale = status.locale
           rendererError = status.rendererError
@@ -277,16 +306,6 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
       }
     },
     logger,
-  })
-
-  const updateConfig = createConfigUpdater({
-    locationContext,
-    currentConfig: () => readConfig(config),
-    platform: process.platform,
-    apply: async (patch: Partial<PromptxConfig>) => {
-      if (settings === undefined) throw new PromptxError('promptx/settings/unavailable')
-      await settings.update(SETTINGS_NAMESPACE, patch)
-    },
   })
 
   const runE2e = async (command: E2eCommand): Promise<E2eResult> => {
@@ -350,6 +369,13 @@ export function startPromptxHost(ctx: Context, config: ConfigRefs): void {
           const channel = peer()
           if (channel === null) throw new PromptxError('promptx/channel/closed')
           channel.notify('window.command', { command: 'show' })
+        },
+        // 插件页只留小窗和运行时（V0.1.6 追加 3），其他设置由这里打开小程序的设置窗口。
+        settings: () => {
+          requireActive()
+          const channel = peer()
+          if (channel === null) throw new PromptxError('promptx/channel/closed')
+          channel.notify('window.command', { command: 'settings' })
         },
       },
       runtime: {

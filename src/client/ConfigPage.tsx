@@ -1,13 +1,16 @@
 // PromptX 在 dsh 插件页里的配置页（需求 S-01、S-02、S-03、F-05、F-06、5.9、6.6、6.8、7.7、7.8；design-spec 4.4、D12）。
 //
-// 页面分为小窗（状态、运行时、下载源、全局快捷键）、编辑器、Prompt 库和优化设置。
+// V0.1.6 起其他设置都在 PromptX 自己的设置窗口里改（追加 1、追加 3），这一页只留小窗不在运行时也必须能用的部分：
+// 小窗的状态、显示和重启，运行时的下载和删除，下载源（第一次下载失败时要换源，那时设置窗口还打不开），
+// 全局快捷键（呼出小窗的入口，被别的应用占用时在状态行里看到原因，可以就地改）。
+// 顶部说明其他设置在哪里改，并给出「打开 PromptX 设置」，让小程序打开设置窗口。
 //
 // 保存方式照 dsh 自己的设置表单（dsh-client-ui-primitives 的 SettingsForm，独立审查 COV-02）：改动先暂存，底部一个「保存」
 // 一次提交所有改动过的字段；没有改动、有字段不合法、正在保存时「保存」不可用，保存中显示「保存中…」；Host 返回的字段错误显示在
 // 对应字段下面，暂存的值保留，并给出提示；离开页面（组件卸载）丢弃没保存的改动；不设「取消」。
 // 不能直接用 SettingsForm 组件：AGENTS.md 不允许把 dsh 的 Client 包当模块 require，所以照它的行为自己实现。
 //
-// 动作类按钮立即执行，不经过暂存：「重启小窗」「显示小窗」「下载 / 重试」「删除运行时」「录制」。
+// 动作类按钮立即执行，不经过暂存：「打开 PromptX 设置」「重启小窗」「显示小窗」「下载 / 重试」「删除运行时」「录制」。
 
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { acceleratorFromKeyEvent, formatAccelerator, parseAccelerator } from '../shared/accelerator.ts'
@@ -22,9 +25,8 @@ import type {
   RuntimeSource,
   RuntimeStatus,
 } from '../shared/types.ts'
-import { DEFAULT_TOOLBAR_SHORTCUTS, SHORTCUT_CONFIG_FIELDS, TOOLBAR_SHORTCUT_FIELDS, type ToolbarShortcutField } from '../shared/window-shortcuts.ts'
 import type { ActionResult, CompanionAction, PromptxApi, RuntimeAction, StatusStore } from './api.ts'
-import { Button, clampPercent, ProgressBar, StatusDot, Switch, type DotState } from './controls.tsx'
+import { Button, clampPercent, ProgressBar, StatusDot, type DotState } from './controls.tsx'
 import {
   baseConfig,
   changedPatch,
@@ -51,13 +53,11 @@ export interface ConfigPageProps {
   /** 长轮询循环提供的状态，和导航逻辑共用一份。 */
   store: StatusStore
   api: ConfigPageApi
-  /** 页面当前的界面语言，用来挑默认优化指令的语言做占位文字（design-spec 4.7：以 zh 开头为中文，其余为英文）。 */
-  language: 'zh' | 'en'
 }
 
 const SEPARATOR = ' · '
 
-export function ConfigPage({ t, store, api, language }: ConfigPageProps): ReactNode {
+export function ConfigPage({ t, store, api }: ConfigPageProps): ReactNode {
   const { status, error } = useSyncExternalStore(store.subscribe, store.getSnapshot)
   let body: ReactNode
   if (status === null) {
@@ -70,7 +70,7 @@ export function ConfigPage({ t, store, api, language }: ConfigPageProps): ReactN
     // 同一个 profile 已有另一个 dsh 进程在运行 PromptX：这个进程不启动小程序、不打开草稿，整页只说明原因（design-spec 4.1）。
     body = <p className="promptx-notice" role="status">{t('duplicateInstance')}</p>
   } else {
-    body = <ConfigForm t={t} status={status} api={api} language={language} connectionError={error} />
+    body = <ConfigForm t={t} status={status} api={api} connectionError={error} />
   }
   return (
     <div className="promptx-config" data-promptx-config="">
@@ -84,7 +84,6 @@ function ConfigForm(props: {
   t: PromptxTranslate
   status: PanelStatus
   api: ConfigPageApi
-  language: 'zh' | 'en'
   connectionError: ErrorInfo | null
 }): ReactNode {
   const { t, status } = props
@@ -95,6 +94,7 @@ function ConfigForm(props: {
   return (
     <>
       {props.connectionError === null ? null : <p className="promptx-notice" data-tone="warning" role="status">{t('reconnecting')}</p>}
+      <MoreSettings t={t} status={status} actions={actions} />
 
       <section className="promptx-section" aria-labelledby={`${ids}-window`}>
         <h4 className="promptx-section-title" id={`${ids}-window`}>{t('sectionWindow')}</h4>
@@ -118,92 +118,6 @@ function ConfigForm(props: {
           disabled={saving}
           onChange={(value) => {
             form.stage('globalShortcut', value)
-          }}
-        />
-      </section>
-
-      <section className="promptx-section" aria-labelledby={`${ids}-shortcuts`}>
-        <h4 className="promptx-section-title" id={`${ids}-shortcuts`}>{t('sectionToolbarShortcuts')}</h4>
-        {TOOLBAR_SHORTCUT_FIELDS.map(field => (
-          <ShortcutField
-            key={field}
-            t={t}
-            field={field}
-            value={values[field]}
-            platform={status.platform}
-            defaultShortcut={DEFAULT_TOOLBAR_SHORTCUTS[field]}
-            error={errors[field]}
-            disabled={saving}
-            onChange={(value) => {
-              form.stage(field, value)
-            }}
-          />
-        ))}
-      </section>
-
-      <section className="promptx-section" aria-labelledby={`${ids}-editor`}>
-        <h4 className="promptx-section-title" id={`${ids}-editor`}>{t('sectionEditor')}</h4>
-        <SwitchField
-          t={t}
-          label={t('convertMiddleDotLabel')}
-          hint={t('convertMiddleDotHint')}
-          checked={values.convertMiddleDot}
-          error={errors.convertMiddleDot}
-          disabled={saving}
-          onChange={(value) => {
-            form.stage('convertMiddleDot', value)
-          }}
-        />
-        <SwitchField
-          t={t}
-          label={t('convertYenLabel')}
-          hint={t('convertYenHint')}
-          checked={values.convertYen}
-          error={errors.convertYen}
-          disabled={saving}
-          onChange={(value) => {
-            form.stage('convertYen', value)
-          }}
-        />
-      </section>
-
-      <section className="promptx-section" aria-labelledby={`${ids}-library`}>
-        <h4 className="promptx-section-title" id={`${ids}-library`}>{t('sectionLibrary')}</h4>
-        <TextField
-          t={t}
-          label={t('libraryDirLabel')}
-          hint={t('libraryDirHint')}
-          value={values.libraryDir}
-          placeholder={status.effectiveLibraryDir}
-          error={errors.libraryDir}
-          disabled={saving}
-          onChange={(value) => {
-            form.stage('libraryDir', value)
-          }}
-        />
-        <SwitchField
-          t={t}
-          label={t('confirmDeleteLabel')}
-          hint={t('confirmDeleteHint')}
-          checked={values.confirmDelete}
-          error={errors.confirmDelete}
-          disabled={saving}
-          onChange={(value) => {
-            form.stage('confirmDelete', value)
-          }}
-        />
-      </section>
-
-      <section className="promptx-section" aria-labelledby={`${ids}-optimize`}>
-        <h4 className="promptx-section-title" id={`${ids}-optimize`}>{t('sectionOptimize')}</h4>
-        <InstructionField
-          t={t}
-          value={values.optimizeInstruction}
-          defaultInstruction={status.defaultInstruction[props.language]}
-          error={errors.optimizeInstruction}
-          disabled={saving}
-          onChange={(value) => {
-            form.stage('optimizeInstruction', value)
           }}
         />
       </section>
@@ -267,15 +181,8 @@ function useStagedConfig(config: PromptxConfig, platform: string, api: ConfigPag
   const stage = <K extends ConfigField>(field: K, value: PromptxConfig[K]): void => {
     setDraft(current => withField(current, field, value))
     // Host 报的错针对的是提交时的值，用户改了这个字段，旧错误就不再成立。
-    setHostErrors((current) => {
-      let next = withoutError(current, field)
-      if (SHORTCUT_CONFIG_FIELDS.some(shortcut => field === shortcut)) {
-        for (const shortcut of SHORTCUT_CONFIG_FIELDS) {
-          if (next[shortcut] === 'shortcut-conflict') next = withoutError(next, shortcut)
-        }
-      }
-      return next
-    })
+    // 这一页只剩全局快捷键一个快捷键字段，冲突错误只会落在它自己身上（Host 只报补丁里的字段）。
+    setHostErrors(current => withoutError(current, field))
     setNotice(null)
   }
 
@@ -333,6 +240,10 @@ function useMountedRef(): { readonly current: boolean } {
 
 type ActionName = CompanionAction | RuntimeAction
 
+function isCompanionAction(action: ActionName): action is CompanionAction {
+  return action === 'restart' || action === 'show' || action === 'settings'
+}
+
 interface Actions {
   /** 正在执行的动作；同一时间只执行一个，期间其他动作按钮不可用。 */
   readonly busy: ActionName | null
@@ -360,7 +271,7 @@ function useActions(api: ConfigPageApi): Actions {
     }
     let task: Promise<ActionResult>
     try {
-      task = action === 'restart' || action === 'show' ? api.companion(action) : api.runtime(action)
+      task = isCompanionAction(action) ? api.companion(action) : api.runtime(action)
     } catch (error) {
       task = Promise.resolve({ ok: false, error: toErrorInfo(error) })
     }
@@ -376,6 +287,28 @@ function ActionFailure({ t, actions, of }: { t: PromptxTranslate; actions: Actio
   const failure = actions.failure
   if (failure === null || !of.includes(failure.action)) return null
   return <p className="promptx-error" role="status">{t('actionFailed', { reason: errorText(t, failure.error) })}</p>
+}
+
+// ───────────────────────────── 其他设置 ─────────────────────────────
+
+/** 其他设置在 PromptX 设置窗口里：说明加「打开 PromptX 设置」（小窗运行中才能用）。 */
+function MoreSettings({ t, status, actions }: { t: PromptxTranslate; status: PanelStatus; actions: Actions }): ReactNode {
+  return (
+    <div className="promptx-panel promptx-more" data-promptx-more-settings="">
+      <div className="promptx-more-row">
+        <p className="promptx-more-text">{t('moreSettings')}</p>
+        <Button
+          disabled={actions.busy !== null || status.companion.state !== 'running'}
+          onClick={() => {
+            actions.run('settings')
+          }}
+        >
+          {t('openSettingsWindow')}
+        </Button>
+      </div>
+      <ActionFailure t={t} actions={actions} of={['settings']} />
+    </div>
+  )
 }
 
 // ───────────────────────────── 小窗状态 ─────────────────────────────
@@ -750,9 +683,8 @@ function RuntimeSourceField({ t, value, error, disabled, onChange }: {
   )
 }
 
-function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultShortcut, error, disabled, onChange }: {
+function ShortcutField({ t, value, platform, defaultShortcut, error, disabled, onChange }: {
   t: PromptxTranslate
-  field?: 'globalShortcut' | ToolbarShortcutField
   value: string
   /** 运行 dsh 的电脑的平台：快捷键是注册在那台电脑上的，显示和录制都按它（⌘ 还是 Win）。 */
   platform: string
@@ -764,15 +696,11 @@ function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultSh
   const id = useId()
   const [recording, setRecording] = useState(false)
   const recordButton = useRef<HTMLButtonElement>(null)
-  const scope = field === 'globalShortcut' ? 'global' : 'window'
-  const label = t(field === 'globalShortcut' ? 'shortcutLabel' : field)
-  const normalized = normalizeShortcut(value, scope)
-  const preview = normalized !== '' && parseAccelerator(normalized, scope).ok ? formatAccelerator(normalized, platform, scope) : null
+  const normalized = normalizeShortcut(value)
+  const preview = normalized !== '' && parseAccelerator(normalized).ok ? formatAccelerator(normalized, platform) : null
   const hint = recording
     ? t('shortcutRecording')
-    : t(scope === 'global' ? 'shortcutHint' : 'windowShortcutHint', {
-      default: defaultShortcut === '' ? '—' : formatAccelerator(defaultShortcut, platform, scope),
-    })
+    : t('shortcutHint', { default: defaultShortcut === '' ? '—' : formatAccelerator(defaultShortcut, platform) })
 
   // 录制：按下「录制」后监听这个按钮上的一次 keydown，换算成 Electron 加速键写法填进输入框（只是暂存，保存后才生效）。
   const onRecordKey = (event: KeyboardEvent<HTMLButtonElement>): void => {
@@ -787,7 +715,7 @@ function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultSh
       setRecording(false)
       return
     }
-    const accelerator = acceleratorFromKeyEvent(event, platform, scope)
+    const accelerator = acceleratorFromKeyEvent(event, platform)
     // 只按了修饰键，或者组合不合法（没有修饰键、只有 Shift）：继续等。
     if (accelerator === null) return
     onChange(accelerator)
@@ -795,9 +723,9 @@ function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultSh
   }
 
   return (
-    <div className="promptx-field" data-promptx-field={field}>
+    <div className="promptx-field" data-promptx-field="globalShortcut">
       <div className="promptx-field-head">
-        <label className="promptx-label" htmlFor={id}>{label}</label>
+        <label className="promptx-label" htmlFor={id}>{t('shortcutLabel')}</label>
       </div>
       <div className="promptx-control-row">
         <input
@@ -805,7 +733,7 @@ function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultSh
           className="promptx-input"
           type="text"
           value={value}
-          placeholder={t(scope === 'global' ? 'shortcutPlaceholder' : 'windowShortcutPlaceholder')}
+          placeholder={t('shortcutPlaceholder')}
           disabled={disabled}
           spellCheck={false}
           autoComplete="off"
@@ -818,7 +746,6 @@ function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultSh
         {preview === null ? null : <kbd className="promptx-kbd" title={t('shortcutPreview', { shortcut: preview })}>{preview}</kbd>}
         <Button
           ref={recordButton}
-          aria-label={scope === 'window' ? t('recordWindowShortcut', { action: label }) : undefined}
           aria-pressed={recording}
           aria-describedby={`${id}-message`}
           disabled={disabled}
@@ -836,111 +763,6 @@ function ShortcutField({ t, field = 'globalShortcut', value, platform, defaultSh
         </Button>
       </div>
       <FieldMessage t={t} id={`${id}-message`} error={recording ? undefined : error} hint={hint} live />
-    </div>
-  )
-}
-
-function SwitchField({ t, label, hint, checked, error, disabled, onChange }: {
-  t: PromptxTranslate
-  label: string
-  hint: string
-  checked: boolean
-  error: ConfigFieldError | undefined
-  disabled: boolean
-  onChange: (value: boolean) => void
-}): ReactNode {
-  const id = useId()
-  return (
-    <div className="promptx-field">
-      <div className="promptx-switch-row">
-        <div className="promptx-switch-text">
-          <label className="promptx-label" htmlFor={id}>{label}</label>
-          <p className="promptx-hint" id={`${id}-hint`}>{hint}</p>
-        </div>
-        <Switch id={id} checked={checked} describedBy={`${id}-hint`} disabled={disabled} onChange={onChange} />
-      </div>
-      {error === undefined ? null : <p className="promptx-error">{fieldErrorText(t, error)}</p>}
-    </div>
-  )
-}
-
-function TextField({ t, label, hint, value, placeholder, error, disabled, onChange }: {
-  t: PromptxTranslate
-  label: string
-  hint: string
-  value: string
-  placeholder: string
-  error: ConfigFieldError | undefined
-  disabled: boolean
-  onChange: (value: string) => void
-}): ReactNode {
-  const id = useId()
-  return (
-    <div className="promptx-field">
-      <div className="promptx-field-head">
-        <label className="promptx-label" htmlFor={id}>{label}</label>
-      </div>
-      <input
-        id={id}
-        className="promptx-input"
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        disabled={disabled}
-        spellCheck={false}
-        autoComplete="off"
-        aria-invalid={error === undefined ? undefined : true}
-        aria-describedby={`${id}-message`}
-        onChange={(event) => {
-          onChange(event.target.value)
-        }}
-      />
-      <FieldMessage t={t} id={`${id}-message`} error={error} hint={hint} />
-    </div>
-  )
-}
-
-function InstructionField({ t, value, defaultInstruction, error, disabled, onChange }: {
-  t: PromptxTranslate
-  value: string
-  /** 留空时生效的默认指令，显示成占位文字（需求 O-08）。 */
-  defaultInstruction: string
-  error: ConfigFieldError | undefined
-  disabled: boolean
-  onChange: (value: string) => void
-}): ReactNode {
-  const id = useId()
-  return (
-    <div className="promptx-field">
-      <div className="promptx-field-head">
-        <label className="promptx-label" htmlFor={id}>{t('instructionLabel')}</label>
-      </div>
-      <textarea
-        id={id}
-        className="promptx-input promptx-textarea"
-        value={value}
-        placeholder={defaultInstruction}
-        rows={8}
-        disabled={disabled}
-        spellCheck={false}
-        aria-invalid={error === undefined ? undefined : true}
-        aria-describedby={`${id}-message`}
-        onChange={(event) => {
-          onChange(event.target.value)
-        }}
-      />
-      <div className="promptx-control-row">
-        {/* 只把指令框暂存为空（空 = 使用默认指令），保存后才生效（design-spec 4.4）。 */}
-        <Button
-          disabled={disabled || value === ''}
-          onClick={() => {
-            onChange('')
-          }}
-        >
-          {t('restoreDefaultInstruction')}
-        </Button>
-      </div>
-      <FieldMessage t={t} id={`${id}-message`} error={error} hint={t('instructionHint')} />
     </div>
   )
 }

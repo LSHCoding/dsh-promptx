@@ -22,7 +22,7 @@ import {
   type SmokeReport,
 } from '../../shared/protocol.ts'
 import { RpcError } from '../../shared/rpc.ts'
-import type { CompanionConfig, CompanionStatus, ErrorInfo } from '../../shared/types.ts'
+import type { CompanionConfig, CompanionStatus, ErrorInfo, SettingsSection } from '../../shared/types.ts'
 import { parseCompanionConfig, resolveConfig, resolveLocale, WINDOW_BACKGROUND, type Locale } from './appearance.ts'
 import { ClipboardWriter } from './clipboard.ts'
 import { EntryEditorManager } from './entry-editor.ts'
@@ -30,7 +30,7 @@ import { runE2eCommand, type CopyTiming, type E2eDeps, type RendererE2eRequest }
 import type { CompanionEnv, CompanionPaths } from './env.ts'
 import { FlushCoordinator } from './flush.ts'
 import { HostLink, type CompanionPeer, type HostLinkClose, type InputStream, type OutputStream } from './host-link.ts'
-import { registerEntryEditorIpc, registerIpcHandlers, type E2eRendererResult, type ReadyInfo } from './ipc.ts'
+import { registerEntryEditorIpc, registerIpcHandlers, registerSettingsIpc, type E2eRendererResult, type ReadyInfo } from './ipc.ts'
 import { errorCode, type CompanionLogger } from './logger.ts'
 import { boundsForReset, boundsForShow, growToMinimum, minimumSize, resizeWidth, sameRect, toolbarSpan } from './placement.ts'
 import type { CompanionPlatform, MainWindow, TrayHandle } from './platform.ts'
@@ -42,6 +42,7 @@ import {
   RendererHealth,
 } from './renderer-health.ts'
 import { planSettingsOpen } from './settings.ts'
+import { SettingsWindowManager } from './settings-window.ts'
 import { LOCK_REFRESH_MS, ShortcutLocks } from './shortcut-lock.ts'
 import { ShortcutManager } from './shortcut-manager.ts'
 import { runTask, withTimeout } from './tasks.ts'
@@ -153,13 +154,14 @@ export class CompanionApp {
   #window: MainWindow | null = null
   #controller: WindowController | null = null
   #entryEditor: EntryEditorManager | null = null
+  #settingsWindow: SettingsWindowManager | null = null
   #tray: TrayHandle | null = null
   #booted = false
   #rendererReady = false
   #readyInfo: ReadyInfo | null = null
   #smokeStarted = false
   #requestedMinWidth = 0
-  #pendingCommand: 'show' | 'hide' | 'toggle' | null = null
+  #pendingCommand: 'show' | 'hide' | 'toggle' | 'settings' | null = null
   #lastStatus: string | null = null
   /** 界面进程崩溃后正在重新加载：随 status 报给 Host（design-spec 5.4，审查 CR-03）；界面重新就绪后清掉。 */
   #rendererError: ErrorInfo | null = null
@@ -209,10 +211,19 @@ export class CompanionApp {
       locks,
       ...(options.platform.readSystemHotkeys === undefined ? {} : { readSystemHotkeys: options.platform.readSystemHotkeys }),
       locale: () => this.#locale(),
-      onTrigger: () => { this.#controller?.toggle('shortcut') },
+      onTrigger: () => {
+        // 设置窗口正在录制快捷键：系统先拦下了这次按键，把它当成录到的组合，不切换小窗（V0.1.6 design-spec 3.2）。
+        const settings = this.#settingsWindow
+        if (settings?.recording === true) {
+          settings.shortcutPressed(this.#shortcuts.status()?.accelerator ?? '')
+          return
+        }
+        this.#controller?.toggle('shortcut')
+      },
       onStatus: () => {
         this.#scheduleTrayUpdate()
         this.#reportStatus()
+        this.#settingsWindow?.publish()
       },
       logger: options.logger,
       now: () => options.platform.now(),
@@ -268,7 +279,7 @@ export class CompanionApp {
         copyText: text => this.#copy(text, false),
         getBounds: () => this.#windowBounds(),
         setWidth: (width, anchor) => this.#setWidth(width, anchor),
-        openSettings: () => this.#openSettings('window'),
+        openSettings: section => this.#openSettingsWindow(section),
         getPrefs: () => this.#prefs.get(),
         ready: (info) => {
           this.#onRendererReady(info)
@@ -289,6 +300,7 @@ export class CompanionApp {
       },
     })
     registerEntryEditorIpc(this.#platform.ipc, sender => this.#window?.isSender(sender) ?? false, () => this.#entryEditor)
+    registerSettingsIpc(this.#platform.ipc, () => this.#settingsWindow)
     this.#platform.onBeforeQuit((prevent) => {
       if (this.#finalized) return
       // 系统注销、关机时 Electron 走 before-quit：先拦下来写回草稿，再自己退出（app.exit 不再触发 before-quit）。
@@ -375,6 +387,7 @@ export class CompanionApp {
         if (saved.ok) await editor.close()
         return result
       }
+      if (command.action === 'settings') return this.#e2eSettings()
       return runE2eCommand(command, this.#e2eDeps())
     })
     this.#peer.handle('shutdown', async () => {
@@ -464,6 +477,8 @@ export class CompanionApp {
 
   #applyConfig(config: CompanionConfig): void {
     this.#config = config
+    // Host 的配置有变化（任何字段，包括设置窗口刚写入的）：设置窗口重新取一次完整的配置。
+    if (this.#settingsWindow !== null) runTask(this.#logger, 'settings-config', this.#settingsWindow.refresh())
     // app ready 之前只记下来，#boot 里再应用。
     if (!this.#booted) return
     this.#applyThemeSource(config.theme)
@@ -491,6 +506,7 @@ export class CompanionApp {
     if (previous !== null && JSON.stringify(previous) === JSON.stringify(next)) return
     this.#resolved = next
     this.#entryEditor?.applyConfig()
+    this.#settingsWindow?.publish()
     this.#window?.send('config', next)
     this.#window?.setBackgroundColor(WINDOW_BACKGROUND[next.resolvedTheme])
     if (previous?.resolvedLocale !== next.resolvedLocale) {
@@ -506,16 +522,22 @@ export class CompanionApp {
   }
 
   #windowCommand(command: unknown): void {
-    if (command !== 'show' && command !== 'hide' && command !== 'toggle') return
+    if (command !== 'show' && command !== 'hide' && command !== 'toggle' && command !== 'settings') return
     const controller = this.#controller
     if (controller === null) {
       // 窗口还没建好：记下最后一条，建好后执行。
       this.#pendingCommand = command
       return
     }
+    // dsh 插件页的「打开 PromptX 设置」：和菜单栏「设置…」一样，先显示小窗再打开设置窗口。
+    if (command === 'settings') {
+      controller.show('host-settings')
+      this.#openSettingsWindow()
+      return
+    }
     // 保留 Host toggle 命令的语义：可见但失焦时把焦点交回小窗。
     if (command === 'show') controller.show('host')
-    else if (command === 'hide' || controller.focused || this.#entryEditor?.focused === true) controller.hide('host')
+    else if (command === 'hide' || controller.focused || this.#entryEditor?.focused === true || this.#settingsWindow?.focused === true) controller.hide('host')
     else controller.show('host')
   }
 
@@ -581,6 +603,18 @@ export class CompanionApp {
         logger: this.#logger,
       })
       runTask(this.#logger, 'entry-editor-initialize', () => this.#entryEditor?.initialize() ?? Promise.resolve())
+      this.#settingsWindow = new SettingsWindowManager({
+        platform: this.#platform,
+        parent: window,
+        config: () => this.#resolved,
+        shortcut: () => this.#shortcuts.status(),
+        request: async (method, params) => {
+          if (!(await this.#handshake)) throw new PromptxError('promptx/channel/closed')
+          return this.#peer.request(method, params)
+        },
+        openInDsh: () => this.#openInDsh(),
+        logger: this.#logger,
+      })
       this.#controller = new WindowController({
         platform: this.#platform.platform,
         window,
@@ -607,6 +641,7 @@ export class CompanionApp {
         },
         onHidden: (reason) => {
           this.#entryEditor?.hide()
+          this.#settingsWindow?.hide()
           this.#copyTiming = { ...this.#copyTiming, hiddenAt: this.#platform.now() }
           this.#onVisibility('window.hidden', reason)
         },
@@ -835,19 +870,32 @@ export class CompanionApp {
     return result
   }
 
-  async #openSettings(source: 'window' | 'tray'): Promise<BridgeResult<{ navigated: boolean }>> {
+  /** 打开设置窗口（V0.1.6）：工具栏齿轮、「打开设置」快捷键、库侧栏、菜单栏都走这里，不再唤起 dsh。 */
+  #openSettingsWindow(section?: SettingsSection): BridgeResult<null> {
+    const settings = this.#settingsWindow
+    if (settings === null) return { ok: false, error: { code: 'promptx/internal', detail: 'window not ready' } }
+    const result = settings.open(section)
+    this.#logger.info('settings.window-opened', { section: section ?? null, ok: result.ok })
+    return result
+  }
+
+  /**
+   * 设置窗口「关于」里的「在 DeepSeek Harness 中打开」：V0.1.5 以前的设置流程。Host 记下一次 navigate 请求，
+   * 返回要用系统打开的地址（桌面版 dsh://open，dsh web 没有页面在线时是带口令的网页地址），小窗随后隐藏。
+   */
+  async #openInDsh(): Promise<BridgeResult<{ navigated: boolean }>> {
     let result: { open: string | null; navigated: boolean }
     try {
       if (!(await this.#handshake)) throw new PromptxError('promptx/channel/closed')
       result = await this.#peer.request('host.openSettings', {})
     } catch (error) {
       const info = errorInfoOf(error)
-      this.#logger.warn('settings.failed', { code: info.code, source })
+      this.#logger.warn('settings.dsh-failed', { code: info.code })
       return { ok: false, error: info }
     }
-    const plan = planSettingsOpen(result, source)
+    const plan = planSettingsOpen(result, 'window')
     if (plan.error !== null) {
-      this.#logger.warn('settings.failed', { code: plan.error.code, source })
+      this.#logger.warn('settings.dsh-failed', { code: plan.error.code })
       return { ok: false, error: plan.error }
     }
     if (plan.openUrl !== null) {
@@ -855,11 +903,11 @@ export class CompanionApp {
         // 地址可能带口令（dsh web），只交给系统打开，不写日志。
         await this.#platform.openExternal(plan.openUrl)
       } catch (error) {
-        this.#logger.warn('settings.open-failed', { error: errorCode(error), source })
+        this.#logger.warn('settings.dsh-open-failed', { error: errorCode(error) })
         return { ok: false, error: { code: 'promptx/settings/unavailable' } }
       }
     }
-    this.#logger.info('settings.opened', { source, hide: plan.hide, navigated: result.navigated })
+    this.#logger.info('settings.dsh-opened', { hide: plan.hide, navigated: result.navigated })
     if (plan.hide === 'now') this.#controller?.hide('settings')
     else if (plan.hide === 'delayed') this.#hideLater(this.#timings.settingsToastMs)
     return { ok: true, value: { navigated: result.navigated } }
@@ -878,7 +926,9 @@ export class CompanionApp {
         this.#logger.info('window.reset-position')
         return
       case 'settings':
-        runTask(this.#logger, 'tray-settings', () => this.#openSettings('tray'))
+        // 小窗隐藏时先把它显示出来：设置窗口是它的子窗口，改动的效果也在小窗里看。
+        controller?.show('tray-settings')
+        this.#openSettingsWindow()
         return
       case 'restart':
         // Host 会走正常的停止流程（shutdown 请求里写回草稿）再启动新的小程序（F-05：草稿不丢）。
@@ -988,12 +1038,49 @@ export class CompanionApp {
         booted: this.#booted,
         visible: this.#window?.isVisible() ?? false,
         focused: this.#window?.isFocused() ?? false,
+        settingsVisible: this.#settingsWindow?.visible ?? false,
         rendererReady: this.#rendererReady,
         rendererHealthy: this.#health.healthy,
         tray: this.#tray !== null,
         shortcut: this.#shortcuts.status(),
         bounds: this.#window?.getBounds() ?? null,
       }),
+    }
+  }
+
+  /**
+   * 端到端：打开设置窗口，等设置页来取快照，经设置窗口的更新路径切换一次「¥ 转换」并等 Host 的配置带回新值，再改回原值。
+   * 验证的是真实 dsh 里 settings.get / settings.update 和 config 推送这一圈（V0.1.6 design-spec 8）。
+   */
+  async #e2eSettings(): Promise<{ ok: boolean; data: Record<string, unknown>; error?: ErrorInfo }> {
+    const settings = this.#settingsWindow
+    if (settings === null) return { ok: false, data: { windowCreated: false } }
+    this.#controller?.show('e2e-settings')
+    const opened = settings.open('editor')
+    if (!opened.ok) return { ok: false, data: {}, error: opened.error }
+    const waitFor = async (check: () => boolean, ms: number): Promise<boolean> => {
+      const deadline = this.#platform.now() + ms
+      while (!check() && this.#platform.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20))
+      return check()
+    }
+    const stateRequested = await waitFor(() => settings.stateRequested, 5000)
+    await settings.refresh()
+    const before = settings.current?.config.convertYen
+    if (before === undefined) return { ok: false, data: { stateRequested, loaded: false } }
+    const toggle = async (value: boolean): Promise<boolean> => {
+      const result = await settings.update({ convertYen: value })
+      if (!result.ok || !result.value.ok) return false
+      return waitFor(() => {
+        runTask(this.#logger, 'e2e-settings-refresh', settings.refresh())
+        return settings.current?.config.convertYen === value && this.#config?.convertYen === value
+      }, 5000)
+    }
+    const toggled = await toggle(!before)
+    const reverted = await toggle(before)
+    settings.close()
+    return {
+      ok: stateRequested && toggled && reverted,
+      data: { windowCreated: settings.windowCreated, stateRequested, toggled, reverted },
     }
   }
 
@@ -1041,6 +1128,7 @@ export class CompanionApp {
         this.#smokeTimer = null
         this.#controller?.dispose()
         this.#entryEditor?.dispose()
+        this.#settingsWindow?.dispose()
         this.#health.dispose()
         this.#flush.dispose()
         this.#e2eReplies.dispose()

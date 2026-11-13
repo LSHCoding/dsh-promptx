@@ -5,6 +5,7 @@ import type {
   Binding,
   CompanionConfig,
   CompanionStatus,
+  ConfigUpdateResult,
   DraftRecord,
   EntryMetadataDraft,
   ErrorInfo,
@@ -16,10 +17,12 @@ import type {
   OptimizeEvent,
   OptimizeSession,
   PromptMetadata,
+  PromptxConfig,
   RestoreResult,
   RestoreTarget,
   SaveMode,
   SaveResult,
+  SettingsData,
   TextSelection,
   TrashEntry,
   TrashListResult,
@@ -31,7 +34,9 @@ import type {
 // 5：新条目生成与确认元数据，独立编辑器可恢复未保存的标题和标签。
 // 6：库文件夹管理与保存目标选择，CompanionConfig 携带窗口快捷键。
 // 7：独立条目编辑器可在保存时移动文件。
-export const PROTOCOL_VERSION = 7
+// 8：设置窗口读写配置（settings.get、settings.update）。
+// 9：window.command 增加 settings，dsh 插件页的「打开 PromptX 设置」让小程序打开设置窗口。
+export const PROTOCOL_VERSION = 9
 
 type Empty = Record<string, never>
 
@@ -66,6 +71,8 @@ export type E2eCommand =
   | { action: 'host-read'; relPath: string }
   /** 转给小窗：在 size 字的草稿里插入一个字符，测到绘制完成的耗时（N-01）。 */
   | { action: 'typing-latency'; size: number }
+  /** 打开设置窗口，经它的更新路径切换一次「¥ 转换」再改回（V0.1.6）。 */
+  | { action: 'settings' }
 
 export interface E2eResult {
   ok: boolean
@@ -128,8 +135,12 @@ export interface CompanionRequests {
   'optimize.cancel': { params: Empty; result: { session: OptimizeSession | null } }
   'optimize.clear': { params: Empty; result: Empty }
   'optimize.state': { params: Empty; result: { session: OptimizeSession | null } }
-  /** 打开 dsh 插件页里 PromptX 的配置页。返回要用系统打开的地址（`dsh://open` 或 dsh 网页地址），没有则为 null。 */
+  /** 打开 dsh 插件页里 PromptX 的配置页（设置窗口「关于」里的入口）。返回要用系统打开的地址（`dsh://open` 或 dsh 网页地址），没有则为 null。 */
   'host.openSettings': { params: Empty; result: { open: string | null; navigated: boolean } }
+  /** 设置窗口要显示的配置和说明（V0.1.6）。 */
+  'settings.get': { params: Empty; result: SettingsData }
+  /** 设置窗口提交的改动，和 dsh 配置页走同一套校验和写入。 */
+  'settings.update': { params: { patch: Partial<PromptxConfig> }; result: ConfigUpdateResult }
 }
 
 /** 小程序 → Host 的通知。 */
@@ -151,7 +162,8 @@ export interface HostRequests {
 /** Host → 小程序的通知。 */
 export interface HostNotifications {
   'config': CompanionConfig
-  'window.command': { command: 'show' | 'hide' | 'toggle' }
+  /** settings：显示小窗并打开设置窗口（dsh 插件页的「打开 PromptX 设置」）。 */
+  'window.command': { command: 'show' | 'hide' | 'toggle' | 'settings' }
   'optimize.event': OptimizeEvent
   /** 库目录变了：小窗刷新侧栏，绑定的库目录不同时解除绑定。 */
   'library.changed': { libraryDir: string }
@@ -170,7 +182,7 @@ export const COMPANION_REQUEST_METHODS = [
   'library.read', 'library.suggestMetadata', 'library.save', 'library.updateMeta', 'library.delete',
   'trash.list', 'trash.read', 'trash.restore',
   'optimize.start', 'optimize.followup', 'optimize.retry', 'optimize.cancel', 'optimize.clear', 'optimize.state',
-  'host.openSettings',
+  'host.openSettings', 'settings.get', 'settings.update',
 ] as const satisfies readonly CompanionRequestMethod[]
 
 export const COMPANION_NOTIFICATION_METHODS = [
@@ -183,7 +195,10 @@ export const HOST_NOTIFICATION_METHODS = [
   'config', 'window.command', 'optimize.event', 'library.changed',
 ] as const satisfies readonly HostNotificationMethod[]
 
-/** 渲染进程可以经主进程转给 Host 的请求（白名单）。hello 由主进程自己发。 */
+/**
+ * 渲染进程可以经主进程转给 Host 的请求（白名单）。hello 由主进程自己发。
+ * settings.* 不在这里：只有设置窗口能改配置，走它自己的 IPC 通道，由主进程转发（V0.1.6）。
+ */
 export const RENDERER_FORWARDED_METHODS = [
   'draft.load', 'draft.save',
   'library.list', 'library.folders', 'library.createFolder', 'library.deleteFolder',

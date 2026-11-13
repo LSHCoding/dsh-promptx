@@ -328,6 +328,28 @@ export interface PanelStatus {
   companionPid?: number
 }
 
+/** 设置窗口的分区（V0.1.6）。 */
+export type SettingsSection = 'shortcuts' | 'editor' | 'library' | 'optimize' | 'about'
+
+/** settings.get 的结果：设置窗口要显示的配置和说明，由 Host 组装（V0.1.6 design-spec 4）。 */
+export interface SettingsData {
+  config: PromptxConfig
+  /** 展开后的库目录绝对路径。 */
+  effectiveLibraryDir: string
+  /** 配置为空时使用的默认库目录 `<dsh>/promptx/library`。 */
+  defaultLibraryDir: string
+  /** 当前平台的默认全局快捷键。 */
+  defaultShortcut: string
+  defaultInstruction: { zh: string; en: string }
+  /** 运行 dsh 的电脑的平台（`process.platform`）。 */
+  platform: string
+  /** 插件版本。 */
+  hostVersion: string
+  /** dsh profile 名（没有 profile 时为 default）。 */
+  profile: string
+  runtime: { version: string; source?: 'mirror' | 'official' }
+}
+
 export type ConfigFieldError =
   | 'library-dir-relative'
   | 'library-dir-reserved'

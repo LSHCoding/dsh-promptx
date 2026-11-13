@@ -25,6 +25,10 @@ export type IconName =
   | 'send'
   | 'chevron'
   | 'tag'
+  | 'keyboard'
+  | 'text'
+  | 'info'
+  | 'reset'
 
 const PATHS: Readonly<Record<IconName, ReactElement>> = {
   library: (
@@ -126,6 +130,21 @@ const PATHS: Readonly<Record<IconName, ReactElement>> = {
       <circle cx="5.4" cy="5.7" r="0.8" />
     </>
   ),
+  // 设置窗口的导航和操作（V0.1.6）。
+  keyboard: (
+    <>
+      <rect x="1.75" y="4" width="12.5" height="8" rx="1.5" />
+      <path d="M4.25 6.6h.01M6.75 6.6h.01M9.25 6.6h.01M11.75 6.6h.01M5.25 9.4h5.5" />
+    </>
+  ),
+  text: <path d="M3.5 4.25v-1h9v1M8 3.25v9.5M6.25 12.75h3.5" />,
+  info: (
+    <>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M8 7.25v3.75M8 5.1h.01" />
+    </>
+  ),
+  reset: <path d="M3.6 6.1a4.75 4.75 0 1 1-.35 3.4M3.5 2.9v3.3h3.3" />,
 }
 
 export interface IconProps {

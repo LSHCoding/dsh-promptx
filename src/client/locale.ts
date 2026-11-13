@@ -10,16 +10,15 @@ import type { ConfigFieldError, ErrorInfo } from '../shared/types.ts'
 export const LOCALE_NS = 'promptx'
 
 export const zh = {
-  summary: 'PromptX 小窗、Prompt 库和优化的设置。',
+  summary: 'PromptX 小窗的运行状态、运行时和全局快捷键。',
   loading: '正在读取 PromptX 的状态…',
   loadFailed: '连不上 PromptX 插件（{reason}），正在重试…',
   reconnecting: '和 PromptX 插件的连接断了，正在重连；下面显示的可能不是最新状态。',
   duplicateInstance: '另一个 dsh 进程已在为这个 profile 运行 PromptX。这个进程不启动小窗，也不读写草稿；要改设置，请到那个 dsh 里修改，或者先退出它，再重启这个 dsh。',
 
   sectionWindow: '小窗',
-  sectionEditor: '编辑器',
-  sectionLibrary: 'Prompt 库',
-  sectionOptimize: '优化',
+  moreSettings: '工具栏快捷键、中文输入转换、Prompt 库和优化指令在 PromptX 设置窗口里修改。也可以点小窗工具栏右侧的齿轮，或者菜单栏、托盘图标里的「设置…」打开。',
+  openSettingsWindow: '打开 PromptX 设置',
 
   statusLabel: '状态',
   companionRunning: '运行中',
@@ -81,31 +80,6 @@ export const zh = {
   shortcutPreview: '显示为 {shortcut}',
   record: '录制',
   recording: '正在录制…',
-  sectionToolbarShortcuts: '工具栏快捷键',
-  shortcutLibrary: '显示或隐藏库',
-  shortcutSave: '保存 Prompt',
-  shortcutOptimize: '优化或停止',
-  shortcutClear: '清空编辑区',
-  shortcutChat: '显示或隐藏聊天',
-  shortcutSettings: '打开设置',
-  shortcutClose: '关闭小窗',
-  windowShortcutHint: '小窗获得焦点时生效，默认 {default}。',
-  windowShortcutPlaceholder: '留空停用此快捷键',
-  recordWindowShortcut: '录制「{action}」快捷键',
-
-  convertMiddleDotLabel: '连打「·」转反引号 / 代码块',
-  convertMiddleDotHint: '连续输入两个 · 变成两个反引号，第三个生成代码块；单个 · 保持原样。',
-  convertYenLabel: '输入「¥」转「$」/ 行间公式',
-  convertYenHint: '连续输入两个 ¥ 或 ￥ 变成 $$，第三个生成行间公式块；单个符号保持原样。',
-
-  libraryDirLabel: '库目录',
-  libraryDirHint: '写绝对路径，或以 ~ 开头的路径；留空使用默认位置。保存后小窗的库侧栏直接换成新目录。',
-  confirmDeleteLabel: '删除前确认',
-  confirmDeleteHint: '把 Prompt 移进回收站之前先确认。',
-
-  instructionLabel: '优化指令',
-  instructionHint: '留空时使用默认指令。改动只影响之后开始的优化。',
-  restoreDefaultInstruction: '恢复默认指令',
 
   save: '保存',
   saving: '保存中…',
@@ -153,16 +127,15 @@ export const zh = {
 export type PromptxLocaleKey = keyof typeof zh
 
 export const en: Record<PromptxLocaleKey, string> = {
-  summary: 'Settings for the PromptX window, prompt library, and optimization.',
+  summary: 'Status, runtime, and global shortcut of the PromptX window.',
   loading: 'Reading the PromptX status…',
   loadFailed: 'Cannot reach the PromptX plugin ({reason}). Retrying…',
   reconnecting: 'Lost the connection to the PromptX plugin; reconnecting. The status below may be out of date.',
   duplicateInstance: 'Another dsh process is already running PromptX for this profile. This process does not start the PromptX window or touch the draft. Change the settings in that dsh, or quit it and restart this one.',
 
   sectionWindow: 'PromptX window',
-  sectionEditor: 'Editor',
-  sectionLibrary: 'Prompt library',
-  sectionOptimize: 'Optimization',
+  moreSettings: 'Change the toolbar shortcuts, Chinese input conversions, prompt library, and optimization instruction in the PromptX settings window. You can also open it with the gear at the right of the PromptX toolbar, or Settings… in the menu bar or tray icon.',
+  openSettingsWindow: 'Open PromptX settings',
 
   statusLabel: 'Status',
   companionRunning: 'Running',
@@ -224,31 +197,6 @@ export const en: Record<PromptxLocaleKey, string> = {
   shortcutPreview: 'Shown as {shortcut}',
   record: 'Record',
   recording: 'Recording…',
-  sectionToolbarShortcuts: 'Toolbar shortcuts',
-  shortcutLibrary: 'Show or hide the library',
-  shortcutSave: 'Save Prompt',
-  shortcutOptimize: 'Rewrite or stop',
-  shortcutClear: 'Clear the editor',
-  shortcutChat: 'Show or hide chat',
-  shortcutSettings: 'Open settings',
-  shortcutClose: 'Close the window',
-  windowShortcutHint: 'Works while the PromptX window has focus. Default: {default}.',
-  windowShortcutPlaceholder: 'Leave empty to disable this shortcut',
-  recordWindowShortcut: 'Record shortcut for {action}',
-
-  convertMiddleDotLabel: 'Repeated · to backticks / code block',
-  convertMiddleDotHint: 'Two middle dots become two backticks; a third creates a code block. A single dot stays unchanged.',
-  convertYenLabel: '¥ to $ / display math',
-  convertYenHint: 'Two ¥ or ￥ signs become $$; a third creates a display math block. A single sign stays unchanged.',
-
-  libraryDirLabel: 'Library folder',
-  libraryDirHint: 'An absolute path, or one starting with ~. Leave empty for the default location. After saving, the library sidebar in the window shows the new folder.',
-  confirmDeleteLabel: 'Confirm before deleting',
-  confirmDeleteHint: 'Ask before moving a prompt to the trash.',
-
-  instructionLabel: 'Optimization instruction',
-  instructionHint: 'Leave empty to use the default instruction. Changes apply to optimizations started afterwards.',
-  restoreDefaultInstruction: 'Restore default instruction',
 
   save: 'Save',
   saving: 'Saving…',

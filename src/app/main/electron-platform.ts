@@ -85,6 +85,11 @@ export function createElectronPlatform(options: ElectronPlatformOptions): Compan
       readText: () => clipboard.readText(),
     },
     openExternal: url => shell.openExternal(url),
+    async openPath(path) {
+      // shell.openPath 不拒绝，失败时返回错误说明（空串表示成功）。
+      const problem = await shell.openPath(path)
+      if (problem !== '') throw new Error(problem)
+    },
     shortcuts: {
       register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
       unregister: (accelerator) => {
@@ -102,6 +107,16 @@ export function createElectronPlatform(options: ElectronPlatformOptions): Compan
       if (native === undefined || native.isDestroyed()) return box.cancelId
       const result = await dialog.showMessageBox(native, { ...box, type: 'question', noLink: true })
       return result.response
+    },
+    async chooseDirectory(window, choose) {
+      const native = windows.get(window)
+      if (native === undefined || native.isDestroyed()) return null
+      const result = await dialog.showOpenDialog(native, {
+        title: choose.title,
+        defaultPath: choose.defaultPath,
+        properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'],
+      })
+      return result.canceled ? null : result.filePaths[0] ?? null
     },
     createTray: onAction => createTray(appDir, onAction, logger),
     onBeforeQuit: (listener) => {
@@ -150,8 +165,8 @@ function createMainWindow(
   const win = new BrowserWindow({
     width: options.width,
     height: options.height,
-    minWidth: MIN_WINDOW.width,
-    minHeight: MIN_WINDOW.height,
+    minWidth: options.minWidth ?? MIN_WINDOW.width,
+    minHeight: options.minHeight ?? MIN_WINDOW.height,
     show: false,
     frame: false,
     resizable: true,
@@ -187,7 +202,8 @@ function createMainWindow(
   const indexHtml = join(appDir, 'renderer', 'index.html')
   const load = (): void => {
     // loadFile 的 Promise 在页面加载失败（包括被中止）时拒绝；只记日志，冒烟测试会发现界面没有就绪。
-    runTask(logger, 'window-load', () => win.loadFile(indexHtml, options.entryEditor === true ? { hash: 'entry-editor' } : {}))
+    const page = options.page ?? 'main'
+    runTask(logger, 'window-load', () => win.loadFile(indexHtml, page === 'main' ? {} : { hash: page }))
   }
   load()
 

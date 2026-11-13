@@ -90,7 +90,8 @@ describe('preload: exposure', () => {
   it('exposes window.promptx with the platform and nothing from Electron itself', () => {
     expect([...electron.state.exposed.keys()]).toEqual(['promptx'])
     expect(bridge.platform).toBe(process.platform)
-    expect(Object.keys(bridge).sort()).toEqual(['call', 'e2eDone', 'entryEditor', 'flushed', 'getConfig', 'on', 'platform', 'prefs', 'ready', 'window'])
+    expect(Object.keys(bridge).sort()).toEqual(['call', 'e2eDone', 'entryEditor', 'flushed', 'getConfig', 'on', 'platform', 'prefs', 'ready', 'settings', 'window'])
+    expect(Object.keys(bridge.settings).sort()).toEqual(['chooseLibraryDir', 'close', 'getState', 'openInDsh', 'openLibraryDir', 'setRecording', 'update'])
     expect(JSON.stringify(Object.keys(bridge.window).sort())).toBe(JSON.stringify(
       ['copyAndHide', 'copyText', 'getBounds', 'hide', 'openSettings', 'setMinWidth', 'setWidth'],
     ))
@@ -208,6 +209,39 @@ describe('preload: one-way messages', () => {
   })
 })
 
+describe('preload: settings window (V0.1.6)', () => {
+  it('uses the settings channels and turns IPC failures into results', async () => {
+    invoke.mockResolvedValueOnce({ ok: true, value: { data: null } })
+    await expect(bridge.settings.getState()).resolves.toEqual({ ok: true, value: { data: null } })
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.settingsGetState)
+    invoke.mockResolvedValueOnce({ ok: true, value: { ok: true } })
+    await expect(bridge.settings.update({ convertYen: false })).resolves.toEqual({ ok: true, value: { ok: true } })
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.settingsUpdate, { convertYen: false })
+    invoke.mockResolvedValueOnce({ ok: true, value: '/Users/me/Prompts' })
+    await expect(bridge.settings.chooseLibraryDir()).resolves.toEqual({ ok: true, value: '/Users/me/Prompts' })
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.settingsChooseLibraryDir)
+    invoke.mockResolvedValueOnce({ ok: true, value: null })
+    await bridge.settings.openLibraryDir()
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.settingsOpenLibraryDir)
+    invoke.mockResolvedValueOnce({ ok: true, value: { navigated: false } })
+    await bridge.settings.openInDsh()
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.settingsOpenInDsh)
+
+    invoke.mockRejectedValue(new Error('untrusted sender'))
+    await expect(bridge.settings.getState()).resolves.toEqual({ ok: false, error: { code: 'promptx/channel/closed' } })
+    await expect(bridge.settings.update({ convertYen: true })).resolves.toEqual({ ok: false, error: { code: 'promptx/channel/closed' } })
+    await expect(bridge.settings.openInDsh()).resolves.toEqual({ ok: false, error: { code: 'promptx/settings/unavailable' } })
+    await expect(bridge.settings.close()).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.settingsClose)
+  })
+
+  it('sends the recording state one way', () => {
+    bridge.settings.setRecording(true)
+    bridge.settings.setRecording(false)
+    expect(electron.state.sent).toEqual([[IPC_CHANNELS.settingsRecording, true], [IPC_CHANNELS.settingsRecording, false]])
+  })
+})
+
 describe('preload: window and prefs requests', () => {
   it('copies through the main process and reports failures as results', async () => {
     invoke.mockResolvedValueOnce({ ok: true, value: null })
@@ -218,9 +252,13 @@ describe('preload: window and prefs requests', () => {
     expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.windowCopyText, 'x')
   })
 
-  it('opens settings and falls back to settings/unavailable', async () => {
-    invoke.mockResolvedValueOnce({ ok: true, value: { navigated: true } })
-    await expect(bridge.window.openSettings()).resolves.toEqual({ ok: true, value: { navigated: true } })
+  it('opens the settings window (optionally at a section) and falls back to settings/unavailable', async () => {
+    invoke.mockResolvedValueOnce({ ok: true, value: null })
+    await expect(bridge.window.openSettings()).resolves.toEqual({ ok: true, value: null })
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.windowOpenSettings)
+    invoke.mockResolvedValueOnce({ ok: true, value: null })
+    await bridge.window.openSettings('library')
+    expect(invoke).toHaveBeenLastCalledWith(IPC_CHANNELS.windowOpenSettings, 'library')
     invoke.mockRejectedValueOnce(new Error('gone'))
     await expect(bridge.window.openSettings()).resolves.toEqual({ ok: false, error: { code: 'promptx/settings/unavailable' } })
   })

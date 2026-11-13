@@ -1,6 +1,6 @@
 {
   "name": "dsh-promptx",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "PromptX for DeepSeek Harness: a global-hotkey prompt editor that floats above every app, with a Markdown prompt library and model-assisted rewriting.",
   "keywords": [
     "deepseek-harness",

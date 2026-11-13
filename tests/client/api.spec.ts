@@ -117,21 +117,23 @@ describe('createApi：请求的地址和格式', () => {
     })
   })
 
-  it('动作：重启、显示小窗，下载、删除运行时，上报页面状态', async () => {
-    const replies: unknown[] = [{ ok: true }, { ok: true }, { ok: true }, { ok: true, inUseBy: [{ profile: 'work', version: '44.9.0' }] }, { ok: true }]
+  it('动作：重启、显示小窗、打开设置窗口，下载、删除运行时，上报页面状态', async () => {
+    const replies: unknown[] = [{ ok: true }, { ok: true }, { ok: true }, { ok: true }, { ok: true, inUseBy: [{ profile: 'work', version: '44.9.0' }] }, { ok: true }]
     const { fetch, calls } = fakeFetch(() => Promise.resolve(jsonResponse(replies.shift())))
     const api = createApi(fetch)
     expect(await api.companion('restart')).toEqual({ ok: true })
     expect(await api.companion('show')).toEqual({ ok: true })
+    expect(await api.companion('settings')).toEqual({ ok: true })
     expect(await api.runtime('download')).toEqual({ ok: true })
     expect(await api.runtime('delete')).toEqual({ ok: true, inUseBy: [{ profile: 'work', version: '44.9.0' }] })
     const report: ClientStateReport = { clientId: 'c1', locale: 'zh-CN', visible: true }
     expect(await api.clientState(report)).toEqual({ ok: true })
     expect(calls.map(call => call.input)).toEqual([
-      'api/dsh-promptx/companion', 'api/dsh-promptx/companion', 'api/dsh-promptx/runtime', 'api/dsh-promptx/runtime', 'api/dsh-promptx/client-state',
+      'api/dsh-promptx/companion', 'api/dsh-promptx/companion', 'api/dsh-promptx/companion',
+      'api/dsh-promptx/runtime', 'api/dsh-promptx/runtime', 'api/dsh-promptx/client-state',
     ])
     expect(calls.map(bodyOf)).toEqual([
-      { action: 'restart' }, { action: 'show' }, { action: 'download' }, { action: 'delete' }, report,
+      { action: 'restart' }, { action: 'show' }, { action: 'settings' }, { action: 'download' }, { action: 'delete' }, report,
     ])
   })
 

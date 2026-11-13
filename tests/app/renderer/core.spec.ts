@@ -375,25 +375,24 @@ describe('其他窗口级快捷键（技术方案 5.5）', () => {
 })
 
 describe('设置', () => {
-  it('打开插件配置：页面开着时提示已在 dsh 页面打开；失败时说明原因', async () => {
+  it('打开设置窗口（V0.1.6）：可以带分区，不提示也不隐藏小窗；失败时说明原因', async () => {
     const bridge = new FakeBridge()
     const controller = await start(bridge)
     await controller.openSettings()
-    expect(bridge.window.openSettings).toHaveBeenCalledTimes(1)
-    expect(toastText(controller)).toBe('已在 dsh 页面打开 PromptX 设置。')
+    expect(bridge.window.openSettings).toHaveBeenLastCalledWith(undefined)
+    expect(toastText(controller)).toBeNull()
+    await controller.openSettings('library')
+    expect(bridge.window.openSettings).toHaveBeenLastCalledWith('library')
+    expect(bridge.window.hide).not.toHaveBeenCalled()
 
-    // 认不出原因时只说一遍「无法打开插件配置」，不再是「无法打开插件配置：无法打开插件配置」（审查 CR-04）。
+    // 认不出原因时只说一遍，不再是「无法打开设置：设置暂时不可用」之外再重复（审查 CR-04）。
     bridge.window.openSettings.mockResolvedValueOnce(fail('promptx/settings/unavailable'))
     await controller.openSettings()
-    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '无法打开插件配置' })
-    // 主进程拒绝打开的地址：说原因，不露出 unsupported url 这种机器写法。
-    bridge.window.openSettings.mockResolvedValueOnce(fail('promptx/settings/unavailable', 'unsupported url'))
-    await controller.openSettings()
-    expect(toastText(controller)).toBe('无法打开插件配置：插件给出的配置页地址无法交给系统打开')
+    expect(controller.store.getState().toast).toMatchObject({ kind: 'error', text: '设置暂时不可用' })
     // 别的错误码照常填进原因。
     bridge.window.openSettings.mockResolvedValueOnce(fail('promptx/channel/closed'))
     await controller.openSettings()
-    expect(toastText(controller)).toBe('无法打开插件配置：与插件的连接已断开')
+    expect(toastText(controller)).toBe('无法打开设置：与插件的连接已断开')
   })
 })
 

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { attachCompanionHandlers, companionStatus, type CompanionHandlerDeps } from '../../src/host-handlers.ts'
 import type { DraftApi, HostPeer, LibraryApi, OptimizeApi } from '../../src/services.ts'
-import type { CompanionStatus } from '../../src/shared/types.ts'
+import type { CompanionStatus, SettingsData } from '../../src/shared/types.ts'
 
 type Handler = (params: unknown) => unknown
 
@@ -56,6 +56,8 @@ function deps(overrides: Partial<CompanionHandlerDeps> = {}): CompanionHandlerDe
     optimize: {} as OptimizeApi,
     suggestMetadata: () => Promise.resolve(null),
     openSettings: () => ({ open: null, navigated: true }),
+    getSettings: () => SETTINGS_DATA,
+    updateSettings: () => Promise.resolve({ ok: true }),
     onStatus: (status) => {
       statuses.push(status)
     },
@@ -67,6 +69,22 @@ function deps(overrides: Partial<CompanionHandlerDeps> = {}): CompanionHandlerDe
 }
 
 const STATUS: CompanionStatus = { shortcut: null, tray: true, visible: false, locale: 'en', rendererError: null }
+
+const SETTINGS_DATA: SettingsData = {
+  config: {
+    libraryDir: '', confirmDelete: true, convertMiddleDot: true, convertYen: true, optimizeInstruction: '', globalShortcut: 'Control+P',
+    shortcutLibrary: 'CommandOrControl+L', shortcutSave: 'CommandOrControl+S', shortcutOptimize: 'CommandOrControl+Shift+O',
+    shortcutClear: '', shortcutChat: '', shortcutSettings: '', shortcutClose: 'Escape', hideOnBlur: false, runtimeSource: 'auto',
+  },
+  effectiveLibraryDir: '/home/me/.dsh/promptx/library',
+  defaultLibraryDir: '/home/me/.dsh/promptx/library',
+  defaultShortcut: 'Control+P',
+  defaultInstruction: { zh: '默认', en: 'default' },
+  platform: 'darwin',
+  hostVersion: '0.1.6',
+  profile: 'default',
+  runtime: { version: '44.10.2' },
+}
 
 describe('attachCompanionHandlers', () => {
   it('isolates entry-editor recovery from the main draft and requires an independent load on every connection', async () => {
@@ -163,6 +181,24 @@ describe('attachCompanionHandlers', () => {
     p.emit('status', { ...STATUS, rendererError: 'crashed' })
     p.emit('status', 'nonsense')
     expect(d.statuses).toEqual([STATUS])
+  })
+
+  it('serves the settings window: settings.get returns the Host data, settings.update hands the patch to the shared updater (V0.1.6)', async () => {
+    const patches: unknown[] = []
+    const d = deps({
+      updateSettings: (patch) => {
+        patches.push(patch)
+        return Promise.resolve(patch === null ? { ok: false, errors: {}, error: { code: 'promptx/internal', detail: 'patch must be an object' } } : { ok: true })
+      },
+    })
+    const p = fakePeer()
+    attachCompanionHandlers(p.peer, d)
+    expect(await p.call('settings.get')).toEqual(SETTINGS_DATA)
+    expect(await p.call('settings.update', { patch: { convertYen: false } })).toEqual({ ok: true })
+    // 补丁的形状由 web/config-update.ts 检查（和 dsh 配置页同一个函数），这里原样交给它。
+    expect(await p.call('settings.update', { patch: null })).toMatchObject({ ok: false })
+    expect(patches).toEqual([{ convertYen: false }, null])
+    await expect(p.call('settings.update', 'nonsense')).rejects.toMatchObject({ detail: 'invalid parameter: params' })
   })
 })
 

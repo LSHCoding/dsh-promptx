@@ -74,6 +74,23 @@ export function resizeWidth(current: Rect, width: number, anchor: 'left' | 'righ
   }
 }
 
+/**
+ * 子窗口（设置窗口）第一次出现的位置：中心对齐父窗口的中心，大小不超过可用区域，整体收回可用区域以内。
+ * 父窗口比子窗口小、或者靠近屏幕边缘时，子窗口不会有一部分跑到屏幕外。
+ */
+export function centerOver(parent: Rect, size: { width: number; height: number }, workArea: Rect): Rect {
+  const width = Math.max(1, Math.min(Math.round(size.width), Math.floor(workArea.width)))
+  const height = Math.max(1, Math.min(Math.round(size.height), Math.floor(workArea.height)))
+  const x = Math.round(parent.x + (parent.width - width) / 2)
+  const y = Math.round(parent.y + (parent.height - height) / 2)
+  return {
+    x: clamp(x, workArea.x, workArea.x + workArea.width - width),
+    y: clamp(y, workArea.y, workArea.y + workArea.height - height),
+    width,
+    height,
+  }
+}
+
 export function sameRect(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 }

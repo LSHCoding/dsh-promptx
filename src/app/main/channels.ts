@@ -22,12 +22,19 @@ export const IPC_CHANNELS = {
   entryEditorClose: 'promptx:entryEditor.close',
   entryEditorUpdate: 'promptx:entryEditor.update',
   entryEditorPrepared: 'promptx:entryEditor.prepared',
+  settingsGetState: 'promptx:settings.getState',
+  settingsUpdate: 'promptx:settings.update',
+  settingsChooseLibraryDir: 'promptx:settings.chooseLibraryDir',
+  settingsOpenLibraryDir: 'promptx:settings.openLibraryDir',
+  settingsOpenInDsh: 'promptx:settings.openInDsh',
+  settingsClose: 'promptx:settings.close',
   // 渲染进程 send，主进程 on（没有返回值）
   ready: 'promptx:ready',
   flushed: 'promptx:flushed',
   e2eDone: 'promptx:e2eDone',
   windowSetMinWidth: 'promptx:window.setMinWidth',
   prefsSet: 'promptx:prefs.set',
+  settingsRecording: 'promptx:settings.recording',
   /** 主进程 → 渲染进程：webContents.send(event, 事件名, 载荷)。 */
   event: 'promptx:event',
 } as const
@@ -35,6 +42,8 @@ export const IPC_CHANNELS = {
 /** 用 Record 列出事件名：BridgeEvents 加了事件而这里漏写时编译失败，白名单不会悄悄缺项。 */
 const EVENT_FLAGS: Record<BridgeEventName, true> = {
   'entryEditor.state': true,
+  'settings.state': true,
+  'settings.shortcutPressed': true,
   'config': true,
   'optimize.event': true,
   'library.changed': true,
