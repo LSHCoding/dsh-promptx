@@ -8,6 +8,7 @@
 - Include the changelog, project license, and complete bundled-library copyright notices in the installable package.
 - Allow the isolated local end-to-end check to install a release tarball with `--package`.
 - Refresh Windows library entries after edits that preserve file timestamps and size.
+- Read the inherited stdin descriptor on Windows so Electron keeps its connection to dsh.
 
 ## 0.1.6 — 2026-11-13
 

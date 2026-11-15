@@ -5,6 +5,7 @@
 // 3. 开始读 stdin 并立即发 hello，然后才等 app ready、建窗口。
 // 这里不 await 任何东西：Electron 要等主模块执行完才发 ready，顶层 await 会一直等下去。
 
+import { createReadStream } from 'node:fs'
 import { app } from 'electron'
 import { CompanionApp } from './app.ts'
 import { redirectConsoleToStderr } from './console.ts'
@@ -84,12 +85,18 @@ function main(env: CompanionEnv): void {
     logger.warn('main.unhandled-rejection', { error: errorCode(reason) })
   })
 
+  // Electron 的 lib/common/init.ts 在 Windows 把 process.stdin 换成固定 EOF 的占位流。
+  // 从 Host 继承的 fd 0 建立真实读取流，autoClose 关闭，标准描述符由进程退出时释放。
+  const input = process.platform === 'win32'
+    ? createReadStream('', { fd: 0, autoClose: false })
+    : process.stdin
+
   companion = new CompanionApp({
     platform: createElectronPlatform({ appDir: __dirname, logger }),
     env,
     paths,
     logger,
-    input: process.stdin,
+    input,
     output: process.stdout,
   })
   // hello 在 start() 里同步写出；写日志（第一次要建目录）放到它后面，不耽误握手。

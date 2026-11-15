@@ -177,6 +177,9 @@ describe('companion smoke', () => {
         if (buffer.includes('"method":"hello"')) resolve()
       })
     }), 120_000, 'hello from companion')
+    // Host 仍持有输入管道时，小程序必须保持运行，避免把 Windows 的固定 EOF 占位流误判为成功退出。
+    await new Promise(r => setTimeout(r, 100))
+    expect(alive(child.pid)).toBe(true)
     const exited = new Promise<number | null>((resolve) => {
       child.once('exit', (code) => {
         resolve(code)
