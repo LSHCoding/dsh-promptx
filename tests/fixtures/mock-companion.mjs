@@ -13,6 +13,7 @@
 //
 // 和真实的小程序一样：stdin 读到结尾（Host 退出或关掉管道）就退出，避免测试结束后留下孤儿进程。
 
+import { closeSync } from 'node:fs'
 import { Socket } from 'node:net'
 
 const MODES = new Set([
@@ -169,12 +170,11 @@ async function main() {
   if (mode === 'close-stdout') {
     setTimeout(() => {
       stdoutClosed = true
-      // Node 给 stdout 的 _destroy 换成了保留底层句柄的实现。Windows 的管道不会随 end() 关闭，
-      // 只关 fd 也碰不到 libuv 持有的句柄；测试夹具恢复 Socket 的销毁方法，让 Host 真正收到 EOF。
-      process.stdout.end(() => {
-        process.stdout._destroy = Socket.prototype._destroy
-        process.stdout.destroy()
-      })
+      // Node 给 stdout 的 _destroy 换成了保留底层句柄的实现，测试夹具恢复 Socket 的销毁方法。
+      // Socket 保留标准输出的原 fd，Windows 的 libuv 还会复制句柄；同时关闭两处，Host 才能收到 EOF。
+      process.stdout._destroy = Socket.prototype._destroy
+      process.stdout.destroy()
+      closeSync(process.stdout.fd)
     }, 50)
   }
   if (mode === 'stop-reading') {
