@@ -1,8 +1,9 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { pidAlive } from '../../src/companion/process-utils.ts'
 import { CompanionSupervisor, MAX_PENDING_WRITE_BYTES, STDERR_LINE_LIMIT } from '../../src/companion/supervisor.ts'
 import type { HostLogger, HostPeer, LaunchSpec, SupervisorOptions } from '../../src/services.ts'
@@ -11,6 +12,12 @@ import { PROTOCOL_VERSION } from '../../src/shared/protocol.ts'
 import type { CompanionConfig, CompanionState, ErrorInfo } from '../../src/shared/types.ts'
 import { DEFAULT_TOOLBAR_SHORTCUTS } from '../../src/shared/window-shortcuts.ts'
 import { failOnProcessProblems } from './process-traps.ts'
+
+// 仍启动真实进程，只记录 spawn 的结果，供通道关闭测试取得父端的流。
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:child_process')>()
+  return { ...original, spawn: vi.fn(original.spawn) }
+})
 
 const MOCK = fileURLToPath(new URL('../fixtures/mock-companion.mjs', import.meta.url))
 
@@ -153,6 +160,7 @@ afterEach(async () => {
   for (const h of all) {
     for (const pid of h.spawned) expect(pidAlive(pid), `pid ${pid} is still running`).toBe(false)
   }
+  vi.clearAllMocks()
 })
 
 describe('CompanionSupervisor', () => {
@@ -350,7 +358,8 @@ describe('CompanionSupervisor', () => {
     expect(h.exited).toEqual(h.spawned)
   })
 
-  it('kills a companion whose stdout closed while it is still alive, then restarts it', async () => {
+  // Windows 保留标准输出的系统句柄，夹具的 end() 无法让父端收到 EOF。
+  it.skipIf(process.platform === 'win32')('kills a companion whose stdout ended while it is still alive, then restarts it', async () => {
     // 这个用例检查 EOF 的处理，慢速 CI 上不让心跳超时先决定重启原因。
     const h = createHarness(['--mode=close-stdout'], { timings: { ...FAST, heartbeatMs: 60_000 } })
     h.supervisor.start()
@@ -359,6 +368,22 @@ describe('CompanionSupervisor', () => {
     expect(h.states.find(s => s.state === 'restarting')?.error?.code).toBe('promptx/channel/closed')
     await waitFor(() => h.supervisor.state() === 'running' && h.spawned.length === 2, 'second run')
     // 管道关了但进程还活着：被杀掉之后才启动新的。
+    expect(pidAlive(h.spawned[0]!)).toBe(false)
+    expect(h.exited[0]).toBe(h.spawned[0])
+  })
+
+  it('kills a live companion after its stdout transport closes, then restarts it', async () => {
+    const h = createHarness(['--mode=normal'], { timings: { ...FAST, heartbeatMs: 60_000 } })
+    h.supervisor.start()
+    await waitFor(() => h.supervisor.state() === 'running', 'running')
+    const child = vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcessWithoutNullStreams
+    expect(child.pid).toBe(h.spawned[0])
+    expect(pidAlive(child.pid!)).toBe(true)
+    // 所有平台都从父端关闭真实的读取流，覆盖 close 事件和「先结束旧进程再重启」的恢复链。
+    child.stdout.destroy()
+    await waitFor(() => h.states.some(s => s.state === 'restarting'), 'restarting')
+    expect(h.states.find(s => s.state === 'restarting')?.error?.code).toBe('promptx/channel/closed')
+    await waitFor(() => h.supervisor.state() === 'running' && h.spawned.length === 2, 'second run')
     expect(pidAlive(h.spawned[0]!)).toBe(false)
     expect(h.exited[0]).toBe(h.spawned[0])
   })
