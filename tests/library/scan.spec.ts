@@ -1,7 +1,7 @@
-import { chmod, mkdir, realpath, rm, utimes, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { compareFolderPaths } from '../../src/library/scan.ts'
+import { compareFolderPaths, indexedFromText, indexPath } from '../../src/library/scan.ts'
 import type { EntryMeta, LibraryListParams } from '../../src/shared/types.ts'
 import { canTestPermissions, exists, installCrashTraps, listAll, makeService, promptFile, trySymlink, useTempDirs, writeTree } from './helpers.ts'
 
@@ -200,6 +200,16 @@ describe('library scan (L-01, L-03, design-spec 7.2)', () => {
 })
 
 describe('library index cache (N-01)', () => {
+  it('refreshes Windows entries when every stat cache key is unchanged', async () => {
+    const root = await temp.make()
+    const path = join(root, 'a.md')
+    await writeFile(path, '# CCCC\n')
+    const stats = await lstat(path)
+    const previous = new Map([['a.md', indexedFromText('a.md', '# AAAA\n', stats)]])
+    const entry = await indexPath(path, 'a.md', previous, 'win32')
+    expect(entry?.doc.meta.title).toBe('CCCC')
+  })
+
   it('rereads an edited file even when the editor preserves mtime and size', async () => {
     const root = await temp.make()
     await writeTree(root, { 'a.md': '# AAAA\n', 'b.md': '# BBBB\n' })

@@ -13,6 +13,8 @@
 //
 // 和真实的小程序一样：stdin 读到结尾（Host 退出或关掉管道）就退出，避免测试结束后留下孤儿进程。
 
+import { closeSync } from 'node:fs'
+
 const MODES = new Set([
   'normal', // 握手、回 ping、收到 shutdown 回复后以 0 退出
   'no-handshake', // 不发 hello
@@ -167,7 +169,14 @@ async function main() {
   if (mode === 'close-stdout') {
     setTimeout(() => {
       stdoutClosed = true
-      process.stdout.end()
+      // Windows 的管道不支持 POSIX 的半关闭，end() 后显式关闭描述符，才能让 Host 收到 EOF。
+      process.stdout.end(() => {
+        try {
+          closeSync(process.stdout.fd)
+        } catch (error) {
+          if (error.code !== 'EBADF') throw error
+        }
+      })
     }, 50)
   }
   if (mode === 'stop-reading') {

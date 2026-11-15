@@ -150,11 +150,12 @@ export async function indexFile(abs: string, relPath: string, stats: IndexStats)
   }
 }
 
-/** 外部工具保留 mtime 或替换同样大小的文件时，ctime 或 inode 仍能让刷新发现新标题。 */
+/** POSIX 上用 ctime 和 inode 补充缓存键，Windows 刷新时重新读取正文。 */
 export async function indexPath(
   abs: string,
   relPath: string,
   previous: ReadonlyMap<string, IndexedFile> | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<IndexedFile | null> {
   let stats: Stats
   try {
@@ -165,7 +166,9 @@ export async function indexPath(
   }
   if (!stats.isFile()) return null
   const cached = previous?.get(relPath)
-  if (cached?.cacheable === true && cached.mtimeMs === stats.mtimeMs && cached.ctimeMs === stats.ctimeMs
+  // Windows 上保留 mtime、大小的原地编辑也可能保留 ctime、inode（首轮 Windows CI 复现）。
+  // 明确刷新时读回文件；搜索仍由 IndexCache 使用已有正文，避免搜索输入触发磁盘读取。
+  if (platform !== 'win32' && cached?.cacheable === true && cached.mtimeMs === stats.mtimeMs && cached.ctimeMs === stats.ctimeMs
     && cached.ino === stats.ino && cached.size === stats.size) return cached
   return await indexFile(abs, relPath, stats)
 }
@@ -248,7 +251,7 @@ export async function scanLibrary(options: ScanOptions): Promise<ScanResult> {
     }
   }
   await removeStaleTemps(staleTemps, STALE_TEMP_MS)
-  const indexed = await mapPool(fileTasks, READ_CONCURRENCY, task => indexPath(task.abs, task.rel, options.previous))
+  const indexed = await mapPool(fileTasks, READ_CONCURRENCY, task => indexPath(task.abs, task.rel, options.previous, platform))
   const files = new Map<string, IndexedFile>()
   fileTasks.forEach((task, index) => {
     const entry = indexed[index]

@@ -351,7 +351,8 @@ describe('CompanionSupervisor', () => {
   })
 
   it('kills a companion whose stdout closed while it is still alive, then restarts it', async () => {
-    const h = createHarness(['--mode=close-stdout'])
+    // 这个用例检查 EOF 的处理，慢速 CI 上不让心跳超时先决定重启原因。
+    const h = createHarness(['--mode=close-stdout'], { timings: { ...FAST, heartbeatMs: 60_000 } })
     h.supervisor.start()
     await waitFor(() => h.states.some(s => s.state === 'restarting'), 'restarting')
     h.args = ['--mode=normal']

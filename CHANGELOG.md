@@ -7,6 +7,7 @@
 - Rebuild the plugin before packing so npm packages and release tarballs include the Host, Client, companion window, icons, and styles.
 - Include the changelog, project license, and complete bundled-library copyright notices in the installable package.
 - Allow the isolated local end-to-end check to install a release tarball with `--package`.
+- Refresh Windows library entries after edits that preserve file timestamps and size.
 
 ## 0.1.6 — 2026-11-13
 

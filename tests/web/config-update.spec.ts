@@ -122,15 +122,22 @@ describe('checkLibraryLocation', () => {
     await expect(checkLibraryLocation(join(dshHome, 'promptx', 'library', 'x'), viaAlias)).resolves.toBeNull()
   })
 
-  it('ignores case on macOS and Windows but not on Linux', async () => {
+  it('ignores case on macOS and Windows', async () => {
     // 用不存在的目录，避免宿主文件系统自己的大小写规则干扰（realpath 会返回磁盘上的写法）。
     const mixed = join(tmp, 'Case', 'DshHome')
     const lower = join(tmp, 'case', 'dshhome', 'sessions')
     const base = { dshHome: mixed, defaultLibrary: join(mixed, 'promptx', 'library') }
     await expect(checkLibraryLocation(lower, ctx({ ...base, platform: 'darwin' }))).resolves.toBe('library-dir-reserved')
     await expect(checkLibraryLocation(lower, ctx({ ...base, platform: 'win32' }))).resolves.toBe('library-dir-reserved')
-    await expect(checkLibraryLocation(lower, ctx({ ...base, platform: 'linux' }))).resolves.toBeNull()
     await expect(checkLibraryLocation(join(tmp, 'Project', '.AGENTS', 'Skills'), ctx({ platform: 'darwin' }))).resolves.toBe('library-dir-skills')
+  })
+
+  // Windows 的 node:path.relative 自身就不区分大小写，模拟 platform 不能将它变成 POSIX 路径运算。
+  it.skipIf(process.platform === 'win32')('keeps case on Linux with POSIX paths', async () => {
+    const mixed = join(tmp, 'Case', 'DshHome')
+    const lower = join(tmp, 'case', 'dshhome', 'sessions')
+    const base = { dshHome: mixed, defaultLibrary: join(mixed, 'promptx', 'library') }
+    await expect(checkLibraryLocation(lower, ctx({ ...base, platform: 'linux' }))).resolves.toBeNull()
   })
 })
 
