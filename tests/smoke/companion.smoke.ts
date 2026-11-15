@@ -135,25 +135,31 @@ describe('companion smoke', () => {
       onProcess: (event) => {
         if (event.type === 'spawned') pid = event.pid
       },
+      // 真实运行时出错时保留握手、退出原因和小程序 stderr，CI 才能定位超时发生在哪一步。
+      logger: console,
       timings: { handshakeMs: 120_000 },
     })
     supervisor.start()
-    const result = await within(report.promise, 180_000, 'smoke report')
-    console.log(`smoke report on ${process.platform}-${process.arch}: ${JSON.stringify(result)}`)
-    expect(result.windowCreated).toBe(true)
-    expect(result.rendererReady).toBe(true)
-    expect(result.editorMounted).toBe(true)
-    expect(result.draftLoaded).toBe(true)
-    expect(result.windowShown).toBe(true)
-    expect(result.closeHides).toBe(true)
-    expect(supervisor.state()).toBe('running')
-    expect(statuses.length).toBeGreaterThan(0)
+    try {
+      const result = await within(report.promise, 180_000, 'smoke report')
+      console.log(`smoke report on ${process.platform}-${process.arch}: ${JSON.stringify(result)}`)
+      expect(result.windowCreated).toBe(true)
+      expect(result.rendererReady).toBe(true)
+      expect(result.editorMounted).toBe(true)
+      expect(result.draftLoaded).toBe(true)
+      expect(result.windowShown).toBe(true)
+      expect(result.closeHides).toBe(true)
+      expect(supervisor.state()).toBe('running')
+      expect(statuses.length).toBeGreaterThan(0)
 
-    const started = Date.now()
-    await supervisor.stop('smoke-done')
-    expect(Date.now() - started).toBeLessThan(4_000)
-    await new Promise(r => setTimeout(r, 500))
-    expect(alive(pid)).toBe(false)
+      const started = Date.now()
+      await supervisor.stop('smoke-done')
+      expect(Date.now() - started).toBeLessThan(4_000)
+      await new Promise(r => setTimeout(r, 500))
+      expect(alive(pid)).toBe(false)
+    } finally {
+      await supervisor.close('smoke cleanup')
+    }
   }, 5 * 60_000)
 
   it('exits on its own when stdin closes', async () => {
