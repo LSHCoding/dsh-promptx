@@ -1,7 +1,17 @@
 {
   "name": "dsh-promptx",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "PromptX for DeepSeek Harness: a global-hotkey prompt editor that floats above every app, with a Markdown prompt library and model-assisted rewriting.",
+  "license": "MIT",
+  "author": "Shuai Ling (https://github.com/LSHCoding)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LSHCoding/dsh-promptx.git"
+  },
+  "homepage": "https://github.com/LSHCoding/dsh-promptx#readme",
+  "bugs": {
+    "url": "https://github.com/LSHCoding/dsh-promptx/issues"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -10,7 +20,10 @@
     "prompt-library",
     "electron"
   ],
-  "private": true,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "icon": "./icon.svg",
   "main": "lib/index.js",
@@ -29,9 +42,11 @@
     "locale/*.json",
     "icon.svg",
     "cordis.patch.yml",
+    "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "README.md",
-    "README.zh.md"
+    "README.zh.md",
+    "CHANGELOG.md"
   ],
   "dsh": {
     "bundle": {
@@ -52,6 +67,7 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "build": "node scripts/clean-lib.mjs && tsdown && node scripts/build-app.mjs",
+    "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.host.json && tsc -p tsconfig.client.json && tsc -p tsconfig.app.json && tsc -p tsconfig.renderer.json && tsc -p tsconfig.json",
     "lint": "oxlint",
     "test": "vitest run",

@@ -4,7 +4,7 @@
 
 PromptX 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的插件，带一个配套的桌面小窗。在任何应用里按全局快捷键，Prompt 编辑小窗浮在当前应用上方；写 Prompt、从自己的 Markdown Prompt 库里取模板，或者让 dsh 里配置的模型帮忙改写。按 ⌘↩ 复制全文，小窗隐藏，焦点回到刚才的应用，直接粘贴。
 
-> 版本 v0.1.6。macOS 正式支持。Windows 和 Linux 为预览，三平台 CI 和 Windows、Linux 实机验收待完成。
+> 版本 v0.1.7。macOS 正式支持。Windows 和 Linux 为预览，系统交互实机验收待完成。
 
 ## 功能
 
@@ -20,15 +20,34 @@ PromptX 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)�
 - macOS 13 及以上（Apple 芯片或 Intel）。Windows 10/11、Linux 为预览。
 - 第一次运行需要联网：小窗基于 Electron 44.10.2（约 125–160 MB），PromptX 把它下载到 dsh 数据目录，按随插件发布的 SHA-256 校验。默认先用国内镜像，失败时换 GitHub；在 PromptX 设置或 dsh 的插件页里可以指定下载源。
 
-## 从本地代码安装
+## 安装
+
+可以直接在 DeepSeek Harness 桌面版的插件页安装 PromptX。
+
+1. 打开「插件」，点击「添加插件」。旁边的下拉菜单也提供「安装第三方插件」。
+2. 在包名输入框填写 `dsh-promptx`。要固定到这个版本，可以填写 `dsh-promptx@0.1.7`。
+3. 点击「安装」，完成后选择「立即启用」，按提示重启 dsh。
+4. 打开 PromptX 插件页，查看小窗运行时的下载进度。状态显示全局快捷键已生效后，macOS 按 ⌃P，Windows 和 Linux 按 Ctrl+Alt+P 呼出小窗。
+
+dsh 会安装构建好的插件，PromptX 在首次启动时自动下载并校验小窗运行时。使用改写、自动生成标题和标签时，需要先在 dsh 配置默认模型。
+
+使用 dsh 命令行版时，在平时运行的 profile 中安装。
 
 ```bash
-pnpm install
-pnpm build
-npx @deepseek-ai/dsh plugin --profile <你的 profile> add /本仓库的/绝对路径
+dsh plugin --profile <你的-profile> add dsh-promptx@0.1.7
 ```
 
-安装或更新插件后要重启 dsh。第一次启动时，在 dsh 的插件页打开 PromptX，可以看到运行时的下载进度；状态显示全局快捷键已生效后，就能在任何应用里按快捷键呼出小窗。
+安装后重启对应的 dsh 实例。桌面版用户可以直接通过插件页管理安装。
+
+### 从 Release 安装包安装
+
+从 GitHub Releases 下载名为 `dsh-promptx-0.1.7.tgz` 的附件。在 dsh 的「添加插件」对话框填写下载文件的绝对路径，安装后启用 PromptX。命令行版也可以安装同一个文件。见 [GitHub Releases](https://github.com/LSHCoding/dsh-promptx/releases)。
+
+```bash
+dsh plugin --profile <你的-profile> add /安装包的/绝对路径/dsh-promptx-0.1.7.tgz
+```
+
+插件页提供更新操作时，可以直接使用。若所用 dsh 版本要求重新安装第三方插件来更新，可以卸载 PromptX 后安装目标版本，库和草稿会保留。
 
 ## 使用
 
@@ -73,20 +92,34 @@ PromptX 将库和草稿保存在本机。保存新条目或请求改写时，dsh
 
 ## 卸载
 
+在 dsh 的「插件」页选择 PromptX，点击「卸载」。命令行版使用安装时的同一个 profile。
+
 ```bash
-npx @deepseek-ai/dsh plugin --profile <你的 profile> remove dsh-promptx
+dsh plugin --profile <你的-profile> remove dsh-promptx
 ```
 
 卸载插件不会删除库和草稿。要释放磁盘空间，可以在卸载前到 dsh 的 PromptX 插件页删除运行时，或者卸载后手动删除 dsh 数据目录下的 `promptx/runtime/`。
 
 ## 开发
 
+使用 Node.js >=24.9.0，以及 `package.json` 声明的 pnpm 版本。
+
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm lint
 pnpm test        # 单元测试
 pnpm smoke       # 构建、下载 Electron、启动小窗并检查握手
 ```
 
-借用的代码和素材见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+试用本地代码时，运行 `pnpm build`，再在 dsh 的「添加插件」对话框填写仓库的绝对路径。开发时使用 `promptx-dev` 这样的专用 profile。重新构建 Host 或小程序代码后，重启对应的 dsh 实例。
+
+`pnpm pack` 会执行构建，生成 `dsh-promptx-0.1.7.tgz`。可以用下面的命令在独立的临时 dsh profile 中检查安装包。脚本使用 dsh 0.2.2-rc.1，结束后会清理临时 profile。加上 `--keep` 可以保留现场用于排查。
+
+```bash
+node scripts/e2e-local.mjs --package /安装包的/绝对路径/dsh-promptx-0.1.7.tgz
+```
+
+## 许可证
+
+PromptX 使用 MIT 许可证。安装包包含项目许可证、借用代码和打包依赖的版权声明。见 [LICENSE](LICENSE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.7 — 2026-11-15
+
+- Prepare the first public distribution on GitHub and npm with an MIT license, package metadata, and desktop installation instructions in English and Chinese.
+- Use the PromptX P monogram as the plugin and menu bar / tray icon, including warning and error states.
+- Rebuild the plugin before packing so npm packages and release tarballs include the Host, Client, companion window, icons, and styles.
+- Include the changelog, project license, and complete bundled-library copyright notices in the installable package.
+- Allow the isolated local end-to-end check to install a release tarball with `--package`.
+
 ## 0.1.6 — 2026-11-13
 
 - Open PromptX settings in a window of their own from the toolbar gear, the Settings shortcut, the library's Open settings button, and Settings… in the menu bar or tray, instead of switching to the plugin page in dsh. Shortcuts, Editor, Prompt library, Optimize, and About sections cover every setting, and each change takes effect immediately.

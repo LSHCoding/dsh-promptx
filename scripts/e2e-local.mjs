@@ -3,20 +3,29 @@
 // 不碰日常的 ~/.dsh：所有数据都在临时目录里，结束后删除（--keep 保留）。
 //
 // 用法：pnpm build && node scripts/e2e-local.mjs [--keep]
+// 检查发布包：node scripts/e2e-local.mjs --package /绝对路径/dsh-promptx-<版本>.tgz [--keep]
 // 运行时缓存：<仓库>/.smoke-runtime/（和冒烟测试共用），有就复制进临时目录，没有就让插件自己下载。
 
 import { spawn, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { parseArgs } from 'node:util'
 
 const DSH = '@deepseek-ai/dsh@0.2.2-rc.1'
 const PROFILE = 'promptx-dev'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const keep = process.argv.includes('--keep')
+const { values } = parseArgs({
+  options: {
+    keep: { type: 'boolean', default: false },
+    package: { type: 'string' },
+  },
+})
+const keep = values.keep
+const pluginSource = values.package === undefined ? root : resolve(values.package)
 const results = []
 let failed = false
 
@@ -31,7 +40,12 @@ function npx(args, env) {
   return execFileSync(bin, ['-y', DSH, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 600_000 })
 }
 
-if (!existsSync(join(root, 'lib', 'index.js')) || !existsSync(join(root, 'lib', 'app', 'main.cjs'))) {
+if (!existsSync(pluginSource)) {
+  console.error(`插件安装源不存在 ${pluginSource}`)
+  process.exit(2)
+}
+
+if (values.package === undefined && (!existsSync(join(root, 'lib', 'index.js')) || !existsSync(join(root, 'lib', 'app', 'main.cjs')))) {
   console.error('缺少构建产物，先运行 pnpm build')
   process.exit(2)
 }
@@ -44,7 +58,8 @@ let dsh = null
 try {
   console.log(`DSH_HOME=${home}`)
   npx(['--profile', PROFILE, '--from-default-profile', 'web', '--dump-config'], env)
-  npx(['plugin', '--profile', PROFILE, 'add', root], env)
+  npx(['plugin', '--profile', PROFILE, 'add', pluginSource], env)
+  console.log(`installed plugin from ${pluginSource}`)
 
   // 复制缓存的运行时，避免每次都下载 120 MB。
   const cache = join(root, '.smoke-runtime')
@@ -197,7 +212,13 @@ try {
     await sleep(800)
     const afterEdit = await api('e2e', { command: { action: 'state' } })
     const mainDraft = JSON.parse(readFileSync(draftFile, 'utf8'))
-    check('entry editing preserves the main draft', afterEdit.data.renderer?.textLength === beforeEdit.data.renderer?.textLength && afterEdit.data.renderer?.boundRelPath === null && mainDraft.tables.draft.current.text === text)
+    check('entry editing preserves the main draft', afterEdit.data.renderer?.textLength === beforeEdit.data.renderer?.textLength && afterEdit.data.renderer?.boundRelPath === null && mainDraft.tables.draft.current.text === text, JSON.stringify({
+      beforeLength: beforeEdit.data.renderer?.textLength,
+      afterLength: afterEdit.data.renderer?.textLength,
+      boundRelPath: afterEdit.data.renderer?.boundRelPath,
+      persistedLength: mainDraft.tables.draft.current.text.length,
+      persistedTextMatches: mainDraft.tables.draft.current.text === text,
+    }))
   }
 
   // 4. 读取 256 KiB 的条目

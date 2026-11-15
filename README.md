@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) plugin with a small companion window. Press a global shortcut in any app and a prompt editor floats above it. Write a prompt, reuse one from your Markdown prompt library, or let the model configured in dsh rewrite it. Press ⌘↩ to copy the whole prompt; the window hides and focus returns to the app you were using, ready to paste.
 
-> Version v0.1.6. macOS is the supported platform. Windows and Linux are previews pending CI and manual verification.
+> Version v0.1.7. macOS is the supported platform. Windows and Linux are previews pending manual verification.
 
 ## What it does
 
@@ -20,15 +20,34 @@ PromptX is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 - macOS 13 or later (Apple silicon or Intel). Windows 10/11 and Linux are previews.
 - Network access on first run: the companion window runs on Electron 44.10.2 (about 125–160 MB), which PromptX downloads once into the dsh data directory and verifies against SHA-256 checksums shipped with the plugin. The download uses a mirror in mainland China first and falls back to GitHub; you can choose the source in PromptX settings or on the plugin page in dsh.
 
-## Install from a local checkout
+## Install
+
+Install PromptX from the Plugins page in DeepSeek Harness Desktop.
+
+1. Open **Plugins** and select **Add plugin**. The dropdown also has **Install third-party plugin**.
+2. Enter `dsh-promptx` in the package input. To install this version explicitly, enter `dsh-promptx@0.1.7`.
+3. Select **Install**, then **Enable now**. Restart dsh if prompted.
+4. Open the PromptX plugin page to see the companion runtime download progress. When the status shows the global shortcut is active, press ⌃P on macOS or Ctrl+Alt+P on Windows and Linux.
+
+dsh installs the built plugin and PromptX downloads and verifies the companion runtime on first launch. Configure dsh's default model to use prompt rewriting and model-generated titles and tags.
+
+For a CLI installation of dsh, use the profile you normally run.
 
 ```bash
-pnpm install
-pnpm build
-npx @deepseek-ai/dsh plugin --profile <your profile> add /absolute/path/to/dsh-promptx
+dsh plugin --profile <your-profile> add dsh-promptx@0.1.7
 ```
 
-Restart dsh after installing or updating the plugin. On the first start, open the Plugins page, choose PromptX, and watch the runtime download progress. When the status shows the global shortcut is active, press it from any app.
+Restart that dsh instance after installation. Desktop users can manage their installation through its Plugins page.
+
+### Install a release tarball
+
+Download the `dsh-promptx-0.1.7.tgz` attachment from GitHub Releases. In dsh's **Add plugin** dialog, enter the downloaded file's absolute path, install it, and enable PromptX. CLI users can install the same file with the following command. See [GitHub Releases](https://github.com/LSHCoding/dsh-promptx/releases).
+
+```bash
+dsh plugin --profile <your-profile> add /absolute/path/to/dsh-promptx-0.1.7.tgz
+```
+
+Use the plugin page's update action when offered. If your dsh version requires reinstalling third-party plugins to update them, remove PromptX and install the desired version. Your library and drafts are kept.
 
 ## Using it
 
@@ -73,20 +92,34 @@ PromptX stores your library and drafts locally. When you save a new prompt or re
 
 ## Uninstall
 
+In dsh, open **Plugins**, select PromptX, and choose **Uninstall**. For a CLI installation, use the same profile as during installation.
+
 ```bash
-npx @deepseek-ai/dsh plugin --profile <your profile> remove dsh-promptx
+dsh plugin --profile <your-profile> remove dsh-promptx
 ```
 
 Removing the plugin keeps your library and draft. To reclaim disk space, delete the runtime from the PromptX plugin page in dsh before removing the plugin, or delete `promptx/runtime/` in the dsh data directory afterwards.
 
 ## Development
 
+Use Node.js >=24.9.0 and the pnpm version declared in `package.json`.
+
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm lint
 pnpm test        # unit tests
 pnpm smoke       # builds, downloads Electron, starts the companion and checks the handshake
 ```
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for code and assets adapted from other projects.
+To try a local checkout, run `pnpm build`, then enter the checkout's absolute path in dsh's **Add plugin** dialog. For development, use a dedicated dsh profile such as `promptx-dev`. Restart that dsh instance after rebuilding Host or companion code.
+
+`pnpm pack` runs the build and produces `dsh-promptx-0.1.7.tgz`. Check the built package in an isolated temporary dsh profile with the following command. The script uses dsh 0.2.2-rc.1 and removes its temporary profile on exit. Add `--keep` to retain it for diagnosis.
+
+```bash
+node scripts/e2e-local.mjs --package /absolute/path/to/dsh-promptx-0.1.7.tgz
+```
+
+## License
+
+PromptX is released under the MIT license. The project license and notices for adapted code and bundled libraries are included in the installable package. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

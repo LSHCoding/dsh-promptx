@@ -6,7 +6,7 @@ PromptX includes or adapts material from the projects below. Each is used under 
 
 - Used for: the theme variables in `src/app/renderer/styles/dsh-theme.css` (extracted from `@deepseek-ai/dsh-client-ui-theme`), the Client module wrapper format, lint configuration copied from the official repository, and the config page's controls and styles (`src/client/controls.tsx`, `src/client/styles.ts`), adapted from the settings form, Switch, Button and StateDot in `packages/client/ui-primitives` of DeepSeek Harness 0.2.2-rc.1.
 - Source: <https://github.com/deepseek-ai/deepseek-harness>
-- License: MIT
+- License: MIT, Copyright (c) 2026 DeepSeek
 
 ## dsh-quorfloat
 
@@ -28,7 +28,16 @@ PromptX includes or adapts material from the projects below. Each is used under 
 
 ## Bundled in the companion window
 
-`lib/app/renderer/renderer.js` bundles React and ReactDOM (MIT, Copyright (c) Meta Platforms, Inc. and affiliates) and CodeMirror 6 with its Lezer dependencies (MIT, Copyright (c) 2018-2021 by Marijn Haverbeke and others).
+`lib/app/renderer/renderer.js` bundles the following packages. Their copyright notices are retained below. The MIT license text under the next heading applies to each of them.
+
+| Packages | Copyright notice |
+| --- | --- |
+| React 18.3.1, ReactDOM 18.3.1, Scheduler 0.23.2 | Copyright (c) Facebook, Inc. and its affiliates. |
+| CodeMirror commands 6.11.1, language 6.13.1, state 6.7.6, view 6.43.15 | Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
+| Lezer common 1.5.5, highlight 1.2.5 | Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
+| @marijn/find-cluster-break 1.0.4 | Copyright (C) 2024 by Marijn Haverbeke <marijn@haverbeke.berlin> |
+| style-mod 4.1.4 | Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
+| w3c-keyname 2.2.8 | Copyright (C) 2016 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
 
 ## MIT License
 
