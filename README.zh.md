@@ -4,12 +4,12 @@
 
 PromptX 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的插件，带一个配套的桌面小窗。在任何应用里按全局快捷键，Prompt 编辑小窗浮在当前应用上方；写 Prompt、从自己的 Markdown Prompt 库里取模板，或者让 dsh 里配置的模型帮忙改写。按 ⌘↩ 复制全文，小窗隐藏，焦点回到刚才的应用，直接粘贴。
 
-> 版本 v0.1.7。macOS 正式支持。Windows 和 Linux 为预览，系统交互实机验收待完成。
+> 最新公开版本为 v0.1.8。macOS 正式支持。Windows 和 Linux 为预览，系统交互实机验收待完成。
 
 ## 功能
 
 - **全局快捷键和置顶小窗**。macOS 默认 ⌃P，Windows 和 Linux 默认 Ctrl+Alt+P。点击窗外时小窗保持显示。再次按全局快捷键，或执行「复制并隐藏」，即可收起。
-- **编辑器**：纯文本 Markdown 编辑，列表自动续行，Tab 缩进。Enter 永远只换行。
+- **编辑器**：编辑和复制 Markdown 源文，语法高亮随明暗主题切换。支持列表自动续行和 Tab 缩进。macOS 按 ⌘B 切换加粗，Windows 和 Linux 按 Ctrl+B。行首输入 `/` 或 `、` 打开插入菜单。`h1`、`h2`、`h3` 对应一至三级标题，`tag`、`code`、`quote` 对应自定义标签、代码块和引用。按 Enter 确认菜单项。
 - **Prompt 库**：一个普通的 Markdown 文件夹，用 YAML front matter 记标题、标签、收藏。搜索、筛选、插入到光标、打开、保存、重命名、打标签、收藏、删除到回收站并恢复。没在 PromptX 里编辑过的文件不会被改动。
 - **用 dsh 的模型改写**：侧边会话栏流式显示 dsh 默认模型给出的改写稿，可以追加要求、一键应用（一次撤销恢复原文）、复制。
 - **草稿不丢**：隐藏小窗、重启小窗、重启 dsh 后草稿都还在。
@@ -25,7 +25,7 @@ PromptX 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)�
 可以直接在 DeepSeek Harness 桌面版的插件页安装 PromptX。
 
 1. 打开「插件」，点击「添加插件」。旁边的下拉菜单也提供「安装第三方插件」。
-2. 在包名输入框填写 `dsh-promptx`。要固定到这个版本，可以填写 `dsh-promptx@0.1.7`。
+2. 在包名输入框填写 `dsh-promptx`。要固定到这个版本，可以填写 `dsh-promptx@0.1.8`。
 3. 点击「安装」，完成后选择「立即启用」，按提示重启 dsh。
 4. 打开 PromptX 插件页，查看小窗运行时的下载进度。状态显示全局快捷键已生效后，macOS 按 ⌃P，Windows 和 Linux 按 Ctrl+Alt+P 呼出小窗。
 
@@ -34,17 +34,17 @@ dsh 会安装构建好的插件，PromptX 在首次启动时自动下载并校�
 使用 dsh 命令行版时，在平时运行的 profile 中安装。
 
 ```bash
-dsh plugin --profile <你的-profile> add dsh-promptx@0.1.7
+dsh plugin --profile <你的-profile> add dsh-promptx@0.1.8
 ```
 
 安装后重启对应的 dsh 实例。桌面版用户可以直接通过插件页管理安装。
 
 ### 从 Release 安装包安装
 
-从 GitHub Releases 下载名为 `dsh-promptx-0.1.7.tgz` 的附件。在 dsh 的「添加插件」对话框填写下载文件的绝对路径，安装后启用 PromptX。命令行版也可以安装同一个文件。见 [GitHub Releases](https://github.com/LSHCoding/dsh-promptx/releases)。
+从 GitHub Releases 下载名为 `dsh-promptx-0.1.8.tgz` 的附件。在 dsh 的「添加插件」对话框填写下载文件的绝对路径，安装后启用 PromptX。命令行版也可以安装同一个文件。见 [GitHub Releases](https://github.com/LSHCoding/dsh-promptx/releases)。
 
 ```bash
-dsh plugin --profile <你的-profile> add /安装包的/绝对路径/dsh-promptx-0.1.7.tgz
+dsh plugin --profile <你的-profile> add /安装包的/绝对路径/dsh-promptx-0.1.8.tgz
 ```
 
 插件页提供更新操作时，可以直接使用。若所用 dsh 版本要求重新安装第三方插件来更新，可以卸载 PromptX 后安装目标版本，库和草稿会保留。
@@ -114,10 +114,10 @@ pnpm smoke       # 构建、下载 Electron、启动小窗并检查握手
 
 试用本地代码时，运行 `pnpm build`，再在 dsh 的「添加插件」对话框填写仓库的绝对路径。开发时使用 `promptx-dev` 这样的专用 profile。重新构建 Host 或小程序代码后，重启对应的 dsh 实例。
 
-`pnpm pack` 会执行构建，生成 `dsh-promptx-0.1.7.tgz`。可以用下面的命令在独立的临时 dsh profile 中检查安装包。脚本使用 dsh 0.2.2-rc.1，结束后会清理临时 profile。加上 `--keep` 可以保留现场用于排查。
+在当前版本的源码目录执行 `pnpm pack`，会构建并生成 `dsh-promptx-0.1.8.tgz`。可以用下面的命令在独立的临时 dsh profile 中检查安装包。脚本使用 dsh 0.2.2-rc.1，结束后会清理临时 profile。加上 `--keep` 可以保留现场用于排查。
 
 ```bash
-node scripts/e2e-local.mjs --package /安装包的/绝对路径/dsh-promptx-0.1.7.tgz
+node scripts/e2e-local.mjs --package /安装包的/绝对路径/dsh-promptx-0.1.8.tgz
 ```
 
 ## 许可证

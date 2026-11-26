@@ -9,6 +9,9 @@ import { isBlank } from '../../../shared/text-metrics.ts'
 import type { ErrorInfo, SettingsSection } from '../../../shared/types.ts'
 import { isComposingKey } from '../appearance.ts'
 import { createEditorController, type EditorController } from '../editor/controller.ts'
+import { boldKeymap } from '../editor/keymap.ts'
+import { markdownSourceHighlighting } from '../editor/markdown-highlighting.ts'
+import { dismissSlashMenu, slashMenu } from '../editor/slash-menu.ts'
 import { focusWithin, nothingFocused } from '../focus.ts'
 import { matchWindowCommand } from '../shortcuts.ts'
 import { initialState, type AppState, type DialogResult, type FocusRequest, type MenuState, type PaneSizes } from '../state/state.ts'
@@ -95,6 +98,7 @@ export class AppController {
       platform,
       placeholder: '',
       ariaLabel: '',
+      extensions: [markdownSourceHighlighting, slashMenu(() => this.store.getState().locale), boldKeymap(platform)],
     })
     this.ctx = { store: this.store, bridge: this.bridge, editor: this.editor }
     this.toasts = new Toasts(this.store)
@@ -246,6 +250,7 @@ export class AppController {
   private onHidden(): void {
     // 正文读取完成前隐藏了小窗：这次插入作废（L-06）。
     this.library.cancelInsert()
+    dismissSlashMenu(this.editor.view, false)
     this.closeMenu()
     this.draft.flushSoon()
   }
@@ -359,7 +364,8 @@ export class AppController {
       return
     }
     const { config, platform, menu } = this.store.getState()
-    if (menu !== null && event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+    const escape = event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey
+    if (escape && (dismissSlashMenu(this.editor.view) || menu !== null)) {
       event.preventDefault()
       event.stopPropagation()
       this.closeMenu()

@@ -49,6 +49,7 @@ export interface EditorOptions {
   platform: string
   placeholder: string
   ariaLabel: string
+  extensions?: Extension
 }
 
 function clampSelection(selection: TextSelection | null, length: number): EditorSelection {
@@ -73,8 +74,6 @@ function revealCursor(view: EditorView): void {
 export function createEditorController(options: EditorOptions): EditorController {
   const editableSlot = new Compartment()
   const labelSlot = new Compartment()
-  // Markdown 高亮是 P1（E-07）。先留一个空的位置，以后在这里 reconfigure，不用改动其他扩展的顺序（技术方案 5.5）。
-  const highlightSlot = new Compartment()
   const listeners = new Set<(update: EditorUpdate) => void>()
   let editable = false
   let conversions: InputConversions = { middleDot: true, yen: true }
@@ -94,7 +93,7 @@ export function createEditorController(options: EditorOptions): EditorController
       EditorState.tabSize.of(4),
       labelSlot.of(labelExtension(labels)),
       editableSlot.of(editableExtension(editable)),
-      highlightSlot.of([]),
+      options.extensions ?? [],
       editorKeymap(options.platform),
       plainTextPaste,
       inputConversions(() => conversions),

@@ -35,6 +35,7 @@ PromptX includes or adapts material from the projects below. Each is used under 
 | React 18.3.1, ReactDOM 18.3.1, Scheduler 0.23.2 | Copyright (c) Facebook, Inc. and its affiliates. |
 | CodeMirror commands 6.11.1, language 6.13.1, state 6.7.6, view 6.43.15 | Copyright (C) 2018-2021 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
 | Lezer common 1.5.5, highlight 1.2.5 | Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
+| Lezer markdown 1.8.1 | Copyright (C) 2020 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
 | @marijn/find-cluster-break 1.0.4 | Copyright (C) 2024 by Marijn Haverbeke <marijn@haverbeke.berlin> |
 | style-mod 4.1.4 | Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |
 | w3c-keyname 2.2.8 | Copyright (C) 2016 by Marijn Haverbeke <marijn@haverbeke.berlin> and others |

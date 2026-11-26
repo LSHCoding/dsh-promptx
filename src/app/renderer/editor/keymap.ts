@@ -1,10 +1,10 @@
 // 编辑区的按键绑定（需求 E-01、E-05、E-06，技术方案 5.5）：Enter 续行、Shift+Enter 普通换行、Tab / Shift+Tab 缩进，
 // 撤销重做，以及 CodeMirror 的默认编辑键。规则本身在 commands.ts，这里只负责把结果作为一个事务派发。
 
-import { EditorSelection } from '@codemirror/state'
+import { EditorSelection, type EditorState, type Extension } from '@codemirror/state'
 import { EditorView, keymap, type Command, type KeyBinding } from '@codemirror/view'
 import { defaultKeymap, isolateHistory, redo, undo } from '@codemirror/commands'
-import type { Extension } from '@codemirror/state'
+import { syntaxTree } from '@codemirror/language'
 import { isComposingKey } from '../appearance.ts'
 import { continueList, indent, outdent, type EditResult } from './commands.ts'
 
@@ -78,6 +78,57 @@ export const outdentCommand: Command = (view) => {
   const result = outdent(view.state.doc.toString(), mainSelection(view))
   if (result !== null) dispatchEdit(view, result)
   return true
+}
+
+const BOLD_MARK = '**'
+
+function selectedBold(state: EditorState, from: number, to: number): { from: number; to: number } | null {
+  const width = BOLD_MARK.length
+  if (from === to) {
+    // 空标记对还不是 Markdown 粗体，但再次按键可以把它收回。
+    return from >= width && state.sliceDoc(from - width, to + width) === BOLD_MARK.repeat(2)
+      ? { from: from - width, to: to + width }
+      : null
+  }
+
+  // 用语法树确认是同一对标记，避免误拆相邻的两段粗体。
+  const node = syntaxTree(state).cursorAt(from, 1)
+  do {
+    const whole = node.from === from && node.to === to
+    const body = node.from + width === from && node.to - width === to
+    if (node.name === 'StrongEmphasis' && (whole || body)) return { from: node.from, to: node.to }
+  } while (node.parent())
+  return null
+}
+
+const toggleBold: Command = (view) => {
+  if (isComposing(view) || view.state.readOnly) return false
+
+  const range = view.state.selection.main
+  let { from, to } = range
+  if (!range.empty) {
+    // 首尾空白放在标记外，否则 Markdown 可能不把标记识别成粗体。
+    const text = view.state.sliceDoc(from, to)
+    const trimmedStart = text.trimStart()
+    from += text.length - trimmedStart.length
+    to = from + trimmedStart.trimEnd().length
+    if (from === to) return true
+  }
+
+  const width = BOLD_MARK.length
+  const bold = selectedBold(view.state, from, to)
+  const changes = bold !== null
+    ? [{ from: bold.from, to: bold.from + width, insert: '' }, { from: bold.to - width, to: bold.to, insert: '' }]
+    : [{ from, to: from, insert: BOLD_MARK }, { from: to, to, insert: BOLD_MARK }]
+  const start = bold === null ? from + width : bold.from
+  const end = bold === null ? to + width : bold.to - 2 * width
+  const selection = range.anchor <= range.head ? { anchor: start, head: end } : { anchor: end, head: start }
+  dispatchEdit(view, { changes, selection })
+  return true
+}
+
+export function boldKeymap(platform: string): Extension {
+  return keymap.of([{ key: platform === 'darwin' ? 'Cmd-b' : 'Ctrl-b', run: toggleBold }])
 }
 
 /**

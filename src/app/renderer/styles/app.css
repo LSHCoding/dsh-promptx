@@ -1,6 +1,6 @@
 /*
  * PromptX 小窗的样式（需求 5.3 至 5.10、S-03，技术方案 4.7；V0.1.5 界面方案）。
- * 颜色、字体、圆角、阴影只引用 dsh-theme.css 里的 dsh 变量，深色由 body[data-ds-dark-theme] 切换，观感和 dsh 一致。
+ * 字体、圆角、阴影和界面底色引用 dsh-theme.css 里的 dsh 变量，深色由 body[data-ds-dark-theme] 切换。
  * 尺寸：各栏头部和底部都是 40（V0.1.5，分隔线连成一条）、编辑区内边距 20、等宽字体约 14、行高 1.6（V0.1.5 改自需求 5.7 的 1.3）。
  * 类名前缀 px-。
  */
@@ -630,6 +630,389 @@ body[data-ds-dark-theme] {
 
 .px-editor .cm-editor .cm-placeholder {
   color: var(--dsw-alias-label-tertiary);
+}
+
+/*
+ * 主编辑框的 Markdown 高亮：维护者 2026-11-26 在设计稿里选定方案 B「蓝紫收敛」，粗体加紫色，标签用方案 C 的淡紫标签块。
+ * 语法符号统一退成浅灰；蓝色给标题、列表标记、链接和引用竖线，紫色给粗体和自定义标签。
+ * 颜色只在这里用字面值（AGENTS.md 代码风格例外），跟随 dsh 明暗主题切换。
+ */
+.px-editor-area {
+  --px-md-blue: #365db8;
+  --px-md-violet: #7546ad;
+  --px-md-mark-color: #91959d;
+  --px-md-quote-color: #636974;
+  --px-md-code-color: #424853;
+  --px-md-code-fill: rgb(15 17 21 / 5.5%);
+  --px-md-block-fill: rgb(15 17 21 / 3.5%);
+}
+
+body[data-ds-dark-theme] .px-editor-area {
+  --px-md-blue: #96b3f5;
+  --px-md-violet: #c5a3ea;
+  --px-md-mark-color: #6b6f76;
+  --px-md-quote-color: #a5abb5;
+  --px-md-code-color: #c2c8d1;
+  --px-md-code-fill: rgb(255 255 255 / 7%);
+  --px-md-block-fill: rgb(255 255 255 / 4.5%);
+}
+
+.px-md-heading {
+  color: var(--px-md-blue);
+  font-weight: 700;
+}
+
+.px-md-strong {
+  color: var(--px-md-violet);
+  font-weight: 700;
+}
+
+.px-md-emphasis {
+  font-style: italic;
+}
+
+.px-md-list {
+  color: var(--px-md-blue);
+  font-weight: 600;
+}
+
+.px-md-link {
+  color: var(--px-md-blue);
+}
+
+.px-md-link:not(.px-md-link-syntax) {
+  text-decoration: underline 1px color-mix(in srgb, var(--px-md-blue) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+.px-md-quote {
+  color: var(--px-md-quote-color);
+}
+
+.px-md-code-block {
+  color: var(--px-md-code-color);
+}
+
+/* 语法符号排在上面几条之后：同一段文字也带着标题、粗体、引用的类名，这里盖过它们的颜色和字重。 */
+.px-md-mark,
+.px-md-link-syntax,
+.px-md-code-fence {
+  color: var(--px-md-mark-color);
+  font-weight: 400;
+}
+
+.px-md-code-span {
+  border-radius: var(--dsw-radius-xs);
+  background: var(--px-md-code-fill);
+}
+
+.px-md-tag {
+  border-radius: var(--dsw-radius-xs);
+  background: color-mix(in srgb, var(--px-md-violet) 11%, transparent);
+}
+
+.px-md-tag-name {
+  color: var(--px-md-violet);
+}
+
+.px-md-tag-bracket {
+  color: color-mix(in srgb, var(--px-md-violet) 65%, var(--dsw-alias-bg-base));
+}
+
+/* 标签块包在语法高亮分段的外面：标题里的标签、被当成自动链接的 <ns:tag>，里层分段都跟随标签的颜色。 */
+.px-md-tag :is(.px-md-tag-name, .px-md-tag-bracket) * {
+  color: inherit;
+}
+
+/*
+ * 代码块的浅底卡片和引用竖线画在行的伪元素上。底色是半透明的，选区仍然看得见；
+ * 卡片放在 z-index -1，落在 .cm-scroller 自己的层叠上下文里，压在文字下面。两者分用 before、after，引用里的代码块也不打架。
+ */
+.px-editor .cm-line.px-md-code-line,
+.px-editor .cm-line.px-md-quote-line {
+  position: relative;
+}
+
+.px-editor .cm-line.px-md-code-line::before {
+  content: '';
+  position: absolute;
+  inset: 0 12px;
+  z-index: -1;
+  background: var(--px-md-block-fill);
+  pointer-events: none;
+}
+
+.px-editor .cm-line.px-md-code-start::before {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+
+.px-editor .cm-line.px-md-code-end::before {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.px-editor .cm-line.px-md-quote-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 11px;
+  width: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--px-md-blue) 45%, transparent);
+  pointer-events: none;
+}
+
+/* 行首插入菜单：维护者 2026-11-26 选定设计稿方案 A「图标紧凑」，表面与小窗菜单 .px-menu 相同（半透明磨砂底、lv3 阴影）。 */
+.px-editor .cm-tooltip.px-slash-menu {
+  width: min(272px, calc(100vw - 32px));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-xs-13);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+}
+
+/* 只在菜单打开时淡入；筛选、切到标签名浮层时重建的浮层不再播放。只动透明度和位移，不影响 CodeMirror 量浮层尺寸。 */
+.px-slash-enter {
+  animation: px-slash-enter 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes px-slash-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .px-slash-enter {
+    animation: none;
+  }
+}
+
+.px-slash-header {
+  padding: 4px 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.px-slash-options {
+  display: grid;
+  gap: 1px;
+}
+
+/* 悬停即选中，由脚本更新 aria-selected，不再单独画 :hover，避免键盘选中和鼠标悬停同时亮两行。 */
+.px-slash-option {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px 0 4px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+}
+
+.px-slash-option[aria-selected='true'] {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+.px-slash-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.px-slash-option[aria-selected='true'] .px-slash-icon,
+.px-slash-form-title .px-slash-icon {
+  background: color-mix(in srgb, var(--dsw-alias-link) 16%, transparent);
+  color: var(--dsw-alias-link);
+}
+
+.px-slash-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.px-slash-alias {
+  color: var(--dsw-alias-label-tertiary);
+  font: 11.5px/1 var(--dsh-font-family-code-default);
+}
+
+.px-slash-option[aria-selected='true'] .px-slash-alias {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.px-slash-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 4px -4px -4px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+}
+
+.px-slash-keys > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.px-slash-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l3), inset 0 -1px 0 var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-secondary);
+  font: 10.5px/1 var(--dsh-font-family-code-default);
+}
+
+.px-slash-form {
+  display: grid;
+  gap: 8px;
+  padding: 6px;
+}
+
+.px-slash-form-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.px-slash-form-title .px-slash-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.px-slash-field {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-specific-input-major);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-tertiary);
+  font: 13px/1 var(--dsh-font-family-code-default);
+  cursor: text;
+}
+
+.px-slash-field:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-link) 70%, transparent), 0 0 0 3px color-mix(in srgb, var(--dsw-alias-link) 18%, transparent);
+}
+
+.px-slash-field:has(.px-slash-input[aria-invalid='true']) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-error-primary) 75%, transparent), 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-error-primary) 16%, transparent);
+}
+
+.px-slash-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
+.px-slash-input::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--dsw-font-family);
+}
+
+.px-slash-preview,
+.px-slash-error {
+  min-height: 18px;
+  padding: 0 3px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.px-slash-preview {
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--dsh-font-family-code-default);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.px-slash-error {
+  color: var(--dsw-alias-state-error-primary);
+  text-wrap: balance;
+}
+
+.px-slash-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.px-slash-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 5px 0 10px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-secondary);
+  font: 12.5px/1 var(--dsw-font-family);
+  cursor: pointer;
+}
+
+.px-slash-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.px-slash-button-primary {
+  background: var(--dsw-alias-button-primary-fill);
+  box-shadow: none;
+  color: var(--dsw-alias-label-primary-inverted);
+}
+
+.px-slash-button-primary:hover {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.px-slash-button .px-slash-key {
+  min-width: 16px;
+  height: 16px;
+  font-size: 10px;
+}
+
+.px-slash-button-primary .px-slash-key {
+  background: color-mix(in srgb, var(--dsw-alias-label-primary-inverted) 18%, transparent);
+  box-shadow: none;
+  color: inherit;
 }
 
 /* 草稿读回之前（或读取失败时）盖住编辑区：编辑区不可编辑，显示原因和「重试」（F-01）。 */

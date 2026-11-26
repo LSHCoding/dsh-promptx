@@ -2,9 +2,10 @@
 import { afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest'
 import { redo, undo } from '@codemirror/commands'
 import { runScopeHandlers, type EditorView } from '@codemirror/view'
+import type { AppController } from '../../../src/app/renderer/controller/app.ts'
 import { createEditorController, type EditorController } from '../../../src/app/renderer/editor/controller.ts'
 import { insertSnippet } from '../../../src/app/renderer/editor/commands.ts'
-import { installLayoutStubs, trapUnhandled } from './helpers.ts'
+import { draftRecord, FakeBridge, installLayoutStubs, ok, startController, trapUnhandled } from './helpers.ts'
 
 let checkUnhandled: () => void
 const mounted: EditorController[] = []
@@ -23,6 +24,13 @@ afterEach(() => {
   checkUnhandled()
 })
 
+function mountEditor(editor: EditorController): EditorView {
+  editor.mount(document.body.appendChild(document.createElement('div')))
+  mounted.push(editor)
+  if (editor.view === null) throw new Error('editor did not mount')
+  return editor.view
+}
+
 /** 挂到页面上的编辑区。marked 里的 `|` 是光标位置。 */
 function editorWith(marked: string, platform = 'darwin'): { editor: EditorController; view: EditorView } {
   const caret = marked.indexOf('|')
@@ -31,12 +39,7 @@ function editorWith(marked: string, platform = 'darwin'): { editor: EditorContro
   const position = caret === -1 ? text.length : caret
   editor.load(text, { anchor: position, head: position })
   editor.setEditable(true)
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  editor.mount(host)
-  mounted.push(editor)
-  if (editor.view === null) throw new Error('editor did not mount')
-  return { editor, view: editor.view }
+  return { editor, view: mountEditor(editor) }
 }
 
 interface KeyInit {
@@ -61,6 +64,17 @@ function dispatchKey(view: EditorView, init: KeyInit): KeyboardEvent {
   return event
 }
 
+/** 选择器命中的所有元素的文字按文档顺序拼起来。语法符号单独成段，同一段粗体会分在几个元素里。 */
+function joinedText(view: EditorView, selector: string): string {
+  return Array.from(view.contentDOM.querySelectorAll(selector), node => node.textContent).join('')
+}
+
+/** 带指定类名的行在编辑区里的序号（从 0 开始）。 */
+function linesWith(view: EditorView, className: string): number[] {
+  return Array.from(view.contentDOM.querySelectorAll('.cm-line'), (line, index) => line.classList.contains(className) ? index : -1)
+    .filter(index => index >= 0)
+}
+
 function marked(editor: EditorController): string {
   const text = editor.getText()
   const { anchor, head } = editor.getSelection()
@@ -69,6 +83,202 @@ function marked(editor: EditorController): string {
   const to = Math.max(anchor, head)
   return `${text.slice(0, from)}«${text.slice(from, to)}»${text.slice(to)}`
 }
+
+describe('Markdown 源文高亮', () => {
+  it('主编辑区给 Markdown 源文着色，复制、撤销和重新载入时保留文本和选区', async () => {
+    const source = [
+      '# 项目简报',
+      '',
+      '1. **省成本**和*提上限*，记录 order_id。',
+      '- 环境：`ScienceWorld`',
+      '',
+      '[实验记录](./runs.md)',
+      '',
+      '> 对同一组任务重复评测。',
+      '',
+      '```text',
+      '**代码块里的字符**',
+      '```',
+    ].join('\n')
+    const selection = { anchor: 2, head: 6 }
+    const bridge = new FakeBridge()
+    bridge.handle('draft.load', () => ok({ record: draftRecord(source, { selection }) }))
+    const app = await startController(bridge)
+    try {
+      const { editor } = app
+      const view = mountEditor(editor)
+      const textOf = (selector: string) => Array.from(view.contentDOM.querySelectorAll(selector), node => node.textContent).join('')
+
+      expect(textOf('.px-md-heading')).toBe('# 项目简报')
+      expect(textOf('.px-md-strong')).toBe('**省成本**')
+      expect(textOf('.px-md-emphasis')).toBe('*提上限*')
+      expect(textOf('.px-md-list')).toBe('1.-')
+      expect(textOf('.px-md-link')).toBe('[实验记录](./runs.md)')
+      expect(textOf('.px-md-link:not(.px-md-link-syntax)')).toBe('实验记录')
+      expect(textOf('.px-md-quote')).toBe('> 对同一组任务重复评测。')
+      expect(textOf('.px-md-code')).toBe('ScienceWorld')
+      expect(textOf('.px-md-code-block')).toBe('**代码块里的字符**')
+      expect(textOf('.px-md-code-fence')).toBe('```text```')
+      // 标题的 #、强调的星号、行内代码的反引号、引用的 > 统一按语法符号着色；链接和围栏符号有自己的类名。
+      expect(textOf('.px-md-mark')).toBe('#******``>')
+      // 行内代码底色是一个包住反引号和代码的整体元素，圆角不会被语法高亮拆开。
+      expect(Array.from(view.contentDOM.querySelectorAll('.px-md-code-span'), node => node.textContent)).toEqual(['`ScienceWorld`'])
+      expect(linesWith(view, 'px-md-quote-line')).toEqual([7])
+      expect(linesWith(view, 'px-md-code-line')).toEqual([9, 10, 11])
+      expect(linesWith(view, 'px-md-code-start')).toEqual([9])
+      expect(linesWith(view, 'px-md-code-end')).toEqual([11])
+      expect(view.contentDOM.querySelector('a')).toBeNull()
+      expect(Array.from(view.contentDOM.querySelectorAll('.cm-line'), node => node.textContent).join('\n')).toBe(source)
+      expect(editor.getSelection()).toEqual(selection)
+
+      expect(await app.copyAndHide()).toEqual({ ok: true })
+      expect(bridge.window.copyAndHide).toHaveBeenCalledWith(source)
+      expect(editor.getText()).toBe(source)
+      expect(editor.getSelection()).toEqual(selection)
+
+      editor.dispatch({ changes: { from: 0, to: 2 }, userEvent: 'input.type' })
+      expect(textOf('.px-md-heading')).toBe('')
+      expect(editor.runCommand(undo)).toBe(true)
+      expect(textOf('.px-md-heading')).toBe('# 项目简报')
+      expect(editor.getSelection()).toEqual(selection)
+
+      editor.load('## 重新载入', null)
+      expect(textOf('.px-md-heading')).toBe('## 重新载入')
+      expect(editor.getText()).toBe('## 重新载入')
+      expect(editor.getSelection()).toEqual({ anchor: 7, head: 7 })
+    } finally {
+      app.dispose()
+    }
+  })
+
+  it('自定义标签显示成标签块，代码、链接地址和注释里的尖括号保持原样', async () => {
+    const source = [
+      '<context>',
+      '',
+      '# 角色 <role>',
+      '',
+      '正文里有 <b>行内</b> 标签、`<code>` 和 [链接](<a:b>)。',
+      '',
+      '</context>',
+      '',
+      '<Answer_Format-v2:Block>',
+      '',
+      '<https://example.com/a> <name@example.com>',
+      '',
+      '<!-- <note> -->',
+      '',
+      '```',
+      '<tag>',
+      '```',
+      '',
+      '    <indented>',
+    ].join('\n')
+    const bridge = new FakeBridge()
+    bridge.handle('draft.load', () => ok({ record: draftRecord(source) }))
+    const app = await startController(bridge)
+    try {
+      const view = mountEditor(app.editor)
+      const texts = (selector: string) => Array.from(view.contentDOM.querySelectorAll(selector), node => node.textContent)
+
+      // 每个标签块是一个整体元素；带 . 或 : 的名字（CommonMark 不当成 HTML，或当成自动链接）也算标签。
+      expect(texts('.px-md-tag')).toEqual(['<context>', '<role>', '<b>', '</b>', '</context>', '<Answer_Format-v2:Block>'])
+      expect(texts('.px-md-tag-name')).toEqual(['context', 'role', 'b', 'b', 'context', 'Answer_Format-v2:Block'])
+      expect(joinedText(view, '.px-md-tag-bracket')).toBe('<><><></></><>')
+      expect(texts('.px-md-code-span')).toEqual(['`<code>`'])
+      expect(texts('.cm-line').join('\n')).toBe(source)
+    } finally {
+      app.dispose()
+    }
+  })
+
+  it('未启用高亮的编辑框保留纯文本', () => {
+    const source = '# 标题\n\n- **加粗**'
+    const { editor, view } = editorWith(source)
+    expect(view.contentDOM.querySelector('.px-md-heading, .px-md-list, .px-md-strong')).toBeNull()
+    expect(editor.getText()).toBe(source)
+  })
+})
+
+describe('主编辑区 Markdown 加粗快捷键', () => {
+  const apps: AppController[] = []
+  const macBold = { key: 'b', metaKey: true }
+
+  afterEach(() => {
+    for (const app of apps.splice(0)) app.dispose()
+  })
+
+  async function mainEditor(platform = 'darwin'): Promise<{ editor: EditorController; view: EditorView }> {
+    const app = await startController(new FakeBridge(platform))
+    apps.push(app)
+    return { editor: app.editor, view: mountEditor(app.editor) }
+  }
+
+  it.each([
+    ['darwin', macBold],
+    ['win32', { key: 'b', ctrlKey: true }],
+    ['linux', { key: 'b', ctrlKey: true }],
+  ])('用平台快捷键加粗和取消加粗，保留反向选区（%s）', async (platform, shortcut) => {
+    const { editor, view } = await mainEditor(platform)
+    const selection = { anchor: 4, head: 0 }
+    editor.load('选中这段', selection)
+
+    expect(dispatchKey(view, shortcut).defaultPrevented).toBe(true)
+    expect(editor.getText()).toBe('**选中这段**')
+    expect(editor.getSelection()).toEqual({ anchor: 6, head: 2 })
+    expect(joinedText(view, '.px-md-strong')).toBe('**选中这段**')
+
+    expect(dispatchKey(view, shortcut).defaultPrevented).toBe(true)
+    expect(editor.getText()).toBe('选中这段')
+    expect(editor.getSelection()).toEqual(selection)
+    expect(editor.runCommand(undo)).toBe(true)
+    expect(editor.getText()).toBe('**选中这段**')
+    expect(editor.getSelection()).toEqual({ anchor: 6, head: 2 })
+  })
+
+  it('保留选区两端的空白，选中整段加粗源码也能取消加粗', async () => {
+    const { editor, view } = await mainEditor()
+    const source = '  重要  '
+    editor.load(source, { anchor: 0, head: source.length })
+    expect(press(view, macBold)).toBe(true)
+    expect(editor.getText()).toBe('  **重要**  ')
+    expect(joinedText(view, '.px-md-strong')).toBe('**重要**')
+
+    editor.dispatch({ selection: { anchor: 0, head: editor.getText().length } })
+    expect(press(view, macBold)).toBe(true)
+    expect(editor.getText()).toBe(source)
+  })
+
+  it('没有选区时插入两个加粗标记，光标留在中间，重按移除标记', async () => {
+    const { editor, view } = await mainEditor()
+    editor.load('甲乙', { anchor: 1, head: 1 })
+    expect(press(view, macBold)).toBe(true)
+    expect(marked(editor)).toBe('甲**|**乙')
+    expect(press(view, macBold)).toBe(true)
+    expect(marked(editor)).toBe('甲|乙')
+  })
+
+  it('选区跨越两段加粗时保留原有的两组标记', async () => {
+    const { editor, view } = await mainEditor()
+    const source = '**甲** 和 **乙**'
+    editor.load(source, { anchor: 0, head: source.length })
+    expect(press(view, macBold)).toBe(true)
+    expect(editor.getText()).toBe(`**${source}**`)
+  })
+
+  it('输入法组字、只读状态和通用编辑框不执行加粗快捷键', async () => {
+    const { editor, view } = await mainEditor()
+    editor.load('选中', { anchor: 0, head: 2 })
+    dispatchKey(view, { ...macBold, isComposing: true, keyCode: 229 })
+    expect(editor.getText()).toBe('选中')
+    editor.setEditable(false)
+    dispatchKey(view, macBold)
+    expect(editor.getText()).toBe('选中')
+
+    const plain = editorWith('正文|')
+    dispatchKey(plain.view, macBold)
+    expect(marked(plain.editor)).toBe('正文|')
+  })
+})
 
 describe('Enter（E-01、E-05）', () => {
   it('列表项行尾按 Enter 续行，一次撤销回到按 Enter 之前', () => {

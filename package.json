@@ -1,6 +1,6 @@
 {
   "name": "dsh-promptx",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "PromptX for DeepSeek Harness: a global-hotkey prompt editor that floats above every app, with a Markdown prompt library and model-assisted rewriting.",
   "license": "MIT",
   "author": "Shuai Ling (https://github.com/LSHCoding)",
@@ -83,6 +83,7 @@
   },
   "devDependencies": {
     "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.13.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
     "@deepseek-ai/cordis": "~4.1.0",
@@ -99,6 +100,8 @@
     "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
     "@deepseek-ai/dsh-storage-json": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "~3.19.0",
+    "@lezer/highlight": "1.2.5",
+    "@lezer/markdown": "1.8.1",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

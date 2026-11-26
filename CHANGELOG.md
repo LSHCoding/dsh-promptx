@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 — 2026-11-26
+
+- Highlight Markdown source in the main Prompt editor for light and dark themes. Headings, list markers, and links are blue; bold text and custom tags such as `<context>` are violet, with tags shown as soft chips. Markdown punctuation is dimmed but stays visible, inline code and code blocks get a subtle background, and blockquotes get a side rule. Copying returns the original text.
+- Toggle Markdown bold in the main Prompt editor with Command+B on macOS or Ctrl+B on Windows and Linux.
+- Type `/` or `、` at the start of a line to insert level 1–3 headings, custom tags, code blocks, or blockquotes. A unique command prefix such as `/co` selects the matching item for Enter. Each item has an icon, moving the pointer over an item selects it, and the custom tag form previews the tags before inserting them.
+
 ## 0.1.7 — 2026-11-15
 
 - Prepare the first public distribution on GitHub and npm with an MIT license, package metadata, and desktop installation instructions in English and Chinese.
